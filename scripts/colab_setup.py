@@ -6,25 +6,12 @@ import sys
 from pathlib import Path
 
 
-WAYMAX_INSTALL_CMD = (
-    "pip install --upgrade "
-    "'git+https://github.com/waymo-research/waymax.git@main#egg=waymo-waymax'"
-)
-JAX_CUDA12_INSTALL_CMD = (
-    "pip install --upgrade "
-    "'jax[cuda12]>=0.7.0,<0.8' "
-    "-f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html"
-)
-LATENTDRIVER_DEP_INSTALL_CMD = (
-    "pip install --upgrade "
-    "hydra-core==1.3.2 omegaconf==2.3.0 lightning==2.3.3 "
-    "pytorch-lightning==2.3.3 einops==0.8.0 "
-    "transformers==4.46.3 huggingface_hub"
-)
 LATENTDRIVER_CLONE_CMD = (
     "git clone --depth 1 https://github.com/Sephirex-X/LatentDriver.git "
     "/content/LatentDriver || true"
 )
+REPO_ROOT = Path(__file__).resolve().parents[1]
+REQUIREMENTS_COLAB_PATH = REPO_ROOT / "requirements-colab.txt"
 
 
 def _sh(cmd: str) -> None:
@@ -168,18 +155,20 @@ def _ensure_checkpoint(ckpt_path: Path) -> None:
         print("[ckpt] missing:", ckpt_path)
 
 
+def _install_requirements(requirements_path: Path) -> None:
+    if not requirements_path.exists():
+        raise FileNotFoundError(f"Missing requirements file: {requirements_path}")
+    _sh("pip install --upgrade pip")
+    _sh(f"pip install --upgrade -r '{requirements_path}'")
+
+
 def run_deterministic_setup(run_setup: bool = False) -> None:
     if not run_setup:
         print("RUN_SETUP=False: skipping dependency setup.")
         return
 
     print("[setup] Starting deterministic environment bootstrap")
-
-    _sh("pip install --upgrade pip")
-    _sh(WAYMAX_INSTALL_CMD)
-    _sh(JAX_CUDA12_INSTALL_CMD)
-    _sh("pip install --upgrade mediapy seaborn scikit-learn tqdm")
-    _sh(LATENTDRIVER_DEP_INSTALL_CMD)
+    _install_requirements(REQUIREMENTS_COLAB_PATH)
     _sh(LATENTDRIVER_CLONE_CMD)
 
     latentdriver_repo = Path("/content/LatentDriver")

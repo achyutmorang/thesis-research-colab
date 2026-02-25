@@ -27,10 +27,13 @@ from .config import (
 from .latentdriver import _choose_target_non_ego, make_closed_loop_components
 from .metrics import compute_risk_metrics, risk_kwargs_from_cfg
 from .resume_io import (
+    RESULTS_REQUIRED_COLUMNS,
+    TRACE_REQUIRED_COLUMNS,
     _completed_scenarios,
     _flush_checkpoint,
     _load_existing_results,
     _write_progress_artifacts,
+    validate_artifact_schema_manifest,
 )
 from .search import optimize_method_closed_loop
 
@@ -276,9 +279,24 @@ def run_trackb_closed_loop(
     checkpoint_path = f'{run_prefix}_per_scenario_results.csv'
     trace_checkpoint_path = f'{run_prefix}_per_eval_trace.csv'
 
-    existing_df = _load_existing_results(checkpoint_path) if bool(cfg.resume_from_existing) else pd.DataFrame()
+    if bool(cfg.resume_from_existing):
+        validate_artifact_schema_manifest(run_prefix, strict=True)
+
+    existing_df = (
+        _load_existing_results(
+            checkpoint_path,
+            required_cols=RESULTS_REQUIRED_COLUMNS,
+            artifact_name='per_scenario_results',
+        )
+        if bool(cfg.resume_from_existing)
+        else pd.DataFrame()
+    )
     existing_trace_df = (
-        _load_existing_results(trace_checkpoint_path)
+        _load_existing_results(
+            trace_checkpoint_path,
+            required_cols=TRACE_REQUIRED_COLUMNS,
+            artifact_name='per_eval_trace',
+        )
         if bool(cfg.resume_from_existing) and bool(cfg.save_per_eval_trace)
         else pd.DataFrame()
     )

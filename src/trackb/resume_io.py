@@ -14,10 +14,98 @@ import pandas as pd
 
 from .config import SearchConfig, TrackBConfig, build_run_artifact_paths
 
-def _load_existing_results(path: str) -> pd.DataFrame:
+ARTIFACT_SCHEMA_VERSION = '1.0.0'
+RESULTS_REQUIRED_COLUMNS = ['scenario_id', 'method']
+TRACE_REQUIRED_COLUMNS = ['scenario_id', 'method', 'eval_index']
+
+
+def _artifact_schema_manifest_path(run_prefix: str) -> str:
+    return f'{run_prefix}_artifact_schema.json'
+
+
+def artifact_schema_spec() -> Dict[str, Any]:
+    return {
+        'schema_version': ARTIFACT_SCHEMA_VERSION,
+        'required_columns': {
+            'per_scenario_results': list(RESULTS_REQUIRED_COLUMNS),
+            'per_eval_trace': list(TRACE_REQUIRED_COLUMNS),
+        },
+    }
+
+
+def write_artifact_schema_manifest(run_prefix: str) -> str:
+    path = _artifact_schema_manifest_path(run_prefix)
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    with open(path, 'w') as f:
+        json.dump(
+            {
+                **artifact_schema_spec(),
+                'written_utc': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
+            },
+            f,
+            indent=2,
+        )
+    return path
+
+
+def validate_artifact_schema_manifest(run_prefix: str, strict: bool = True) -> bool:
+    path = _artifact_schema_manifest_path(run_prefix)
+    if not Path(path).exists():
+        # Backward compatibility: older runs may not have this manifest.
+        return True
+
+    try:
+        with open(path, 'r') as f:
+            payload = json.load(f)
+    except Exception as e:
+        msg = f'[resume] failed to parse artifact schema manifest ({path}): {e}'
+        if strict:
+            raise RuntimeError(msg)
+        print(msg)
+        return False
+
+    got = str(payload.get('schema_version', ''))
+    expected = str(ARTIFACT_SCHEMA_VERSION)
+    if got != expected:
+        msg = (
+            f'[resume] artifact schema version mismatch for {run_prefix}: '
+            f'found={got}, expected={expected}.'
+        )
+        if strict:
+            raise RuntimeError(msg)
+        print(msg)
+        return False
+    return True
+
+
+def _validate_required_columns(
+    df: pd.DataFrame,
+    required_cols: Optional[List[str]],
+    artifact_name: str,
+    path: str,
+) -> bool:
+    if required_cols is None:
+        return True
+    missing = [c for c in required_cols if c not in df.columns]
+    if len(missing) == 0:
+        return True
+    print(
+        f'[resume] schema mismatch in {artifact_name} ({path}): '
+        f'missing required columns {missing}.'
+    )
+    return False
+
+
+def _load_existing_results(
+    path: str,
+    required_cols: Optional[List[str]] = None,
+    artifact_name: str = 'artifact',
+) -> pd.DataFrame:
     if os.path.exists(path):
         try:
             df = pd.read_csv(path)
+            if not _validate_required_columns(df, required_cols, artifact_name, path):
+                return pd.DataFrame()
             print(f'[resume] loaded existing results: {path} ({len(df)} rows)')
             return df
         except Exception as e:
@@ -152,6 +240,7 @@ def _write_progress_artifacts(
     trace_diag_path = f'{run_prefix}_trace_diagnostics.csv'
     seed_map_path = f'{run_prefix}_eval_seed_map.csv'
     carry_path = f'{run_prefix}_carry_forward_config.json'
+    schema_manifest_path = _artifact_schema_manifest_path(run_prefix)
 
     for p in [
         per_scenario_path,
@@ -163,11 +252,30 @@ def _write_progress_artifacts(
         trace_diag_path,
         seed_map_path,
         carry_path,
+        schema_manifest_path,
     ]:
         Path(p).parent.mkdir(parents=True, exist_ok=True)
 
+    if not _validate_required_columns(
+        results_df,
+        RESULTS_REQUIRED_COLUMNS,
+        'per_scenario_results',
+        per_scenario_path,
+    ):
+        raise ValueError(
+            'Cannot write per_scenario_results: required columns are missing.'
+        )
     results_df.to_csv(per_scenario_path, index=False)
     if bool(cfg.save_per_eval_trace) and isinstance(trace_df, pd.DataFrame):
+        if len(trace_df) > 0 and (not _validate_required_columns(
+            trace_df,
+            TRACE_REQUIRED_COLUMNS,
+            'per_eval_trace',
+            per_eval_trace_path,
+        )):
+            raise ValueError(
+                'Cannot write per_eval_trace: required columns are missing.'
+            )
         trace_df.to_csv(per_eval_trace_path, index=False)
 
     with open(thresholds_path, 'w') as f:
@@ -204,6 +312,7 @@ def _write_progress_artifacts(
     }
     with open(carry_path, 'w') as f:
         json.dump(carry_forward_config, f, indent=2)
+    write_artifact_schema_manifest(run_prefix)
 
     static_frames = static_frames or {}
     static_pairs = [
@@ -320,6 +429,7 @@ def export_trackb_artifacts(
     fairness_path = f'{run_prefix}_fairness_checks.csv'
     trace_diag_path = f'{run_prefix}_trace_diagnostics.csv'
     runtime_manifest_path = f'{run_prefix}_runtime_manifest.json'
+    schema_manifest_path = _artifact_schema_manifest_path(run_prefix)
 
     all_paths = {
         'per_scenario_results': per_scenario_path,
@@ -338,13 +448,32 @@ def export_trackb_artifacts(
         'fairness_checks': fairness_path,
         'trace_diagnostics': trace_diag_path,
         'runtime_manifest': runtime_manifest_path,
+        'artifact_schema': schema_manifest_path,
     }
 
     for p in all_paths.values():
         Path(p).parent.mkdir(parents=True, exist_ok=True)
 
+    if not _validate_required_columns(
+        trackb_results_df,
+        RESULTS_REQUIRED_COLUMNS,
+        'per_scenario_results',
+        per_scenario_path,
+    ):
+        raise ValueError(
+            'Cannot export per_scenario_results: required columns are missing.'
+        )
     trackb_results_df.to_csv(per_scenario_path, index=False)
     if isinstance(trackb_trace_df, pd.DataFrame):
+        if len(trackb_trace_df) > 0 and (not _validate_required_columns(
+            trackb_trace_df,
+            TRACE_REQUIRED_COLUMNS,
+            'per_eval_trace',
+            per_eval_trace_path,
+        )):
+            raise ValueError(
+                'Cannot export per_eval_trace: required columns are missing.'
+            )
         trackb_trace_df.to_csv(per_eval_trace_path, index=False)
     base_eval_openloop_df.to_csv(base_eval_openloop_path, index=False)
     reference_df.to_csv(reference_openloop_path, index=False)
@@ -430,6 +559,7 @@ def export_trackb_artifacts(
     }
     with open(carry_path, 'w') as f:
         json.dump(carry_forward_config, f, indent=2)
+    write_artifact_schema_manifest(run_prefix)
 
     import platform
 
