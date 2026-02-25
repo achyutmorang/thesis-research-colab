@@ -5,7 +5,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 import numpy as np
 import pandas as pd
 
-METHODS: List[str] = ["random", "risk_only", "surprise_only", "prism_joint"]
+METHODS: List[str] = ["random", "risk_only", "surprise_only", "joint"]
 
 
 def _subset_methods(df: pd.DataFrame, methods: Optional[Sequence[str]] = None) -> pd.DataFrame:
@@ -116,7 +116,7 @@ def paired_bootstrap_ci(
 
 def conditional_lift_by_risk_bins(
     results_df: pd.DataFrame,
-    treatment: str = "prism_joint",
+    treatment: str = "joint",
     control: str = "risk_only",
     risk_col: str = "risk_sks",
     outcome_col: str = "blind_spot_proxy_hit",

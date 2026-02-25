@@ -34,7 +34,7 @@ def test_auto_select_shard_prefers_missing_shard(tmp_path: Path):
             {"scenario_id": 11, "method": "random"},
             {"scenario_id": 11, "method": "risk_only"},
             {"scenario_id": 11, "method": "surprise_only"},
-            {"scenario_id": 11, "method": "prism_joint"},
+            {"scenario_id": 11, "method": "joint"},
         ]
     ).to_csv(path0, index=False)
 
@@ -48,7 +48,7 @@ def test_auto_select_shard_prefers_least_complete_when_all_exist(tmp_path: Path)
     n_shards = 3
     persist_root = str(tmp_path)
 
-    methods = ["random", "risk_only", "surprise_only", "prism_joint"]
+    methods = ["random", "risk_only", "surprise_only", "joint"]
     for sid in range(n_shards):
         prefix = config.shard_run_prefix(run_tag, persist_root, sid, n_shards)
         path = Path(f"{prefix}_per_scenario_results.csv")

@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Optional, Sequence
 
 import pandas as pd
 
-METHODS: List[str] = ["random", "risk_only", "surprise_only", "prism_joint"]
+METHODS: List[str] = ["random", "risk_only", "surprise_only", "joint"]
 RESULTS_REQUIRED_COLUMNS: List[str] = ["scenario_id", "method"]
 TRACE_REQUIRED_COLUMNS: List[str] = ["scenario_id", "method", "eval_index"]
 

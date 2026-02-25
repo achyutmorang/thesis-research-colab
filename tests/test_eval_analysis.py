@@ -14,11 +14,11 @@ from src.eval.analysis import (
 
 def _mock_results() -> pd.DataFrame:
     rows = []
-    methods = ["random", "risk_only", "surprise_only", "prism_joint"]
+    methods = ["random", "risk_only", "surprise_only", "joint"]
     for sid in range(6):
         base_risk = 1.0 + 0.1 * sid
         for m in methods:
-            bs = int(m == "prism_joint" and sid % 2 == 0)
+            bs = int(m == "joint" and sid % 2 == 0)
             if m == "risk_only" and sid % 2 == 0:
                 bs = 0
             rows.append(
@@ -41,9 +41,9 @@ def _mock_results() -> pd.DataFrame:
 def _mock_trace() -> pd.DataFrame:
     rows = []
     for sid in range(4):
-        for method in ["risk_only", "prism_joint"]:
+        for method in ["risk_only", "joint"]:
             for k in range(5):
-                hit = int(method == "prism_joint" and k >= 2 and sid in [0, 2])
+                hit = int(method == "joint" and k >= 2 and sid in [0, 2])
                 rows.append(
                     {
                         "scenario_id": sid,
@@ -71,7 +71,7 @@ def test_conditional_lift_returns_overall():
     df = _mock_results()
     bins_df, overall_df = conditional_lift_by_risk_bins(
         df,
-        treatment="prism_joint",
+        treatment="joint",
         control="risk_only",
         n_bins=3,
         min_bin_count=1,

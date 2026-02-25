@@ -64,7 +64,7 @@ def merge_shards(
     out_run_tag: str | None = None,
 ) -> Dict[str, Any]:
     n_shards = int(max(1, n_shards))
-    methods = ["random", "risk_only", "surprise_only", "prism_joint"]
+    methods = ["random", "risk_only", "surprise_only", "joint"]
 
     scenario_parts: List[pd.DataFrame] = []
     trace_parts: List[pd.DataFrame] = []

@@ -81,7 +81,7 @@ class ClosedLoopConfig:
     high_quantile: float = 0.80
 
     # Run controls: fairness, chunking, resume
-    run_prefix: str = 'prism_closedloop_run'
+    run_prefix: str = 'closedloop_run'
     run_chunk_size: int = 200
     checkpoint_every_scenarios: int = 25
     resume_from_existing: bool = True
@@ -118,7 +118,7 @@ class SearchConfig:
     # Method weights
     w_risk_only: Tuple[float, float] = (1.0, 0.0)
     w_surprise_only: Tuple[float, float] = (0.0, 1.0)
-    w_prism_joint: Tuple[float, float] = (1.0, 1.0)
+    w_joint: Tuple[float, float] = (1.0, 1.0)
 
 
 def required_total_scenarios(min_eval: int, train_fraction: float) -> int:
@@ -293,7 +293,7 @@ def inspect_shard_progress(
     n_shards: int,
     methods: Optional[List[str]] = None,
 ) -> pd.DataFrame:
-    methods = methods or ['random', 'risk_only', 'surprise_only', 'prism_joint']
+    methods = methods or ['random', 'risk_only', 'surprise_only', 'joint']
     n_shards = int(max(1, n_shards))
     rows: List[Dict[str, Any]] = []
     for sid in range(n_shards):

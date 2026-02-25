@@ -1,14 +1,14 @@
 # Thesis Research Colab
 
-Research repository for PRiSM closed-loop simulation experiments.
+Research repository for closed-loop simulation experiments.
 
 ## Open In Colab
-- Notebook: [notebooks/PRiSM_closedloop_simulation_colab.ipynb](https://colab.research.google.com/github/achyutmorang/thesis-research-colab/blob/main/notebooks/PRiSM_closedloop_simulation_colab.ipynb)
-- Evaluation notebook: [notebooks/PRiSM_closedloop_evaluation_colab.ipynb](https://colab.research.google.com/github/achyutmorang/thesis-research-colab/blob/main/notebooks/PRiSM_closedloop_evaluation_colab.ipynb)
+- Notebook: [notebooks/closedloop_simulation_colab.ipynb](https://colab.research.google.com/github/achyutmorang/thesis-research-colab/blob/main/notebooks/closedloop_simulation_colab.ipynb)
+- Evaluation notebook: [notebooks/closedloop_evaluation_colab.ipynb](https://colab.research.google.com/github/achyutmorang/thesis-research-colab/blob/main/notebooks/closedloop_evaluation_colab.ipynb)
 - If the repo is private, open the link while signed in to GitHub in Colab.
 
 ## What This Repo Contains
-- `notebooks/PRiSM_closedloop_simulation_colab.ipynb`: thin Colab orchestration notebook.
+- `notebooks/closedloop_simulation_colab.ipynb`: thin Colab orchestration notebook.
 - `scripts/colab_setup.py`: deterministic Colab bootstrap (dependency install + compatibility patches + checkpoint fetch).
 - `scripts/merge_shards.py`: validates and merges shard outputs into consolidated artifacts.
 - `src/closedloop/config.py`: dataclass configs and run artifact path helpers.
@@ -20,7 +20,7 @@ Research repository for PRiSM closed-loop simulation experiments.
 - `src/closedloop/core.py`: top-level orchestration over split modules.
 - `src/eval/io.py`: run-prefix discovery and artifact loading from Drive/local outputs.
 - `src/eval/analysis.py`: reusable evaluation metrics/tables for conditional lift and discovery efficiency.
-- `notebooks/PRiSM_closedloop_evaluation_colab.ipynb`: analysis notebook consuming simulation outputs (`csv` + `json`).
+- `notebooks/closedloop_evaluation_colab.ipynb`: analysis notebook consuming simulation outputs (`csv` + `json`).
 - `requirements-colab.txt`: pinned Colab runtime dependency lock.
 - `requirements-dev.txt`: local/CI test dependency lock.
 - `tests/`: unit tests for deterministic metric and sharding logic.
@@ -60,7 +60,7 @@ After all shards finish, merge them with:
 ```bash
 python scripts/merge_shards.py \
   --run-tag closedloop_v1 \
-  --persist-root /content/drive/MyDrive/prism_closedloop_runs \
+  --persist-root /content/drive/MyDrive/closedloop_runs \
   --n-shards 4
 ```
 

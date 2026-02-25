@@ -127,10 +127,10 @@ def method_weights(method: str, cfg_opt: SearchConfig) -> Tuple[float, float]:
         return cfg_opt.w_risk_only
     if method == 'surprise_only':
         return cfg_opt.w_surprise_only
-    if method == 'prism_joint':
-        return cfg_opt.w_prism_joint
+    if method == 'joint':
+        return cfg_opt.w_joint
     if method == 'random':
-        return cfg_opt.w_prism_joint
+        return cfg_opt.w_joint
     raise ValueError(f'Unknown method: {method}')
 
 def optimize_method_closed_loop(

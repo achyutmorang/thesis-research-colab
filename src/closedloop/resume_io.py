@@ -156,7 +156,7 @@ def _safe_float_dict(d: Dict[str, Any]) -> Dict[str, Any]:
     return out
 
 def _compute_progress_tables(df: pd.DataFrame, trace_df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    methods = ['random', 'risk_only', 'surprise_only', 'prism_joint']
+    methods = ['random', 'risk_only', 'surprise_only', 'joint']
     usable = df[df['method'].isin(methods)].copy()
 
     if len(usable) == 0:
@@ -179,7 +179,7 @@ def _compute_progress_tables(df: pd.DataFrame, trace_df: pd.DataFrame) -> Tuple[
     )
 
     sanity_rows = []
-    for method in ['risk_only', 'surprise_only', 'prism_joint']:
+    for method in ['risk_only', 'surprise_only', 'joint']:
         sub = usable[usable['method'] == method]
         if len(sub) == 0:
             continue
@@ -289,7 +289,7 @@ def _write_progress_artifacts(
 
     if not results_df.empty and {'scenario_id', 'method', 'seed_used'}.issubset(results_df.columns):
         seed_map_df = results_df[
-            results_df['method'].isin(['random', 'risk_only', 'surprise_only', 'prism_joint'])
+            results_df['method'].isin(['random', 'risk_only', 'surprise_only', 'joint'])
         ][['scenario_id', 'seed_used']].drop_duplicates().sort_values('scenario_id')
         seed_map_df.to_csv(seed_map_path, index=False)
 
@@ -331,7 +331,7 @@ def _write_progress_artifacts(
 
 def summarize_method_outputs(closedloop_results_df: pd.DataFrame, closedloop_trace_df: pd.DataFrame):
     usable_df = closedloop_results_df[
-        closedloop_results_df['method'].isin(['random', 'risk_only', 'surprise_only', 'prism_joint'])
+        closedloop_results_df['method'].isin(['random', 'risk_only', 'surprise_only', 'joint'])
     ].copy()
 
     quick_summary_df = (
@@ -351,7 +351,7 @@ def summarize_method_outputs(closedloop_results_df: pd.DataFrame, closedloop_tra
     )
 
     sanity_rows = []
-    for method in ['risk_only', 'surprise_only', 'prism_joint']:
+    for method in ['risk_only', 'surprise_only', 'joint']:
         sub = usable_df[usable_df['method'] == method]
         if len(sub) == 0:
             continue
@@ -488,7 +488,7 @@ def export_closedloop_artifacts(
         trace_diag_df.to_csv(trace_diag_path, index=False)
 
     seed_map_df = closedloop_results_df[
-        closedloop_results_df['method'].isin(['random', 'risk_only', 'surprise_only', 'prism_joint'])
+        closedloop_results_df['method'].isin(['random', 'risk_only', 'surprise_only', 'joint'])
     ][['scenario_id', 'seed_used']].drop_duplicates().sort_values('scenario_id')
     seed_map_df.to_csv(seed_map_path, index=False)
 
@@ -555,7 +555,7 @@ def export_closedloop_artifacts(
             'hard_brake_mps2': float(cfg.hard_brake_mps2),
             'hard_jerk_mps3': float(cfg.hard_jerk_mps3),
         },
-        'method_labels': ['random', 'risk_only', 'surprise_only', 'prism_joint'],
+        'method_labels': ['random', 'risk_only', 'surprise_only', 'joint'],
     }
     with open(carry_path, 'w') as f:
         json.dump(carry_forward_config, f, indent=2)

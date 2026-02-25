@@ -273,7 +273,7 @@ def run_closed_loop(
     run_prefix: Optional[str] = None,
     static_frames: Optional[Dict[str, pd.DataFrame]] = None,
 ) -> Tuple[pd.DataFrame, pd.DataFrame]:
-    methods = ['random', 'risk_only', 'surprise_only', 'prism_joint']
+    methods = ['random', 'risk_only', 'surprise_only', 'joint']
 
     run_prefix = run_prefix or cfg.run_prefix
     checkpoint_path = f'{run_prefix}_per_scenario_results.csv'
