@@ -257,11 +257,23 @@ def run_deterministic_setup(run_setup: bool = False, force_reinstall: bool = Fal
     if core_ok and (not force_reinstall):
         print(f"[setup] Core runtime already healthy; skipping heavy pip install ({core_details}).")
     else:
-        if force_reinstall:
-            print("[setup] force_reinstall=True -> running full dependency install.")
-        else:
-            print(f"[setup] Core runtime probe failed; installing dependencies.\n[setup] probe error: {core_details}")
-        _install_requirements(REQUIREMENTS_COLAB_PATH)
+        if not force_reinstall:
+            # Fast path: if this is only the NumPy private-symbol mismatch, repair numeric stack
+            # first and avoid full requirements reinstall.
+            numpy_ok, numpy_details = _probe_numpy_runtime()
+            if not numpy_ok:
+                print(f"[setup] NumPy probe failed; applying targeted numeric repair.\n[setup] probe error: {numpy_details}")
+                _repair_numeric_stack()
+                core_ok, core_details = _probe_core_runtime()
+                if core_ok:
+                    print(f"[setup] Core runtime healthy after numeric repair; skipping heavy pip install ({core_details}).")
+
+        if (not core_ok) or force_reinstall:
+            if force_reinstall:
+                print("[setup] force_reinstall=True -> running full dependency install.")
+            else:
+                print(f"[setup] Core runtime still unhealthy; installing dependencies.\n[setup] probe error: {core_details}")
+            _install_requirements(REQUIREMENTS_COLAB_PATH)
 
     _sync_latentdriver_repo()
 
@@ -286,6 +298,15 @@ def run_deterministic_setup(run_setup: bool = False, force_reinstall: bool = Fal
                 f"Probe error: {details}"
             )
     print(f"[setup] NumPy probe passed ({details}).")
+
+    core_ok, core_details = _probe_core_runtime()
+    if not core_ok:
+        raise RuntimeError(
+            "Core runtime probe failed after setup. "
+            f"Probe error: {core_details}\n"
+            "Retry with force_reinstall=True in the setup cell."
+        )
+    print(f"[setup] Core runtime probe passed ({core_details}).")
 
     print("Setup complete. Restart runtime once, set RUN_SETUP=False, then Run all.")
 
