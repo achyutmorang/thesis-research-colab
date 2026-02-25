@@ -37,16 +37,23 @@ def _pip(args: List[str]) -> None:
 
 
 def _verify_repo_layout(repo_root: Path) -> None:
-    closedloop_path = repo_root / "src" / "closedloop"
-    legacy_trackb_path = repo_root / "src" / "trackb"
+    src_root = repo_root / "src"
+    closedloop_path = src_root / "closedloop"
     if not closedloop_path.exists():
         raise RuntimeError(
             f"Expected module path missing: {closedloop_path}. "
             "You may be on a stale checkout; re-clone the repository."
         )
-    if legacy_trackb_path.exists():
+
+    allowed_dirs = {"closedloop", "eval", "__pycache__"}
+    legacy_dirs = sorted(
+        p.name
+        for p in src_root.iterdir()
+        if p.is_dir() and p.name not in allowed_dirs and (not p.name.startswith("."))
+    )
+    if legacy_dirs:
         raise RuntimeError(
-            f"Legacy module path still present: {legacy_trackb_path}. "
+            f"Unexpected legacy module directories under {src_root}: {legacy_dirs}. "
             "Delete /content/thesis-research-colab and clone the latest main branch."
         )
 
