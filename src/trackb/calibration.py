@@ -72,10 +72,34 @@ def run_trackb_preflight_checks(runner: Any, cfg: TrackBConfig, eval_idx: np.nda
             if non_null > 0:
                 first = next(d for d in dist_trace if d is not None)
                 add('latentdriver_dist_fields', all(k in first for k in ['weights', 'means', 'stds']), str(list(first.keys())))
+            dist_diag = dist_trace_diagnostics(dist_trace)
+            fallback_ratio = float(dist_diag.get('dist_fallback_ratio', np.nan))
+            actor_fallback_ratio = float(dist_diag.get('dist_actor_fallback_ratio', np.nan))
+            finite_ratio = float(dist_diag.get('dist_finite_ratio', np.nan))
+            max_fallback = float(getattr(cfg, 'latentdriver_preflight_max_fallback_ratio', 0.95))
+            add(
+                'latentdriver_dist_fallback_ratio_ok',
+                bool(np.isfinite(fallback_ratio) and fallback_ratio < max_fallback),
+                f'fallback_ratio={fallback_ratio:.4f}, actor_fallback_ratio={actor_fallback_ratio:.4f}, max={max_fallback:.4f}',
+            )
+            add(
+                'latentdriver_dist_finite_ratio_positive',
+                bool(np.isfinite(finite_ratio) and finite_ratio > 0.0),
+                f'dist_finite_ratio={finite_ratio:.4f}',
+            )
             obs_info = planner_bundle['ld_adapter'].last_obs_info
             feat_dim_ok = int(obs_info.get('feature_dim', -1)) == int(latentdriver_observation_contract()['feature_dim'])
             add('latentdriver_obs_feature_dim_ok', feat_dim_ok, str(obs_info))
             add('latentdriver_obs_finite', bool(obs_info.get('finite', False)), str(obs_info))
+            ld_adapter = planner_bundle['ld_adapter']
+            route = str(getattr(ld_adapter, '_last_forward_route', 'unknown'))
+            err = str(getattr(ld_adapter, '_last_forward_error', ''))
+            route_ok = (route != 'failed') and (len(err.strip()) == 0)
+            add(
+                'latentdriver_forward_route_ok',
+                bool(route_ok),
+                f'route={route}; last_error={err[:240]}',
+            )
 
     except Exception as e:
         add('smoke_rollout_exception', False, str(e))
@@ -211,6 +235,9 @@ def calibrate_closed_loop_thresholds(
                     trace_change_diag = {
                         'trace_pair_steps': np.nan,
                         'trace_pair_ratio': np.nan,
+                        'trace_pair_steps_all': np.nan,
+                        'trace_pair_ratio_all': np.nan,
+                        'trace_fallback_pair_ratio': np.nan,
                         'step_mean_l2_mean': np.nan,
                         'step_mean_l2_p50': np.nan,
                         'step_mean_l2_p95': np.nan,
@@ -253,6 +280,9 @@ def calibrate_closed_loop_thresholds(
                     'step_moment_kl_nonzero_ratio': float(trace_change_diag.get('step_moment_kl_nonzero_ratio', np.nan)),
                     'trace_pair_steps': float(trace_change_diag.get('trace_pair_steps', np.nan)),
                     'trace_pair_ratio': float(trace_change_diag.get('trace_pair_ratio', np.nan)),
+                    'trace_pair_steps_all': float(trace_change_diag.get('trace_pair_steps_all', np.nan)),
+                    'trace_pair_ratio_all': float(trace_change_diag.get('trace_pair_ratio_all', np.nan)),
+                    'trace_fallback_pair_ratio': float(trace_change_diag.get('trace_fallback_pair_ratio', np.nan)),
                 })
         except Exception as e:
             rows.append({
@@ -287,6 +317,9 @@ def calibrate_closed_loop_thresholds(
                 'step_moment_kl_nonzero_ratio': np.nan,
                 'trace_pair_steps': np.nan,
                 'trace_pair_ratio': np.nan,
+                'trace_pair_steps_all': np.nan,
+                'trace_pair_ratio_all': np.nan,
+                'trace_fallback_pair_ratio': np.nan,
             })
 
     calib_df = pd.DataFrame(rows)
@@ -360,6 +393,8 @@ def build_calibration_diagnostics(calib_df: pd.DataFrame, thresholds: Dict[str, 
         'step_moment_kl_mean': float(np.nanmean(usable['step_moment_kl_mean'])) if ('step_moment_kl_mean' in usable and len(usable) > 0) else np.nan,
         'step_moment_kl_nonzero_ratio_mean': float(np.nanmean(usable['step_moment_kl_nonzero_ratio'])) if ('step_moment_kl_nonzero_ratio' in usable and len(usable) > 0) else np.nan,
         'trace_pair_ratio_mean': float(np.nanmean(usable['trace_pair_ratio'])) if ('trace_pair_ratio' in usable and len(usable) > 0) else np.nan,
+        'trace_pair_ratio_all_mean': float(np.nanmean(usable['trace_pair_ratio_all'])) if ('trace_pair_ratio_all' in usable and len(usable) > 0) else np.nan,
+        'trace_fallback_pair_ratio_mean': float(np.nanmean(usable['trace_fallback_pair_ratio'])) if ('trace_fallback_pair_ratio' in usable and len(usable) > 0) else np.nan,
         'threshold_source': thresholds.get('source', 'unknown'),
         'risk_high_threshold': float(thresholds.get('risk_high_threshold', np.nan)),
         'risk_low_threshold': float(thresholds.get('risk_low_threshold', np.nan)),
@@ -414,9 +449,13 @@ def run_surprise_quality_gate(
     fallback_usage_rate = _col_mean(usable_calib, 'proposal_dist_fallback_ratio')
     actor_fallback_usage_rate = _col_mean(usable_calib, 'proposal_dist_actor_fallback_ratio')
     trace_pair_ratio_mean = _col_mean(usable_calib, 'trace_pair_ratio')
+    trace_pair_ratio_all_mean = _col_mean(usable_calib, 'trace_pair_ratio_all')
+    trace_fallback_pair_ratio_mean = _col_mean(usable_calib, 'trace_fallback_pair_ratio')
 
     dist_change_summary = pd.DataFrame([{
         'trace_pair_ratio_mean': _col_mean(usable_calib, 'trace_pair_ratio'),
+        'trace_pair_ratio_all_mean': _col_mean(usable_calib, 'trace_pair_ratio_all'),
+        'trace_fallback_pair_ratio_mean': _col_mean(usable_calib, 'trace_fallback_pair_ratio'),
         'step_mean_l2_mean': _col_mean(usable_calib, 'step_mean_l2_mean'),
         'step_mean_l2_p50': _col_q(usable_calib, 'step_mean_l2_mean', 0.50),
         'step_mean_l2_p95': _col_q(usable_calib, 'step_mean_l2_mean', 0.95),
@@ -433,6 +472,8 @@ def run_surprise_quality_gate(
         'fallback_usage_rate': fallback_usage_rate,
         'actor_fallback_usage_rate': actor_fallback_usage_rate,
         'trace_pair_ratio_mean': trace_pair_ratio_mean,
+        'trace_pair_ratio_all_mean': trace_pair_ratio_all_mean,
+        'trace_fallback_pair_ratio_mean': trace_fallback_pair_ratio_mean,
     }])
 
     reasons = []

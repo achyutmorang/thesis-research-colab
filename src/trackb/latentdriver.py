@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import dataclasses
+import inspect
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -428,6 +429,8 @@ class LatentDriverPredictiveKLAdapter:
         self.control_actor_factory = None
         self.last_obs_info: Dict[str, Any] = {}
         self._forward_error_count = 0
+        self._last_forward_route = 'uninitialized'
+        self._last_forward_error = ''
 
         self._setup()
 
@@ -563,6 +566,94 @@ class LatentDriverPredictiveKLAdapter:
         }
         return tok
 
+    def _forward_kwargs_from_signature(
+        self,
+        states_t: Any,
+        actions_t: Any,
+        timesteps_t: Any,
+    ) -> Dict[str, Any]:
+        try:
+            sig = inspect.signature(self.model.forward)
+        except Exception:
+            return {}
+
+        params = sig.parameters
+        has_var_kwargs = any(
+            p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values()
+        )
+        kwargs: Dict[str, Any] = {}
+
+        def _bind_first(names: List[str], value: Any) -> bool:
+            for name in names:
+                if has_var_kwargs or (name in params):
+                    kwargs[name] = value
+                    return True
+            return False
+
+        _bind_first(['states', 'state', 'obs', 'observations', 'inputs'], states_t)
+        _bind_first(['actions', 'action', 'acts'], actions_t)
+        _bind_first(['timesteps', 'timestep', 'time_steps', 'times', 'time'], timesteps_t)
+
+        if has_var_kwargs or ('padding_mask' in params):
+            kwargs.setdefault('padding_mask', None)
+        elif 'attention_mask' in params:
+            kwargs.setdefault('attention_mask', None)
+
+        return kwargs
+
+    def _call_model_forward_flexible(
+        self,
+        states_t: Any,
+        actions_t: Any,
+        timesteps_t: Any,
+    ) -> Any:
+        attempts: List[Tuple[str, Any]] = [
+            (
+                'positional+padding_mask',
+                lambda: self.model.forward(states_t, actions_t, timesteps_t, padding_mask=None),
+            ),
+            (
+                'positional',
+                lambda: self.model.forward(states_t, actions_t, timesteps_t),
+            ),
+            (
+                'positional_no_timestep+padding_mask',
+                lambda: self.model.forward(states_t, actions_t, padding_mask=None),
+            ),
+            (
+                'positional_no_timestep',
+                lambda: self.model.forward(states_t, actions_t),
+            ),
+        ]
+
+        kw = self._forward_kwargs_from_signature(states_t, actions_t, timesteps_t)
+        if len(kw) > 0:
+            attempts.append(('keyword', lambda kw=kw: self.model.forward(**kw)))
+            kw_no_mask = {
+                k: v for k, v in kw.items() if k not in {'padding_mask', 'attention_mask'}
+            }
+            if len(kw_no_mask) > 0 and kw_no_mask != kw:
+                attempts.append(
+                    ('keyword_no_mask', lambda kw=kw_no_mask: self.model.forward(**kw))
+                )
+
+        errors: List[str] = []
+        for label, fn in attempts:
+            try:
+                out = fn()
+                self._last_forward_route = label
+                self._last_forward_error = ''
+                return out
+            except Exception as e:
+                errors.append(f'{label}: {type(e).__name__}: {e}')
+
+        self._last_forward_route = 'failed'
+        self._last_forward_error = ' | '.join(errors[:6])
+        raise RuntimeError(
+            f'LatentDriver forward failed across {len(attempts)} call variants. '
+            f'{self._last_forward_error}'
+        )
+
     def _predict_distribution(self, state_hist: List[np.ndarray], action_hist: List[np.ndarray]) -> Dict[str, np.ndarray]:
         import torch
 
@@ -586,7 +677,7 @@ class LatentDriverPredictiveKLAdapter:
 
         try:
             with torch.no_grad():
-                model_out = self.model.forward(states_t, actions_t, timesteps_t, padding_mask=None)
+                model_out = self._call_model_forward_flexible(states_t, actions_t, timesteps_t)
             action_dis = self._extract_action_distribution(model_out)  # [M,7]
         except Exception as e:
             self._maybe_log_forward_error(e, states_t=states_t, actions_t=actions_t, timesteps_t=timesteps_t)
@@ -611,7 +702,7 @@ class LatentDriverPredictiveKLAdapter:
             'means': means.astype(np.float32),
             'stds': stds.astype(np.float32),
             'fallback': np.asarray(0, dtype=np.int32),
-            'source': 'model',
+            'source': f'model:{self._last_forward_route}',
         }
 
     @staticmethod
@@ -620,31 +711,49 @@ class LatentDriverPredictiveKLAdapter:
             return np.asarray(x.detach().cpu().numpy())
         return np.asarray(x)
 
-    def _extract_action_distribution(self, model_out: Any) -> np.ndarray:
-        # Accept multiple output signatures across LatentDriver/code-version variants.
-        if isinstance(model_out, tuple):
-            if len(model_out) == 0:
-                raise ValueError('LatentDriver forward returned empty tuple.')
-            actions_layers = model_out[0]
-        elif isinstance(model_out, dict):
-            keys = ['actions_layers', 'action_layers', 'actions', 'action_distributions']
-            actions_layers = None
-            for k in keys:
-                if k in model_out:
-                    actions_layers = model_out[k]
-                    break
-            if actions_layers is None:
-                raise ValueError(f'LatentDriver forward dict missing action layers keys={keys}.')
-        else:
-            actions_layers = model_out
+    def _iter_action_distribution_candidates(self, model_out: Any):
+        priority_names = [
+            'actions_layers',
+            'action_layers',
+            'actions',
+            'action_distributions',
+            'action_dis',
+            'pred_actions',
+            'action',
+        ]
+        queue: List[Any] = [model_out]
+        seen: set[int] = set()
 
-        if isinstance(actions_layers, (list, tuple)):
-            if len(actions_layers) == 0:
-                raise ValueError('LatentDriver action layers is empty.')
-            step_obj = actions_layers[-1]
-        else:
-            step_obj = actions_layers
+        while len(queue) > 0 and len(seen) < 128:
+            obj = queue.pop(0)
+            oid = id(obj)
+            if oid in seen:
+                continue
+            seen.add(oid)
 
+            if isinstance(obj, dict):
+                for key in priority_names:
+                    if key in obj:
+                        queue.insert(0, obj[key])
+                for value in obj.values():
+                    queue.append(value)
+                continue
+
+            if isinstance(obj, (list, tuple)):
+                for item in reversed(list(obj)):
+                    queue.insert(0, item)
+                continue
+
+            for name in priority_names:
+                if hasattr(obj, name):
+                    try:
+                        queue.insert(0, getattr(obj, name))
+                    except Exception:
+                        pass
+
+            yield obj
+
+    def _coerce_distribution_array(self, step_obj: Any) -> np.ndarray:
         arr = self._to_numpy(step_obj)
         if arr.ndim == 4:
             # [batch, time, mixture, params]
@@ -671,6 +780,19 @@ class LatentDriverPredictiveKLAdapter:
             raise ValueError(f'Action distribution has too few params: shape={step.shape}, expected >=7.')
         return step[:, :7]
 
+    def _extract_action_distribution(self, model_out: Any) -> np.ndarray:
+        errors: List[str] = []
+        for i, candidate in enumerate(self._iter_action_distribution_candidates(model_out)):
+            try:
+                return self._coerce_distribution_array(candidate)
+            except Exception as e:
+                if len(errors) < 8:
+                    errors.append(f'candidate[{i}]={type(candidate).__name__}: {type(e).__name__}: {e}')
+                continue
+
+        detail = '; '.join(errors) if len(errors) > 0 else f'output_type={type(model_out).__name__}'
+        raise ValueError(f'Unable to extract action distribution from model output. {detail}')
+
     def _maybe_log_forward_error(
         self,
         exc: Exception,
@@ -688,6 +810,9 @@ class LatentDriverPredictiveKLAdapter:
             f'[LatentDriver warning] forward fallback #{self._forward_error_count}/{max_logs}: '
             f'{type(exc).__name__}: {exc}'
         )
+        if self._last_forward_error:
+            print('[LatentDriver warning] forward attempt errors:', self._last_forward_error)
+        print('[LatentDriver warning] forward route:', self._last_forward_route)
         try:
             print(
                 '[LatentDriver warning] input shapes:',
@@ -1041,6 +1166,9 @@ def dist_trace_change_stats(
         return {
             'trace_pair_steps': 0.0,
             'trace_pair_ratio': 0.0,
+            'trace_pair_steps_all': 0.0,
+            'trace_pair_ratio_all': 0.0,
+            'trace_fallback_pair_ratio': 0.0,
             'step_mean_l2_mean': np.nan,
             'step_mean_l2_p50': np.nan,
             'step_mean_l2_p95': np.nan,
@@ -1054,11 +1182,15 @@ def dist_trace_change_stats(
     mean_l2_vals: List[float] = []
     std_l2_vals: List[float] = []
     kl_vals: List[float] = []
+    pair_steps_all = 0
 
     for i in range(n):
         dp = trace_p[i]
         dq = trace_q[i]
         if dp is None or dq is None:
+            continue
+        pair_steps_all += 1
+        if _trace_step_is_fallback(dp) or _trace_step_is_fallback(dq):
             continue
 
         mu_p, cov_p = _moment_match_diag_gmm(dp)
@@ -1076,11 +1208,14 @@ def dist_trace_change_stats(
 
         kl_vals.append(float(_gaussian_kl(mu_p[:d], cov_p[:d, :d], mu_q[:d], cov_q[:d, :d])))
 
-    pair_steps = int(len(kl_vals))
-    if pair_steps == 0:
+    pair_steps_non_fallback = int(len(kl_vals))
+    if pair_steps_non_fallback == 0:
         return {
             'trace_pair_steps': 0.0,
             'trace_pair_ratio': 0.0,
+            'trace_pair_steps_all': float(pair_steps_all),
+            'trace_pair_ratio_all': float(pair_steps_all / max(n, 1)),
+            'trace_fallback_pair_ratio': float(pair_steps_all / max(n, 1)),
             'step_mean_l2_mean': np.nan,
             'step_mean_l2_p50': np.nan,
             'step_mean_l2_p95': np.nan,
@@ -1096,8 +1231,11 @@ def dist_trace_change_stats(
     std_l2_arr = np.asarray(std_l2_vals, dtype=float)
 
     return {
-        'trace_pair_steps': float(pair_steps),
-        'trace_pair_ratio': float(pair_steps / max(n, 1)),
+        'trace_pair_steps': float(pair_steps_non_fallback),
+        'trace_pair_ratio': float(pair_steps_non_fallback / max(n, 1)),
+        'trace_pair_steps_all': float(pair_steps_all),
+        'trace_pair_ratio_all': float(pair_steps_all / max(n, 1)),
+        'trace_fallback_pair_ratio': float((pair_steps_all - pair_steps_non_fallback) / max(n, 1)),
         'step_mean_l2_mean': float(np.mean(mean_l2_arr)),
         'step_mean_l2_p50': float(np.quantile(mean_l2_arr, 0.50)),
         'step_mean_l2_p95': float(np.quantile(mean_l2_arr, 0.95)),
