@@ -8,6 +8,7 @@ Private research repository for PRiSM Track B closed-loop simulation experiments
 
 ## What This Repo Contains
 - `PRiSM_trackB_closedloop_simulation_colab.ipynb`: thin Colab orchestration notebook.
+- `scripts/colab_setup.py`: deterministic Colab bootstrap (dependency install + compatibility patches + checkpoint fetch).
 - `src/trackb/config.py`: dataclass configs and run artifact path helpers.
 - `src/trackb/metrics.py`: risk and surprise metric primitives.
 - `src/trackb/latentdriver.py`: planner integration, rollouts, predictive-KL utilities.
@@ -25,7 +26,7 @@ Private research repository for PRiSM Track B closed-loop simulation experiments
 
 ## Environment Reproducibility
 - The notebook setup cell pins core dependencies for the known working stack (Waymax + JAX + LatentDriver-related packages).
-- The setup cell also applies LatentDriver compatibility patches and fetches the expected checkpoint when missing.
+- Setup is delegated to `scripts/colab_setup.py`, which also applies LatentDriver compatibility patches and fetches the expected checkpoint when missing.
 
 ## WOMD Data Access
 - GCS auth is handled via `ensure_womd_gcs_access(...)` before dataset creation.
