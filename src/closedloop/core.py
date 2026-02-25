@@ -37,6 +37,17 @@ from .resume_io import (
 )
 from .search import optimize_method_closed_loop
 
+
+def _validate_runtime_prereqs() -> None:
+    try:
+        from numpy._core.umath import _center, _expandtabs  # type: ignore
+    except Exception as e:
+        raise RuntimeError(
+            "Runtime dependency check failed: NumPy private symbols are unavailable. "
+            "In Colab, re-run setup with RUN_SETUP=True, restart runtime, then run with RUN_SETUP=False."
+        ) from e
+
+
 def ensure_womd_gcs_access(gcs_path: str) -> None:
     if not str(gcs_path).startswith('gs://'):
         print('[auth] Non-GCS path detected; skipping GCS authentication checks.')
@@ -524,6 +535,8 @@ def run_preflight_and_calibration(
     reference_df: pd.DataFrame,
     restore_from_upload: bool = False,
 ):
+    _validate_runtime_prereqs()
+
     if bool(restore_from_upload):
         _ = restore_artifacts_via_upload(
             cfg.run_prefix,

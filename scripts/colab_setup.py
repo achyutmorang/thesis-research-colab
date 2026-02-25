@@ -12,6 +12,7 @@ LATENTDRIVER_CLONE_CMD = (
 )
 REPO_ROOT = Path(__file__).resolve().parents[1]
 REQUIREMENTS_COLAB_PATH = REPO_ROOT / "requirements-colab.txt"
+NUMERIC_REPAIR_REQUIREMENTS = "numpy==2.2.6 scipy==1.14.1 pandas==2.2.3 scikit-learn==1.6.1"
 
 
 def _sh(cmd: str) -> None:
@@ -19,6 +20,50 @@ def _sh(cmd: str) -> None:
     rc = subprocess.run(["bash", "-lc", cmd], check=False)
     if rc.returncode != 0:
         raise RuntimeError(f"Command failed ({rc.returncode}): {cmd}")
+
+
+def _verify_repo_layout(repo_root: Path) -> None:
+    closedloop_path = repo_root / "src" / "closedloop"
+    legacy_trackb_path = repo_root / "src" / "trackb"
+    if not closedloop_path.exists():
+        raise RuntimeError(
+            f"Expected module path missing: {closedloop_path}. "
+            "You may be on a stale checkout; re-clone the repository."
+        )
+    if legacy_trackb_path.exists():
+        raise RuntimeError(
+            f"Legacy module path still present: {legacy_trackb_path}. "
+            "Delete /content/thesis-research-colab and clone the latest main branch."
+        )
+
+
+def _probe_numpy_runtime() -> tuple[bool, str]:
+    probe = subprocess.run(
+        [
+            "python",
+            "-c",
+            (
+                "import numpy as np; "
+                "from numpy._core.umath import _center, _expandtabs; "
+                "print(np.__version__, np.__file__)"
+            ),
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        check=False,
+    )
+    if probe.returncode == 0:
+        msg = probe.stdout.strip() or "NumPy probe succeeded."
+        return True, msg
+    err = (probe.stderr or probe.stdout).strip()
+    return False, err
+
+
+def _repair_numeric_stack() -> None:
+    # Force-reinstall numeric stack to avoid mixed ABI/module states in Colab images.
+    _sh("pip uninstall -y numpy scipy pandas scikit-learn || true")
+    _sh(f"pip install --no-cache-dir --force-reinstall {NUMERIC_REPAIR_REQUIREMENTS}")
 
 
 def _patch_transformers_import_block(repo_path: Path) -> None:
@@ -159,12 +204,22 @@ def _install_requirements(requirements_path: Path) -> None:
     if not requirements_path.exists():
         raise FileNotFoundError(f"Missing requirements file: {requirements_path}")
     _sh("pip install --upgrade pip")
-    _sh(f"pip install --upgrade -r '{requirements_path}'")
+    _sh(f"pip install --no-cache-dir --force-reinstall --upgrade -r '{requirements_path}'")
 
 
 def run_deterministic_setup(run_setup: bool = False) -> None:
+    _verify_repo_layout(REPO_ROOT)
+
     if not run_setup:
-        print("RUN_SETUP=False: skipping dependency setup.")
+        ok, details = _probe_numpy_runtime()
+        if not ok:
+            raise RuntimeError(
+                "RUN_SETUP=False but runtime dependency probe failed. "
+                "Set RUN_SETUP=True in this notebook cell, run setup once, restart runtime, "
+                "then set RUN_SETUP=False and run all.\n"
+                f"Probe error: {details}"
+            )
+        print(f"RUN_SETUP=False: runtime probe passed ({details}).")
         return
 
     print("[setup] Starting deterministic environment bootstrap")
@@ -179,6 +234,19 @@ def run_deterministic_setup(run_setup: bool = False) -> None:
     _patch_transformers_import_block(latentdriver_repo)
     _patch_sort_vertices_fallback(latentdriver_repo)
     _ensure_checkpoint(Path("/content/checkpoints/lantentdriver_t2_J3.ckpt"))
+
+    ok, details = _probe_numpy_runtime()
+    if not ok:
+        print("[setup] NumPy probe failed after lockfile install, repairing numeric stack...")
+        _repair_numeric_stack()
+        ok, details = _probe_numpy_runtime()
+        if not ok:
+            raise RuntimeError(
+                "NumPy runtime probe failed after repair attempt. "
+                "Restart runtime and re-run setup. "
+                f"Probe error: {details}"
+            )
+    print(f"[setup] NumPy probe passed ({details}).")
 
     print("Setup complete. Restart runtime once, set RUN_SETUP=False, then Run all.")
 
