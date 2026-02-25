@@ -36,7 +36,7 @@ Research repository for closed-loop simulation experiments.
 
 ## Environment Reproducibility
 - Core runtime dependencies are pinned in `requirements-colab.txt`.
-- Notebook setup calls `scripts/colab_setup.py`, which probes the runtime first, attempts targeted numeric-stack repair for common NumPy mismatch states, skips heavy installs when possible, applies LatentDriver compatibility patches, fetches the expected checkpoint when missing, and validates core imports.
+- Notebook setup calls `scripts/colab_setup.py`, which uses the active kernel interpreter (`sys.executable -m pip`), probes the runtime first, attempts targeted numeric-stack repair for common NumPy mismatch states, skips heavy installs when possible, applies LatentDriver compatibility patches, fetches the expected checkpoint when missing, and validates core imports.
 - CI/test dependencies are pinned in `requirements-dev.txt`.
 
 ## WOMD Data Access

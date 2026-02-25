@@ -4,6 +4,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+from typing import List
 
 
 LATENTDRIVER_CLONE_CMD = (
@@ -22,6 +23,19 @@ def _sh(cmd: str) -> None:
         raise RuntimeError(f"Command failed ({rc.returncode}): {cmd}")
 
 
+def _run_cmd(args: List[str]) -> subprocess.CompletedProcess:
+    print(f"[setup] $ {' '.join(args)}")
+    return subprocess.run(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=False)
+
+
+def _pip(args: List[str]) -> None:
+    cmd = [sys.executable, "-m", "pip", *args]
+    print(f"[setup] $ {' '.join(cmd)}")
+    rc = subprocess.run(cmd, check=False)
+    if rc.returncode != 0:
+        raise RuntimeError(f"Command failed ({rc.returncode}): {' '.join(cmd)}")
+
+
 def _verify_repo_layout(repo_root: Path) -> None:
     closedloop_path = repo_root / "src" / "closedloop"
     legacy_trackb_path = repo_root / "src" / "trackb"
@@ -38,21 +52,15 @@ def _verify_repo_layout(repo_root: Path) -> None:
 
 
 def _probe_numpy_runtime() -> tuple[bool, str]:
-    probe = subprocess.run(
-        [
-            "python",
-            "-c",
-            (
-                "import numpy as np; "
-                "from numpy._core.umath import _center, _expandtabs; "
-                "print(np.__version__, np.__file__)"
-            ),
-        ],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        check=False,
-    )
+    probe = _run_cmd([
+        sys.executable,
+        "-c",
+        (
+            "import numpy as np; "
+            "from numpy._core.umath import _center, _expandtabs; "
+            "print(np.__version__, np.__file__)"
+        ),
+    ])
     if probe.returncode == 0:
         msg = probe.stdout.strip() or "NumPy probe succeeded."
         return True, msg
@@ -62,26 +70,22 @@ def _probe_numpy_runtime() -> tuple[bool, str]:
 
 def _repair_numeric_stack() -> None:
     # Force-reinstall numeric stack to avoid mixed ABI/module states in Colab images.
-    _sh("pip uninstall -y numpy scipy pandas scikit-learn || true")
-    _sh(f"pip install --no-cache-dir --force-reinstall {NUMERIC_REPAIR_REQUIREMENTS}")
+    uninstall = _run_cmd([sys.executable, "-m", "pip", "uninstall", "-y", "numpy", "scipy", "pandas", "scikit-learn"])
+    if uninstall.returncode != 0:
+        print("[setup] numeric uninstall returned non-zero; continuing with reinstall.")
+    _pip(["install", "--no-cache-dir", "--force-reinstall", *NUMERIC_REPAIR_REQUIREMENTS.split()])
 
 
 def _probe_core_runtime() -> tuple[bool, str]:
-    probe = subprocess.run(
-        [
-            "python",
-            "-c",
-            (
-                "import jax, waymax, numpy as np, pandas as pd, scipy, sklearn; "
-                "from numpy._core.umath import _center, _expandtabs; "
-                "print('ok', np.__version__, pd.__version__, scipy.__version__, sklearn.__version__, jax.__version__)"
-            ),
-        ],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        check=False,
-    )
+    probe = _run_cmd([
+        sys.executable,
+        "-c",
+        (
+            "import jax, waymax, numpy as np, pandas as pd, scipy, sklearn; "
+            "from numpy._core.umath import _center, _expandtabs; "
+            "print('ok', np.__version__, pd.__version__, scipy.__version__, sklearn.__version__, jax.__version__)"
+        ),
+    ])
     if probe.returncode == 0:
         return True, (probe.stdout.strip() or "core runtime probe succeeded")
     return False, ((probe.stderr or probe.stdout).strip())
@@ -224,8 +228,8 @@ def _ensure_checkpoint(ckpt_path: Path) -> None:
 def _install_requirements(requirements_path: Path) -> None:
     if not requirements_path.exists():
         raise FileNotFoundError(f"Missing requirements file: {requirements_path}")
-    _sh("pip install --upgrade pip")
-    _sh(f"pip install --upgrade -r '{requirements_path}'")
+    _pip(["install", "--upgrade", "pip"])
+    _pip(["install", "--upgrade", "-r", str(requirements_path)])
 
 
 def _sync_latentdriver_repo() -> None:
@@ -307,6 +311,7 @@ def run_deterministic_setup(run_setup: bool = False, force_reinstall: bool = Fal
             "Retry with force_reinstall=True in the setup cell."
         )
     print(f"[setup] Core runtime probe passed ({core_details}).")
+    print(f"[setup] Kernel interpreter: {sys.executable}")
 
     print("Setup complete. Restart runtime once, set RUN_SETUP=False, then Run all.")
 
