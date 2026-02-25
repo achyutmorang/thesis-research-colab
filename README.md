@@ -1,26 +1,50 @@
-# thesis-research-colab
+# Thesis Research Colab
 
-Modular Colab-first repo for PRiSM Track B closed-loop experiments.
+Private research repository for PRiSM Track B closed-loop simulation experiments.
 
-## Open in Colab
+## Open In Colab
 - Notebook: [PRiSM_trackB_closedloop_simulation_colab.ipynb](https://colab.research.google.com/github/achyutmorang/thesis-research-colab/blob/main/PRiSM_trackB_closedloop_simulation_colab.ipynb)
+- Note: because this repo is private, open the link while signed in to GitHub in Colab.
 
-## Structure
-- `PRiSM_trackB_closedloop_simulation_colab.ipynb`: thin orchestration notebook
-- `src/trackb/config.py`: config dataclasses and persistence/checkpoint utilities
-- `src/trackb/metrics.py`: risk/surprise metric primitives and scaling
-- `src/trackb/latentdriver.py`: planner wiring, rollout, predictive-KL utilities
-- `src/trackb/calibration.py`: preflight checks, calibration, surprise quality gate
-- `src/trackb/search.py`: method objective evaluation and optimization loops
-- `src/trackb/resume_io.py`: checkpoint resume and artifact export helpers
-- `src/trackb/core.py`: high-level orchestration over split modules
+## What This Repo Contains
+- `PRiSM_trackB_closedloop_simulation_colab.ipynb`: thin Colab orchestration notebook.
+- `src/trackb/config.py`: dataclass configs and run artifact path helpers.
+- `src/trackb/metrics.py`: risk and surprise metric primitives.
+- `src/trackb/latentdriver.py`: planner integration, rollouts, predictive-KL utilities.
+- `src/trackb/calibration.py`: preflight checks, calibration, surprise quality gates.
+- `src/trackb/search.py`: optimization/search methods for closed-loop perturbations.
+- `src/trackb/resume_io.py`: checkpoint resume and export/report artifact writing.
+- `src/trackb/core.py`: top-level orchestration over split modules.
 
-## Colab workflow
-1. Open notebook from the Colab link above.
-2. Run repo sync cell (`git clone`/`git pull`).
-3. Install dependencies only when needed (fresh runtime).
-4. Keep `PERSIST_ROOT`, `RUN_TAG`, `N_SHARDS`, `SHARD_ID` stable for resume.
+## Recommended Workflow
+1. Open notebook in Colab.
+2. Run the repo-sync cell (`git clone`/`git pull`) or use a Drive copy of this repo.
+3. In a fresh runtime, set `RUN_SETUP=True` in the setup cell and run it once.
+4. Restart runtime, set `RUN_SETUP=False`, then run all cells.
+5. Keep `RUN_TAG`, `PERSIST_ROOT`, `N_SHARDS`, and `SHARD_ID` stable for resumable runs.
 
-## Notes
-- Runtime artifacts (`*.csv`, `*.json`, checkpoints) are intentionally not versioned.
-- Save executed notebook outputs back to GitHub only when needed.
+## Environment Reproducibility
+- The notebook setup cell pins core dependencies for the known working stack (Waymax + JAX + LatentDriver-related packages).
+- The setup cell also applies LatentDriver compatibility patches and fetches the expected checkpoint when missing.
+
+## WOMD Data Access
+- GCS auth is handled via `ensure_womd_gcs_access(...)` before dataset creation.
+- If access is missing, the notebook triggers Colab auth and verifies bucket access for WOMD.
+
+## Resume And Artifacts
+- Intermediate and final outputs are written under `cfg.run_prefix`.
+- Key artifacts include:
+  - `*_per_scenario_results.csv`
+  - `*_per_eval_trace.csv`
+  - `*_closedloop_calibration.csv`
+  - `*_thresholds.json`
+  - `*_quick_summary.csv`
+  - `*_runtime_manifest.json`
+
+## Ownership And Reuse
+- This repository is for thesis research and is not open source.
+- Keep the repository private to minimize unauthorized reuse.
+- If attribution is required in papers/slides, cite the repository URL and commit hash used for experiments.
+
+## License
+This project is distributed under a **proprietary, all-rights-reserved** license. See [LICENSE](LICENSE).

@@ -1,0 +1,8 @@
+cff-version: 1.2.0
+title: "Thesis Research Colab: PRiSM Track B Closed-Loop Simulation"
+message: "If you reference this work, cite the repository URL and exact commit hash used."
+authors:
+  - family-names: "Morang"
+    given-names: "Achyut"
+repository-code: "https://github.com/achyutmorang/thesis-research-colab"
+license: "NOASSERTION"
