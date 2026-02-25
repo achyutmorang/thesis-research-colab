@@ -17,6 +17,7 @@ Research repository for PRiSM Track B closed-loop simulation experiments.
 - `src/trackb/search.py`: optimization/search methods for closed-loop perturbations.
 - `src/trackb/resume_io.py`: checkpoint resume and export/report artifact writing.
 - `src/trackb/core.py`: top-level orchestration over split modules.
+- `src/trackb/drive_api_sync.py`: Drive API auth + bidirectional artifact sync helpers (no mount required).
 - `requirements-colab.txt`: pinned Colab runtime dependency lock.
 - `requirements-dev.txt`: local/CI test dependency lock.
 - `tests/`: unit tests for deterministic metric and sharding logic.
@@ -24,10 +25,11 @@ Research repository for PRiSM Track B closed-loop simulation experiments.
 ## Recommended Workflow
 1. Open notebook in Colab.
 2. Run the repo-sync cell (`git clone`/`git pull`) or use a Drive copy of this repo.
-3. In a fresh runtime, set `RUN_SETUP=True` in the setup cell and run it once.
-4. Restart runtime, set `RUN_SETUP=False`, then run all cells.
-5. Keep `RUN_TAG`, `PERSIST_ROOT`, and `N_SHARDS` stable for resumable runs.
-6. Use `SHARD_ID="auto"` to pick the next shard automatically from existing progress files.
+3. Choose storage backend in Step 2 (`drive_mount` or `drive_api`).
+4. In a fresh runtime, set `RUN_SETUP=True` in the setup cell and run it once.
+5. Restart runtime, set `RUN_SETUP=False`, then run all cells.
+6. Keep `RUN_TAG`, `PERSIST_ROOT`, and `N_SHARDS` stable for resumable runs.
+7. Use `SHARD_ID="auto"` to pick the next shard automatically from existing progress files.
 
 ## Environment Reproducibility
 - Core runtime dependencies are pinned in `requirements-colab.txt`.

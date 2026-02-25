@@ -18,6 +18,11 @@ from .core import (
     run_preflight_and_calibration,
     run_trackb_closed_loop,
 )
+from .drive_api_sync import (
+    initialize_drive_api_sync,
+    pull_drive_api_run,
+    push_drive_api_run,
+)
 from .resume_io import export_trackb_artifacts, summarize_method_outputs
 
 __all__ = [
@@ -31,7 +36,10 @@ __all__ = [
     'export_trackb_artifacts',
     'initialize_configs',
     'inspect_shard_progress',
+    'initialize_drive_api_sync',
     'make_waymax_data_iter',
+    'pull_drive_api_run',
+    'push_drive_api_run',
     'resolve_latentdriver_checkpoint',
     'restore_artifacts_via_upload',
     'run_preflight_and_calibration',
