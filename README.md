@@ -22,7 +22,8 @@ Private research repository for PRiSM Track B closed-loop simulation experiments
 2. Run the repo-sync cell (`git clone`/`git pull`) or use a Drive copy of this repo.
 3. In a fresh runtime, set `RUN_SETUP=True` in the setup cell and run it once.
 4. Restart runtime, set `RUN_SETUP=False`, then run all cells.
-5. Keep `RUN_TAG`, `PERSIST_ROOT`, `N_SHARDS`, and `SHARD_ID` stable for resumable runs.
+5. Keep `RUN_TAG`, `PERSIST_ROOT`, and `N_SHARDS` stable for resumable runs.
+6. Use `SHARD_ID="auto"` to pick the next shard automatically from existing progress files.
 
 ## Environment Reproducibility
 - The notebook setup cell pins core dependencies for the known working stack (Waymax + JAX + LatentDriver-related packages).

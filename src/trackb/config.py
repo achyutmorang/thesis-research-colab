@@ -246,6 +246,103 @@ def configure_persistent_run_prefix(
     return cfg.run_prefix
 
 
+def _shard_run_name(run_tag: str, shard_id: int, n_shards: int) -> str:
+    n_shards = int(max(1, n_shards))
+    shard_id = int(shard_id)
+    if shard_id < 0 or shard_id >= n_shards:
+        raise ValueError(f'Invalid shard_id={shard_id} for n_shards={n_shards}.')
+    if n_shards == 1:
+        return str(run_tag)
+    return f'{run_tag}_shard{shard_id:02d}of{n_shards:02d}'
+
+
+def shard_run_prefix(run_tag: str, persist_root: str, shard_id: int, n_shards: int) -> str:
+    root = Path(str(persist_root)).expanduser()
+    root.mkdir(parents=True, exist_ok=True)
+    return str(root / _shard_run_name(run_tag, shard_id, n_shards))
+
+
+def _completed_scenarios_from_results(path: Path, methods: List[str]) -> Tuple[int, int, int]:
+    if not path.exists():
+        return 0, 0, 0
+    try:
+        df = pd.read_csv(path)
+    except Exception:
+        return 0, 0, 0
+    if df.empty:
+        return 0, 0, 0
+    if ('scenario_id' not in df.columns) or ('method' not in df.columns):
+        return int(len(df)), 0, 0
+
+    sub = df[df['method'].isin(methods)].copy()
+    if sub.empty:
+        return int(len(df)), 0, int(df['scenario_id'].nunique())
+
+    counts = sub.groupby('scenario_id')['method'].nunique()
+    completed = int((counts >= len(methods)).sum())
+    touched = int(sub['scenario_id'].nunique())
+    return int(len(df)), completed, touched
+
+
+def inspect_shard_progress(
+    run_tag: str,
+    persist_root: str,
+    n_shards: int,
+    methods: Optional[List[str]] = None,
+) -> pd.DataFrame:
+    methods = methods or ['random', 'risk_only', 'surprise_only', 'prism_joint']
+    n_shards = int(max(1, n_shards))
+    rows: List[Dict[str, Any]] = []
+    for sid in range(n_shards):
+        run_prefix = shard_run_prefix(run_tag, persist_root, sid, n_shards)
+        results_path = Path(f'{run_prefix}_per_scenario_results.csv')
+        n_rows, n_completed, n_touched = _completed_scenarios_from_results(results_path, methods)
+        if not results_path.exists():
+            status = 'missing'
+        elif n_completed == 0 and n_touched == 0:
+            status = 'empty_or_invalid'
+        else:
+            status = 'in_progress_or_completed'
+        rows.append({
+            'shard_id': int(sid),
+            'run_prefix': run_prefix,
+            'results_exists': int(results_path.exists()),
+            'n_rows': int(n_rows),
+            'n_touched_scenarios': int(n_touched),
+            'n_completed_scenarios': int(n_completed),
+            'status': status,
+        })
+
+    return pd.DataFrame(rows).sort_values('shard_id').reset_index(drop=True)
+
+
+def auto_select_shard_id(
+    run_tag: str,
+    persist_root: str,
+    n_shards: int,
+    methods: Optional[List[str]] = None,
+) -> int:
+    progress = inspect_shard_progress(
+        run_tag=run_tag,
+        persist_root=persist_root,
+        n_shards=n_shards,
+        methods=methods,
+    )
+    if progress.empty:
+        return 0
+
+    missing = progress[progress['results_exists'] == 0]
+    if len(missing) > 0:
+        return int(missing.iloc[0]['shard_id'])
+
+    # Resume the least-complete shard first when all shard files already exist.
+    ranked = progress.sort_values(
+        ['n_completed_scenarios', 'n_touched_scenarios', 'n_rows', 'shard_id'],
+        ascending=[True, True, True, True],
+    )
+    return int(ranked.iloc[0]['shard_id'])
+
+
 def build_run_artifact_paths(run_prefix: str) -> Dict[str, str]:
     return {
         'per_scenario_results': f'{run_prefix}_per_scenario_results.csv',
