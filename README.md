@@ -29,8 +29,9 @@ Research repository for closed-loop simulation experiments.
 1. Open notebook in Colab.
 2. Run the repo-sync cell (`git clone`/`git pull`) or use a Drive copy of this repo.
 3. In a fresh runtime, set `RUN_SETUP=True` in the setup cell and run it once.
-4. Restart runtime, set `RUN_SETUP=False`, then run all cells.
-5. If setup is skipped, the helper now performs a runtime probe and raises early when NumPy/runtime state is stale.
+4. If setup changes dependencies, restart runtime (or enable auto-restart in the setup cell).
+5. Set `RUN_SETUP=False`, then run all cells.
+6. If setup is skipped, the helper performs a runtime probe and raises early when NumPy/runtime state is stale.
 5. Keep `RUN_TAG`, `PERSIST_ROOT`, and `N_SHARDS` stable for resumable runs.
 6. Use `SHARD_ID="auto"` to pick the next shard automatically from existing progress files.
 

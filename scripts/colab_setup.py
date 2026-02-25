@@ -4,7 +4,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
-from typing import List
+from typing import Any, Dict, List
 
 
 LATENTDRIVER_CLONE_CMD = (
@@ -224,7 +224,18 @@ def _sync_latentdriver_repo() -> None:
     _sh(LATENTDRIVER_CLONE_CMD)
 
 
-def run_deterministic_setup(run_setup: bool = False, force_reinstall: bool = False) -> None:
+def run_deterministic_setup(run_setup: bool = False, force_reinstall: bool = False) -> Dict[str, Any]:
+    result: Dict[str, Any] = {
+        "ran_setup": bool(run_setup),
+        "force_reinstall": bool(force_reinstall),
+        "installed_requirements": False,
+        "repaired_numeric_stack": False,
+        "restart_required": False,
+        "numpy_probe": "",
+        "core_probe": "",
+        "kernel_executable": sys.executable,
+    }
+
     if not run_setup:
         ok, details = _probe_numpy_runtime()
         if not ok:
@@ -235,11 +246,14 @@ def run_deterministic_setup(run_setup: bool = False, force_reinstall: bool = Fal
                 f"Probe error: {details}"
             )
         print(f"RUN_SETUP=False: runtime probe passed ({details}).")
-        return
+        result["numpy_probe"] = details
+        result["core_probe"] = "skipped (RUN_SETUP=False)"
+        return result
 
     print("[setup] Starting deterministic environment bootstrap")
 
     core_ok, core_details = _probe_core_runtime()
+    result["core_probe"] = core_details
     if core_ok and (not force_reinstall):
         print(f"[setup] Core runtime already healthy; skipping heavy pip install ({core_details}).")
     else:
@@ -250,7 +264,9 @@ def run_deterministic_setup(run_setup: bool = False, force_reinstall: bool = Fal
             if not numpy_ok:
                 print(f"[setup] NumPy probe failed; applying targeted numeric repair.\n[setup] probe error: {numpy_details}")
                 _repair_numeric_stack()
+                result["repaired_numeric_stack"] = True
                 core_ok, core_details = _probe_core_runtime()
+                result["core_probe"] = core_details
                 if core_ok:
                     print(f"[setup] Core runtime healthy after numeric repair; skipping heavy pip install ({core_details}).")
 
@@ -260,6 +276,7 @@ def run_deterministic_setup(run_setup: bool = False, force_reinstall: bool = Fal
             else:
                 print(f"[setup] Core runtime still unhealthy; installing dependencies.\n[setup] probe error: {core_details}")
             _install_requirements(REQUIREMENTS_COLAB_PATH)
+            result["installed_requirements"] = True
 
     _sync_latentdriver_repo()
 
@@ -276,6 +293,7 @@ def run_deterministic_setup(run_setup: bool = False, force_reinstall: bool = Fal
     if not ok:
         print("[setup] NumPy probe failed after lockfile install, repairing numeric stack...")
         _repair_numeric_stack()
+        result["repaired_numeric_stack"] = True
         ok, details = _probe_numpy_runtime()
         if not ok:
             raise RuntimeError(
@@ -284,6 +302,7 @@ def run_deterministic_setup(run_setup: bool = False, force_reinstall: bool = Fal
                 f"Probe error: {details}"
             )
     print(f"[setup] NumPy probe passed ({details}).")
+    result["numpy_probe"] = details
 
     core_ok, core_details = _probe_core_runtime()
     if not core_ok:
@@ -293,11 +312,19 @@ def run_deterministic_setup(run_setup: bool = False, force_reinstall: bool = Fal
             "Retry with force_reinstall=True in the setup cell."
         )
     print(f"[setup] Core runtime probe passed ({core_details}).")
+    result["core_probe"] = core_details
     print(f"[setup] Kernel interpreter: {sys.executable}")
 
+    # Any in-kernel package mutation requires restart for compiled extensions.
+    result["restart_required"] = bool(
+        result["installed_requirements"] or result["repaired_numeric_stack"]
+    )
+
     print("Setup complete. Restart runtime once, set RUN_SETUP=False, then Run all.")
+    return result
 
 
 if __name__ == "__main__":
     env_flag = os.environ.get("RUN_SETUP", "false").strip().lower()
-    run_deterministic_setup(run_setup=env_flag in {"1", "true", "yes", "y"})
+    out = run_deterministic_setup(run_setup=env_flag in {"1", "true", "yes", "y"})
+    print("[setup] result:", out)
