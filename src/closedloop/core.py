@@ -44,7 +44,7 @@ def _validate_runtime_prereqs() -> None:
     except Exception as e:
         raise RuntimeError(
             "Runtime dependency check failed: NumPy private symbols are unavailable. "
-            "In Colab, re-run setup with RUN_SETUP=True, restart runtime, then run with RUN_SETUP=False."
+            "In Colab, re-run deterministic setup; if it reports dependency changes, restart runtime before simulation."
         ) from e
 
 

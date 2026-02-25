@@ -3,6 +3,8 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+import time
+from importlib import metadata
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -34,6 +36,7 @@ def _pip(args: List[str]) -> None:
     rc = subprocess.run(cmd, check=False)
     if rc.returncode != 0:
         raise RuntimeError(f"Command failed ({rc.returncode}): {' '.join(cmd)}")
+
 
 def _probe_numpy_runtime() -> tuple[bool, str]:
     probe = _run_cmd([
@@ -73,6 +76,43 @@ def _probe_core_runtime() -> tuple[bool, str]:
     if probe.returncode == 0:
         return True, (probe.stdout.strip() or "core runtime probe succeeded")
     return False, ((probe.stderr or probe.stdout).strip())
+
+
+def _normalize_dist_name(name: str) -> str:
+    return name.strip().lower().replace("_", "-")
+
+
+def _parse_exact_pins(requirements_path: Path) -> Dict[str, str]:
+    pins: Dict[str, str] = {}
+    for raw in requirements_path.read_text().splitlines():
+        line = raw.strip()
+        if (not line) or line.startswith("#") or line.startswith("--") or line.startswith("git+"):
+            continue
+        if "==" not in line:
+            continue
+        name, version = line.split("==", 1)
+        name = name.split("[", 1)[0].strip()
+        version = version.strip()
+        if name and version:
+            pins[_normalize_dist_name(name)] = version
+    return pins
+
+
+def _installed_version(dist_name: str) -> str | None:
+    try:
+        return metadata.version(dist_name)
+    except metadata.PackageNotFoundError:
+        return None
+
+
+def _collect_version_mismatches(requirements_path: Path) -> List[str]:
+    pins = _parse_exact_pins(requirements_path)
+    mismatches: List[str] = []
+    for dist_name, expected in sorted(pins.items()):
+        actual = _installed_version(dist_name)
+        if actual != expected:
+            mismatches.append(f"{dist_name}: have={actual!r}, want={expected!r}")
+    return mismatches
 
 
 def _patch_transformers_import_block(repo_path: Path) -> None:
@@ -209,11 +249,12 @@ def _ensure_checkpoint(ckpt_path: Path) -> None:
         print("[ckpt] missing:", ckpt_path)
 
 
-def _install_requirements(requirements_path: Path) -> None:
+def _install_requirements(requirements_path: Path, upgrade_pip: bool = False) -> None:
     if not requirements_path.exists():
         raise FileNotFoundError(f"Missing requirements file: {requirements_path}")
-    _pip(["install", "--upgrade", "pip"])
-    _pip(["install", "--upgrade", "-r", str(requirements_path)])
+    if upgrade_pip:
+        _pip(["install", "--upgrade", "pip"])
+    _pip(["install", "-r", str(requirements_path)])
 
 
 def _sync_latentdriver_repo() -> None:
@@ -224,42 +265,44 @@ def _sync_latentdriver_repo() -> None:
     _sh(LATENTDRIVER_CLONE_CMD)
 
 
-def run_deterministic_setup(run_setup: bool = False, force_reinstall: bool = False) -> Dict[str, Any]:
+def run_deterministic_setup(
+    force_reinstall: bool = False,
+    auto_restart: bool = False,
+    strict_lock: bool = True,
+) -> Dict[str, Any]:
     result: Dict[str, Any] = {
-        "ran_setup": bool(run_setup),
+        "ran_setup": True,
         "force_reinstall": bool(force_reinstall),
+        "strict_lock": bool(strict_lock),
         "installed_requirements": False,
         "repaired_numeric_stack": False,
         "restart_required": False,
         "numpy_probe": "",
         "core_probe": "",
+        "version_mismatches": [],
         "kernel_executable": sys.executable,
     }
 
-    if not run_setup:
-        ok, details = _probe_numpy_runtime()
-        if not ok:
-            raise RuntimeError(
-                "RUN_SETUP=False but runtime dependency probe failed. "
-                "Set RUN_SETUP=True in this notebook cell, run setup once, restart runtime, "
-                "then set RUN_SETUP=False and run all.\n"
-                f"Probe error: {details}"
-            )
-        print(f"RUN_SETUP=False: runtime probe passed ({details}).")
-        result["numpy_probe"] = details
-        result["core_probe"] = "skipped (RUN_SETUP=False)"
-        return result
-
     print("[setup] Starting deterministic environment bootstrap")
+
+    mismatches = _collect_version_mismatches(REQUIREMENTS_COLAB_PATH) if strict_lock else []
+    result["version_mismatches"] = mismatches
+    if mismatches:
+        print("[setup] Version mismatches against lockfile:")
+        for row in mismatches:
+            print(f"[setup]  - {row}")
+    else:
+        print("[setup] Lockfile version check: no exact-pin mismatches detected.")
 
     core_ok, core_details = _probe_core_runtime()
     result["core_probe"] = core_details
-    if core_ok and (not force_reinstall):
-        print(f"[setup] Core runtime already healthy; skipping heavy pip install ({core_details}).")
+
+    if (not force_reinstall) and core_ok and (not mismatches):
+        print(f"[setup] Core runtime already healthy; skipping dependency install ({core_details}).")
     else:
-        if not force_reinstall:
-            # Fast path: if this is only the NumPy private-symbol mismatch, repair numeric stack
-            # first and avoid full requirements reinstall.
+        # Fast path: if only NumPy private symbols are broken and lockfile pins match,
+        # repair numeric stack first to avoid full dependency reinstall.
+        if (not force_reinstall) and (not mismatches) and (not core_ok):
             numpy_ok, numpy_details = _probe_numpy_runtime()
             if not numpy_ok:
                 print(f"[setup] NumPy probe failed; applying targeted numeric repair.\n[setup] probe error: {numpy_details}")
@@ -267,15 +310,15 @@ def run_deterministic_setup(run_setup: bool = False, force_reinstall: bool = Fal
                 result["repaired_numeric_stack"] = True
                 core_ok, core_details = _probe_core_runtime()
                 result["core_probe"] = core_details
-                if core_ok:
-                    print(f"[setup] Core runtime healthy after numeric repair; skipping heavy pip install ({core_details}).")
 
-        if (not core_ok) or force_reinstall:
+        if force_reinstall or mismatches or (not core_ok):
             if force_reinstall:
-                print("[setup] force_reinstall=True -> running full dependency install.")
+                print("[setup] force_reinstall=True -> running dependency install.")
+            elif mismatches:
+                print("[setup] Detected lockfile mismatches -> running dependency install.")
             else:
-                print(f"[setup] Core runtime still unhealthy; installing dependencies.\n[setup] probe error: {core_details}")
-            _install_requirements(REQUIREMENTS_COLAB_PATH)
+                print(f"[setup] Core runtime unhealthy -> running dependency install.\n[setup] probe error: {core_details}")
+            _install_requirements(REQUIREMENTS_COLAB_PATH, upgrade_pip=bool(force_reinstall))
             result["installed_requirements"] = True
 
     _sync_latentdriver_repo()
@@ -291,14 +334,14 @@ def run_deterministic_setup(run_setup: bool = False, force_reinstall: bool = Fal
 
     ok, details = _probe_numpy_runtime()
     if not ok:
-        print("[setup] NumPy probe failed after lockfile install, repairing numeric stack...")
+        print("[setup] NumPy probe failed after dependency install, repairing numeric stack...")
         _repair_numeric_stack()
         result["repaired_numeric_stack"] = True
         ok, details = _probe_numpy_runtime()
         if not ok:
             raise RuntimeError(
                 "NumPy runtime probe failed after repair attempt. "
-                "Restart runtime and re-run setup. "
+                "Retry setup with force_reinstall=True.\n"
                 f"Probe error: {details}"
             )
     print(f"[setup] NumPy probe passed ({details}).")
@@ -309,7 +352,7 @@ def run_deterministic_setup(run_setup: bool = False, force_reinstall: bool = Fal
         raise RuntimeError(
             "Core runtime probe failed after setup. "
             f"Probe error: {core_details}\n"
-            "Retry with force_reinstall=True in the setup cell."
+            "Retry with force_reinstall=True."
         )
     print(f"[setup] Core runtime probe passed ({core_details}).")
     result["core_probe"] = core_details
@@ -320,11 +363,24 @@ def run_deterministic_setup(run_setup: bool = False, force_reinstall: bool = Fal
         result["installed_requirements"] or result["repaired_numeric_stack"]
     )
 
-    print("Setup complete. Restart runtime once, set RUN_SETUP=False, then Run all.")
+    if result["restart_required"]:
+        print("Setup complete. Runtime restart is required before running simulation cells.")
+        if auto_restart and os.environ.get("COLAB_RELEASE_TAG"):
+            print("[setup] Auto-restart enabled. Restarting kernel in 2 seconds...")
+            time.sleep(2)
+            os.kill(os.getpid(), 9)
+    else:
+        print("Setup complete. No restart required; dependencies already matched.")
     return result
 
 
 if __name__ == "__main__":
-    env_flag = os.environ.get("RUN_SETUP", "false").strip().lower()
-    out = run_deterministic_setup(run_setup=env_flag in {"1", "true", "yes", "y"})
+    force_flag = os.environ.get("FORCE_REINSTALL", "false").strip().lower()
+    restart_flag = os.environ.get("AUTO_RESTART", "false").strip().lower()
+    strict_flag = os.environ.get("STRICT_LOCK", "true").strip().lower()
+    out = run_deterministic_setup(
+        force_reinstall=force_flag in {"1", "true", "yes", "y"},
+        auto_restart=restart_flag in {"1", "true", "yes", "y"},
+        strict_lock=strict_flag not in {"0", "false", "no", "n"},
+    )
     print("[setup] result:", out)

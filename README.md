@@ -28,12 +28,11 @@ Research repository for closed-loop simulation experiments.
 ## Recommended Workflow
 1. Open notebook in Colab.
 2. Run the repo-sync cell (`git clone`/`git pull`) or use a Drive copy of this repo.
-3. In a fresh runtime, set `RUN_SETUP=True` in the setup cell and run it once.
-4. If setup changes dependencies, restart runtime (or enable auto-restart in the setup cell).
-5. Set `RUN_SETUP=False`, then run all cells.
-6. If setup is skipped, the helper performs a runtime probe and raises early when NumPy/runtime state is stale.
-5. Keep `RUN_TAG`, `PERSIST_ROOT`, and `N_SHARDS` stable for resumable runs.
-6. Use `SHARD_ID="auto"` to pick the next shard automatically from existing progress files.
+3. Run the deterministic setup cell once; it auto-checks runtime health and lockfile versions, then installs only when required.
+4. Keep `AUTO_RESTART_AFTER_SETUP=True` so Colab restarts automatically if compiled dependencies changed.
+5. After setup completes, run the remaining cells top-to-bottom.
+6. Keep `RUN_TAG`, `PERSIST_ROOT`, and `N_SHARDS` stable for resumable runs.
+7. Use `SHARD_ID="auto"` to pick the next shard automatically from existing progress files.
 
 ## Environment Reproducibility
 - Core runtime dependencies are pinned in `requirements-colab.txt`.
