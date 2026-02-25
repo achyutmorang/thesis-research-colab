@@ -427,6 +427,7 @@ class LatentDriverPredictiveKLAdapter:
         self.act_dim = 3 if cfg.latentdriver_action_type == 'waypoint' else 2
         self.control_actor_factory = None
         self.last_obs_info: Dict[str, Any] = {}
+        self._forward_error_count = 0
 
         self._setup()
 
@@ -585,9 +586,10 @@ class LatentDriverPredictiveKLAdapter:
 
         try:
             with torch.no_grad():
-                actions_layers, _, _ = self.model.forward(states_t, actions_t, timesteps_t, padding_mask=None)
-            action_dis = actions_layers[-1][0, -1].detach().cpu().numpy().astype(np.float32)  # [M,7]
-        except Exception:
+                model_out = self.model.forward(states_t, actions_t, timesteps_t, padding_mask=None)
+            action_dis = self._extract_action_distribution(model_out)  # [M,7]
+        except Exception as e:
+            self._maybe_log_forward_error(e, states_t=states_t, actions_t=actions_t, timesteps_t=timesteps_t)
             # Keep rollout alive when model forward path is brittle under specific package/runtime combos.
             return _latentdriver_fallback_dist(action_dim=self.act_dim)
 
@@ -611,6 +613,90 @@ class LatentDriverPredictiveKLAdapter:
             'fallback': np.asarray(0, dtype=np.int32),
             'source': 'model',
         }
+
+    @staticmethod
+    def _to_numpy(x: Any) -> np.ndarray:
+        if hasattr(x, 'detach'):
+            return np.asarray(x.detach().cpu().numpy())
+        return np.asarray(x)
+
+    def _extract_action_distribution(self, model_out: Any) -> np.ndarray:
+        # Accept multiple output signatures across LatentDriver/code-version variants.
+        if isinstance(model_out, tuple):
+            if len(model_out) == 0:
+                raise ValueError('LatentDriver forward returned empty tuple.')
+            actions_layers = model_out[0]
+        elif isinstance(model_out, dict):
+            keys = ['actions_layers', 'action_layers', 'actions', 'action_distributions']
+            actions_layers = None
+            for k in keys:
+                if k in model_out:
+                    actions_layers = model_out[k]
+                    break
+            if actions_layers is None:
+                raise ValueError(f'LatentDriver forward dict missing action layers keys={keys}.')
+        else:
+            actions_layers = model_out
+
+        if isinstance(actions_layers, (list, tuple)):
+            if len(actions_layers) == 0:
+                raise ValueError('LatentDriver action layers is empty.')
+            step_obj = actions_layers[-1]
+        else:
+            step_obj = actions_layers
+
+        arr = self._to_numpy(step_obj)
+        if arr.ndim == 4:
+            # [batch, time, mixture, params]
+            step = arr[0, -1]
+        elif arr.ndim == 3:
+            # commonly [batch, time, params] or [time, mixture, params]
+            if arr.shape[0] == 1:
+                step = arr[0, -1]
+            else:
+                step = arr[-1]
+        elif arr.ndim == 2:
+            step = arr
+        elif arr.ndim == 1:
+            if arr.size % 7 != 0:
+                raise ValueError(f'Unexpected action distribution shape={arr.shape}; cannot reshape to [:,7].')
+            step = arr.reshape(-1, 7)
+        else:
+            raise ValueError(f'Unexpected action distribution tensor rank={arr.ndim}, shape={arr.shape}.')
+
+        step = np.asarray(step, dtype=np.float32)
+        if step.ndim == 1:
+            step = step.reshape(1, -1)
+        if step.shape[1] < 7:
+            raise ValueError(f'Action distribution has too few params: shape={step.shape}, expected >=7.')
+        return step[:, :7]
+
+    def _maybe_log_forward_error(
+        self,
+        exc: Exception,
+        states_t: Any,
+        actions_t: Any,
+        timesteps_t: Any,
+    ) -> None:
+        if not bool(getattr(self.cfg, 'latentdriver_log_forward_errors', False)):
+            return
+        max_logs = int(max(1, getattr(self.cfg, 'latentdriver_log_forward_errors_max', 5)))
+        if self._forward_error_count >= max_logs:
+            return
+        self._forward_error_count += 1
+        print(
+            f'[LatentDriver warning] forward fallback #{self._forward_error_count}/{max_logs}: '
+            f'{type(exc).__name__}: {exc}'
+        )
+        try:
+            print(
+                '[LatentDriver warning] input shapes:',
+                'states', tuple(states_t.shape),
+                'actions', tuple(actions_t.shape),
+                'timesteps', tuple(timesteps_t.shape),
+            )
+        except Exception:
+            pass
 
     def _deterministic_action(self, dist: Dict[str, np.ndarray]) -> np.ndarray:
         weights = dist['weights']

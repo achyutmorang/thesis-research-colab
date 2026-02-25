@@ -71,6 +71,8 @@ class TrackBConfig:
     latentdriver_action_clip: Tuple[float, float, float] = (6.0, 0.35, 0.35)
     latentdriver_yaw_sigma: float = 0.15
     latentdriver_log_std_clip: Tuple[float, float] = (-1.609, 5.0)
+    latentdriver_log_forward_errors: bool = True
+    latentdriver_log_forward_errors_max: int = 5
 
     # Calibration from closed-loop base rollouts
     n_closedloop_calib: int = 120
