@@ -210,28 +210,53 @@ def authenticate_drive_api(
 
     _ensure_google_api_deps()
 
+    import google.auth
+    from googleapiclient.discovery import build
+
+    auth_scopes = list(scopes) if scopes else list(DRIVE_DEFAULT_SCOPES)
+    expected_norm = str(expected_email).strip().lower() if expected_email else None
+
+    def _build_service_and_email() -> Tuple[Any, str]:
+        creds, _ = google.auth.default(scopes=auth_scopes)
+        service = build('drive', 'v3', credentials=creds, cache_discovery=False)
+        about = service.about().get(fields='user(emailAddress,displayName)').execute()
+        user = about.get('user', {})
+        email = str(user.get('emailAddress', '')).strip().lower()
+        if not email:
+            raise RuntimeError('Unable to resolve authenticated Drive account email.')
+        return service, email
+
+    # Fast path: if ADC already exists (for example from earlier auth), reuse it.
+    try:
+        service, email = _build_service_and_email()
+        if (expected_norm is None) or (email == expected_norm):
+            return service, email
+    except Exception:
+        service, email = None, ''
+
     try:
         from google.colab import auth as colab_auth
     except Exception as e:
         raise RuntimeError('google.colab.auth is unavailable; run this in Colab.') from e
 
-    colab_auth.authenticate_user()
+    try:
+        colab_auth.authenticate_user()
+    except Exception as e:
+        msg = str(e)
+        if 'credential propagation was unsuccessful' in msg.lower():
+            raise RuntimeError(
+                'Colab OAuth failed: credential propagation was unsuccessful. '
+                'Enable third-party cookies for accounts.google.com and colab.research.google.com, '
+                'disable strict privacy blockers for this tab, then retry. '
+                "Temporary fallback: set STORAGE_BACKEND='drive_mount'."
+            ) from e
+        raise RuntimeError(f'Colab OAuth failed: {msg}') from e
 
-    import google.auth
-    from googleapiclient.discovery import build
+    service, email = _build_service_and_email()
 
-    auth_scopes = list(scopes) if scopes else list(DRIVE_DEFAULT_SCOPES)
-    creds, _ = google.auth.default(scopes=auth_scopes)
-    service = build('drive', 'v3', credentials=creds, cache_discovery=False)
-    about = service.about().get(fields='user(emailAddress,displayName)').execute()
-    user = about.get('user', {})
-    email = str(user.get('emailAddress', '')).strip().lower()
-    if not email:
-        raise RuntimeError('Unable to resolve authenticated Drive account email.')
-
-    if expected_email and (email != str(expected_email).strip().lower()):
+    if expected_norm and (email != expected_norm):
         raise RuntimeError(
-            f'Authenticated Drive account mismatch: got {email}, expected {expected_email}.'
+            f'Authenticated Drive account mismatch: got {email}, expected {expected_norm}.'
         )
 
     return service, email
