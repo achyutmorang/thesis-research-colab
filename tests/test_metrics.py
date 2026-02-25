@@ -19,7 +19,7 @@ def _load_module(module_name: str, rel_path: str):
     return module
 
 
-metrics = _load_module("trackb_metrics", "src/trackb/metrics.py")
+metrics = _load_module("closedloop_metrics", "src/closedloop/metrics.py")
 
 
 def test_compute_finite_differences_shape_and_values():

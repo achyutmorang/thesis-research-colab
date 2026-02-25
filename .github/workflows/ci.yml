@@ -22,7 +22,7 @@ jobs:
 
       - name: Syntax check
         run: |
-          python -m py_compile src/trackb/*.py scripts/*.py tests/*.py
+          python -m py_compile src/closedloop/*.py scripts/*.py tests/*.py
 
       - name: Run unit tests
         run: |

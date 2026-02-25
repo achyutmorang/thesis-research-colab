@@ -19,7 +19,7 @@ def _load_module(module_name: str, rel_path: str):
     return module
 
 
-config = _load_module("trackb_config", "src/trackb/config.py")
+config = _load_module("closedloop_config", "src/closedloop/config.py")
 
 
 def test_auto_select_shard_prefers_missing_shard(tmp_path: Path):

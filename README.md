@@ -1,26 +1,26 @@
 # Thesis Research Colab
 
-Research repository for PRiSM Track B closed-loop simulation experiments.
+Research repository for PRiSM closed-loop simulation experiments.
 
 ## Open In Colab
-- Notebook: [notebooks/PRiSM_trackB_closedloop_simulation_colab.ipynb](https://colab.research.google.com/github/achyutmorang/thesis-research-colab/blob/main/notebooks/PRiSM_trackB_closedloop_simulation_colab.ipynb)
-- Evaluation notebook: [notebooks/PRiSM_trackB_evaluation_colab.ipynb](https://colab.research.google.com/github/achyutmorang/thesis-research-colab/blob/main/notebooks/PRiSM_trackB_evaluation_colab.ipynb)
+- Notebook: [notebooks/PRiSM_closedloop_simulation_colab.ipynb](https://colab.research.google.com/github/achyutmorang/thesis-research-colab/blob/main/notebooks/PRiSM_closedloop_simulation_colab.ipynb)
+- Evaluation notebook: [notebooks/PRiSM_closedloop_evaluation_colab.ipynb](https://colab.research.google.com/github/achyutmorang/thesis-research-colab/blob/main/notebooks/PRiSM_closedloop_evaluation_colab.ipynb)
 - If the repo is private, open the link while signed in to GitHub in Colab.
 
 ## What This Repo Contains
-- `notebooks/PRiSM_trackB_closedloop_simulation_colab.ipynb`: thin Colab orchestration notebook.
+- `notebooks/PRiSM_closedloop_simulation_colab.ipynb`: thin Colab orchestration notebook.
 - `scripts/colab_setup.py`: deterministic Colab bootstrap (dependency install + compatibility patches + checkpoint fetch).
 - `scripts/merge_shards.py`: validates and merges shard outputs into consolidated artifacts.
-- `src/trackb/config.py`: dataclass configs and run artifact path helpers.
-- `src/trackb/metrics.py`: risk and surprise metric primitives.
-- `src/trackb/latentdriver.py`: planner integration, rollouts, predictive-KL utilities.
-- `src/trackb/calibration.py`: preflight checks, calibration, surprise quality gates.
-- `src/trackb/search.py`: optimization/search methods for closed-loop perturbations.
-- `src/trackb/resume_io.py`: checkpoint resume and export/report artifact writing.
-- `src/trackb/core.py`: top-level orchestration over split modules.
+- `src/closedloop/config.py`: dataclass configs and run artifact path helpers.
+- `src/closedloop/metrics.py`: risk and surprise metric primitives.
+- `src/closedloop/latentdriver.py`: planner integration, rollouts, predictive-KL utilities.
+- `src/closedloop/calibration.py`: preflight checks, calibration, surprise quality gates.
+- `src/closedloop/search.py`: optimization/search methods for closed-loop perturbations.
+- `src/closedloop/resume_io.py`: checkpoint resume and export/report artifact writing.
+- `src/closedloop/core.py`: top-level orchestration over split modules.
 - `src/eval/io.py`: run-prefix discovery and artifact loading from Drive/local outputs.
 - `src/eval/analysis.py`: reusable evaluation metrics/tables for conditional lift and discovery efficiency.
-- `notebooks/PRiSM_trackB_evaluation_colab.ipynb`: analysis notebook consuming simulation outputs (`csv` + `json`).
+- `notebooks/PRiSM_closedloop_evaluation_colab.ipynb`: analysis notebook consuming simulation outputs (`csv` + `json`).
 - `requirements-colab.txt`: pinned Colab runtime dependency lock.
 - `requirements-dev.txt`: local/CI test dependency lock.
 - `tests/`: unit tests for deterministic metric and sharding logic.
@@ -59,8 +59,8 @@ After all shards finish, merge them with:
 
 ```bash
 python scripts/merge_shards.py \
-  --run-tag trackb_closedloop_v1 \
-  --persist-root /content/drive/MyDrive/prism_trackb_runs \
+  --run-tag closedloop_v1 \
+  --persist-root /content/drive/MyDrive/prism_closedloop_runs \
   --n-shards 4
 ```
 

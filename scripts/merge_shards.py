@@ -11,21 +11,21 @@ from typing import Any, Dict, List
 import pandas as pd
 
 
-def _load_trackb_config_module():
+def _load_closedloop_config_module():
     repo_root = Path(__file__).resolve().parents[1]
-    config_path = repo_root / "src" / "trackb" / "config.py"
-    spec = importlib.util.spec_from_file_location("trackb_config", str(config_path))
+    config_path = repo_root / "src" / "closedloop" / "config.py"
+    spec = importlib.util.spec_from_file_location("closedloop_config", str(config_path))
     if spec is None or spec.loader is None:
         raise RuntimeError(f"Unable to load config module from {config_path}")
     module = importlib.util.module_from_spec(spec)
-    sys.modules["trackb_config"] = module
+    sys.modules["closedloop_config"] = module
     spec.loader.exec_module(module)
     return module
 
 
-trackb_config = _load_trackb_config_module()
-build_run_artifact_paths = trackb_config.build_run_artifact_paths
-shard_run_prefix = trackb_config.shard_run_prefix
+closedloop_config = _load_closedloop_config_module()
+build_run_artifact_paths = closedloop_config.build_run_artifact_paths
+shard_run_prefix = closedloop_config.shard_run_prefix
 
 RESULTS_REQUIRED_COLUMNS = ["scenario_id", "method"]
 TRACE_REQUIRED_COLUMNS = ["scenario_id", "method", "eval_index"]
@@ -156,7 +156,7 @@ def merge_shards(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Merge sharded Track B artifacts.")
+    parser = argparse.ArgumentParser(description="Merge sharded Closed-Loop artifacts.")
     parser.add_argument("--run-tag", required=True, help="Base run tag used for shard runs.")
     parser.add_argument("--persist-root", required=True, help="Persistent root directory.")
     parser.add_argument("--n-shards", required=True, type=int, help="Number of shards to merge.")

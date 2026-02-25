@@ -13,7 +13,7 @@ import pandas as pd
 
 
 @dataclass
-class TrackBConfig:
+class ClosedLoopConfig:
     global_seed: int = 17
 
     # Dataset scale (pilot defaults; scale up after first successful run)
@@ -81,7 +81,7 @@ class TrackBConfig:
     high_quantile: float = 0.80
 
     # Run controls: fairness, chunking, resume
-    run_prefix: str = 'prism_trackB_run'
+    run_prefix: str = 'prism_closedloop_run'
     run_chunk_size: int = 200
     checkpoint_every_scenarios: int = 25
     resume_from_existing: bool = True
@@ -126,7 +126,7 @@ def required_total_scenarios(min_eval: int, train_fraction: float) -> int:
     return int(math.ceil(float(min_eval) / test_frac))
 
 
-def align_dataset_scale(cfg: TrackBConfig) -> TrackBConfig:
+def align_dataset_scale(cfg: ClosedLoopConfig) -> ClosedLoopConfig:
     required_eval = int(max(cfg.n_eval_scenarios, cfg.strict_min_eval))
     required_total = required_total_scenarios(required_eval, cfg.train_fraction)
     if cfg.n_total_scenarios < required_total:
@@ -191,7 +191,7 @@ def scan_latentdriver_checkpoints(search_roots: Optional[List[str]] = None) -> p
     return df
 
 
-def resolve_latentdriver_checkpoint(cfg: TrackBConfig) -> Tuple[TrackBConfig, pd.DataFrame]:
+def resolve_latentdriver_checkpoint(cfg: ClosedLoopConfig) -> Tuple[ClosedLoopConfig, pd.DataFrame]:
     if cfg.planner_kind != 'latentdriver':
         return cfg, pd.DataFrame()
 
@@ -215,8 +215,8 @@ def resolve_latentdriver_checkpoint(cfg: TrackBConfig) -> Tuple[TrackBConfig, pd
     return cfg, scan_df
 
 
-def initialize_configs() -> Tuple[TrackBConfig, SearchConfig, pd.DataFrame]:
-    cfg = align_dataset_scale(TrackBConfig())
+def initialize_configs() -> Tuple[ClosedLoopConfig, SearchConfig, pd.DataFrame]:
+    cfg = align_dataset_scale(ClosedLoopConfig())
     search_cfg = SearchConfig()
     cfg, scan_df = resolve_latentdriver_checkpoint(cfg)
 
@@ -228,7 +228,7 @@ def initialize_configs() -> Tuple[TrackBConfig, SearchConfig, pd.DataFrame]:
 
 
 def configure_persistent_run_prefix(
-    cfg: TrackBConfig,
+    cfg: ClosedLoopConfig,
     run_tag: str,
     persist_root: str,
     shard_id: int,

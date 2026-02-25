@@ -15,11 +15,11 @@ from waymax import dataloader as waymax_dataloader
 from .calibration import (
     build_calibration_diagnostics,
     calibrate_closed_loop_thresholds,
-    run_trackb_preflight_checks,
+    run_closedloop_preflight_checks,
 )
 from .config import (
     SearchConfig,
-    TrackBConfig,
+    ClosedLoopConfig,
     build_run_artifact_paths,
     required_total_scenarios,
     restore_artifacts_via_upload,
@@ -96,7 +96,7 @@ def ensure_womd_gcs_access(gcs_path: str) -> None:
 class WaymaxScenarioLoader:
     def __init__(
         self,
-        config: TrackBConfig,
+        config: ClosedLoopConfig,
         data_iter: Optional[Iterable[Any]] = None,
         dataset_config: Optional[Any] = None,
     ):
@@ -193,10 +193,10 @@ class WaymaxScenarioLoader:
                 break
         return rows
 
-class TrackBRunner:
+class ClosedLoopRunner:
     def __init__(
         self,
-        config: TrackBConfig,
+        config: ClosedLoopConfig,
         data_iter: Optional[Iterable[Any]] = None,
         dataset_config: Optional[Any] = None,
     ):
@@ -264,10 +264,10 @@ class TrackBRunner:
 
         return pd.DataFrame(rows)
 
-def run_trackb_closed_loop(
-    runner: TrackBRunner,
+def run_closed_loop(
+    runner: ClosedLoopRunner,
     eval_idx: np.ndarray,
-    cfg: TrackBConfig,
+    cfg: ClosedLoopConfig,
     search_cfg: SearchConfig,
     thresholds: Dict[str, float],
     run_prefix: Optional[str] = None,
@@ -313,7 +313,7 @@ def run_trackb_closed_loop(
     chunk_size = int(max(1, cfg.run_chunk_size))
     for chunk_id, start in enumerate(range(0, len(pending), chunk_size), start=1):
         chunk = pending[start:start + chunk_size]
-        iterator = tqdm(chunk, desc=f'Track B chunk {chunk_id} ({len(chunk)} scenarios)', total=len(chunk))
+        iterator = tqdm(chunk, desc=f'Closed-Loop chunk {chunk_id} ({len(chunk)} scenarios)', total=len(chunk))
 
         for sid in iterator:
             rec = runner.data['scenarios'][sid]
@@ -468,7 +468,7 @@ def run_trackb_closed_loop(
         print(f'Per-eval trace rows={len(final_trace_df)}, saved={trace_checkpoint_path}')
     return final_df, final_trace_df
 
-def make_waymax_data_iter(cfg: TrackBConfig):
+def make_waymax_data_iter(cfg: ClosedLoopConfig):
     """Build dataset config and iterator (with GCS auth precheck for gs:// paths)."""
     ensure_womd_gcs_access(cfg.waymax_path)
     dataset_config = waymax_config.DatasetConfig(
@@ -480,14 +480,14 @@ def make_waymax_data_iter(cfg: TrackBConfig):
     data_iter = waymax_dataloader.simulator_state_generator(dataset_config)
     return dataset_config, data_iter
 
-def build_trackb_runner_and_splits(
-    cfg: TrackBConfig,
+def build_closedloop_runner_and_splits(
+    cfg: ClosedLoopConfig,
     data_iter: Optional[Iterable[Any]],
     dataset_config: Optional[Any],
     n_shards: int,
     shard_id: int,
 ):
-    runner = TrackBRunner(cfg, data_iter=data_iter, dataset_config=dataset_config)
+    runner = ClosedLoopRunner(cfg, data_iter=data_iter, dataset_config=dataset_config)
     data = runner.build_dataset()
 
     train_idx = data['train_idx']
@@ -517,8 +517,8 @@ def build_trackb_runner_and_splits(
     return runner, data, train_idx, test_idx, eval_idx_all, eval_idx, reference_df, base_eval_openloop_df
 
 def run_preflight_and_calibration(
-    runner: TrackBRunner,
-    cfg: TrackBConfig,
+    runner: ClosedLoopRunner,
+    cfg: ClosedLoopConfig,
     search_cfg: SearchConfig,
     eval_idx: np.ndarray,
     reference_df: pd.DataFrame,
@@ -534,25 +534,25 @@ def run_preflight_and_calibration(
     thresholds_path_resume = artifact_paths['thresholds']
     closedloop_calib_path_resume = artifact_paths['closedloop_calibration']
 
-    preflight_df = run_trackb_preflight_checks(runner, cfg, eval_idx)
+    preflight_df = run_closedloop_preflight_checks(runner, cfg, eval_idx)
     if bool(cfg.require_preflight_pass) and (not preflight_df.empty) and (not bool(preflight_df['pass'].all())):
         failed = preflight_df[~preflight_df['pass']]
         raise RuntimeError(
-            'Track B preflight failed. Fix these checks before running calibration/main loop:\n'
+            'Closed-Loop preflight failed. Fix these checks before running calibration/main loop:\n'
             + failed.to_string(index=False)
         )
 
     if Path(thresholds_path_resume).exists():
         with open(thresholds_path_resume, 'r') as f:
-            trackb_thresholds = json.load(f)
+            closedloop_thresholds = json.load(f)
         if Path(closedloop_calib_path_resume).exists():
             closedloop_calib_df = pd.read_csv(closedloop_calib_path_resume)
         else:
             closedloop_calib_df = pd.DataFrame()
-        calib_diag_df, calib_quant_df = build_calibration_diagnostics(closedloop_calib_df, trackb_thresholds)
+        calib_diag_df, calib_quant_df = build_calibration_diagnostics(closedloop_calib_df, closedloop_thresholds)
 
-        loaded_surprise_scale = float(trackb_thresholds.get('surprise_scale', np.nan))
-        loaded_surprise_thr = float(trackb_thresholds.get('surprise_high_threshold', np.nan))
+        loaded_surprise_scale = float(closedloop_thresholds.get('surprise_scale', np.nan))
+        loaded_surprise_thr = float(closedloop_thresholds.get('surprise_high_threshold', np.nan))
         force_recalib = (
             (not np.isfinite(loaded_surprise_scale))
             or (loaded_surprise_scale <= float(search_cfg.min_scale) * 1.01)
@@ -560,22 +560,22 @@ def run_preflight_and_calibration(
         )
         if force_recalib:
             print('[resume] existing thresholds look degenerate; recalibrating closed-loop surprise.')
-            closedloop_calib_df, trackb_thresholds = calibrate_closed_loop_thresholds(
+            closedloop_calib_df, closedloop_thresholds = calibrate_closed_loop_thresholds(
                 runner,
                 eval_idx,
                 cfg,
                 search_cfg,
                 reference_df=reference_df,
             )
-            calib_diag_df, calib_quant_df = build_calibration_diagnostics(closedloop_calib_df, trackb_thresholds)
+            calib_diag_df, calib_quant_df = build_calibration_diagnostics(closedloop_calib_df, closedloop_thresholds)
     else:
-        closedloop_calib_df, trackb_thresholds = calibrate_closed_loop_thresholds(
+        closedloop_calib_df, closedloop_thresholds = calibrate_closed_loop_thresholds(
             runner,
             eval_idx,
             cfg,
             search_cfg,
             reference_df=reference_df,
         )
-        calib_diag_df, calib_quant_df = build_calibration_diagnostics(closedloop_calib_df, trackb_thresholds)
+        calib_diag_df, calib_quant_df = build_calibration_diagnostics(closedloop_calib_df, closedloop_thresholds)
 
-    return preflight_df, closedloop_calib_df, trackb_thresholds, calib_diag_df, calib_quant_df
+    return preflight_df, closedloop_calib_df, closedloop_thresholds, calib_diag_df, calib_quant_df

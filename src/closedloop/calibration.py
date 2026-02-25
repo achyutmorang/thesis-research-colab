@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 from tqdm.auto import tqdm
 
-from .config import SearchConfig, TrackBConfig
+from .config import SearchConfig, ClosedLoopConfig
 from .latentdriver import (
     _choose_target_non_ego,
     closed_loop_rollout_selected,
@@ -20,7 +20,7 @@ from .latentdriver import (
 )
 from .metrics import compute_risk_metrics, planner_action_surprise_kl, risk_kwargs_from_cfg, robust_scale
 
-def run_trackb_preflight_checks(runner: Any, cfg: TrackBConfig, eval_idx: np.ndarray) -> pd.DataFrame:
+def run_closedloop_preflight_checks(runner: Any, cfg: ClosedLoopConfig, eval_idx: np.ndarray) -> pd.DataFrame:
     checks: List[Dict[str, Any]] = []
 
     def add(name: str, passed: bool, detail: str):
@@ -130,9 +130,9 @@ def make_calibration_delta_proposal(rng: np.random.Generator, k: int, search_cfg
     return project_delta_vec(prop, search_cfg.delta_clip, search_cfg.delta_l2_budget)
 
 def calibrate_closed_loop_thresholds(
-    runner: TrackBRunner,
+    runner: ClosedLoopRunner,
     eval_idx: np.ndarray,
-    cfg: TrackBConfig,
+    cfg: ClosedLoopConfig,
     search_cfg: SearchConfig,
     reference_df: Optional[pd.DataFrame] = None,
 ) -> Tuple[pd.DataFrame, Dict[str, float]]:

@@ -4,7 +4,7 @@ from typing import Any, Dict, List, Tuple
 
 import numpy as np
 
-from .config import SearchConfig, TrackBConfig
+from .config import SearchConfig, ClosedLoopConfig
 from .latentdriver import (
     closed_loop_rollout_selected,
     dist_trace_diagnostics,
@@ -18,7 +18,7 @@ def evaluate_delta_closed_loop(
     planner_bundle: Dict[str, Any],
     target_idx: int,
     delta_xy: np.ndarray,
-    cfg: TrackBConfig,
+    cfg: ClosedLoopConfig,
     search_cfg: SearchConfig,
     thresholds: Dict[str, float],
     base_metrics: Dict[str, Any],
@@ -138,7 +138,7 @@ def optimize_method_closed_loop(
     rec: Dict[str, Any],
     planner_bundle: Dict[str, Any],
     target_idx: int,
-    cfg: TrackBConfig,
+    cfg: ClosedLoopConfig,
     search_cfg: SearchConfig,
     thresholds: Dict[str, float],
     scenario_seed: int,

@@ -16,7 +16,7 @@ from waymax import datatypes as waymax_datatypes
 from waymax import dynamics as waymax_dynamics
 from waymax import env as waymax_env
 
-from .config import TrackBConfig
+from .config import ClosedLoopConfig
 
 # JAX compatibility shim for libraries still calling removed top-level tree APIs.
 if not hasattr(jax, 'tree_map'):
@@ -419,7 +419,7 @@ def predictive_kl_from_dist_traces(
     return float(np.mean(vals))
 
 class LatentDriverPredictiveKLAdapter:
-    def __init__(self, cfg: TrackBConfig):
+    def __init__(self, cfg: ClosedLoopConfig):
         self.cfg = cfg
         self.repo_path = Path(cfg.latentdriver_repo_path)
         self.context_len = int(max(1, cfg.latentdriver_context_len))
@@ -839,13 +839,13 @@ class LatentDriverPredictiveKLAdapter:
         action = self._deterministic_action(dist)
         return action, dist
 
-def get_latentdriver_adapter(cfg: TrackBConfig) -> LatentDriverPredictiveKLAdapter:
+def get_latentdriver_adapter(cfg: ClosedLoopConfig) -> LatentDriverPredictiveKLAdapter:
     global _LATENTDRIVER_ADAPTER
     if _LATENTDRIVER_ADAPTER is None:
         _LATENTDRIVER_ADAPTER = LatentDriverPredictiveKLAdapter(cfg)
     return _LATENTDRIVER_ADAPTER
 
-def make_closed_loop_components(base_state: Any, planner_kind: str, planner_name: str, cfg: TrackBConfig):
+def make_closed_loop_components(base_state: Any, planner_kind: str, planner_name: str, cfg: ClosedLoopConfig):
     num_objects = int(base_state.log_trajectory.xy.shape[0])
     is_sdc_all = np.asarray(base_state.object_metadata.is_sdc).astype(bool)
     if not np.any(is_sdc_all):
@@ -966,7 +966,7 @@ def closed_loop_rollout_selected(
     selected_idx: np.ndarray,
     target_obj_idx: int,
     delta_xy: np.ndarray,
-    cfg: TrackBConfig,
+    cfg: ClosedLoopConfig,
     planner_bundle: Dict[str, Any],
     seed: int,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, List[Optional[Dict[str, np.ndarray]]], bool, str]:

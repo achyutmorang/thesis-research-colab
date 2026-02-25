@@ -1,4 +1,4 @@
-# Colab runtime dependency lock for Track B experiments.
+# Colab runtime dependency lock for Closed-Loop experiments.
 # Keep this file aligned with scripts/colab_setup.py.
 
 --find-links https://storage.googleapis.com/jax-releases/jax_cuda_releases.html

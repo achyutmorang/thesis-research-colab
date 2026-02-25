@@ -12,7 +12,7 @@ import jax
 import numpy as np
 import pandas as pd
 
-from .config import SearchConfig, TrackBConfig, build_run_artifact_paths
+from .config import SearchConfig, ClosedLoopConfig, build_run_artifact_paths
 
 ARTIFACT_SCHEMA_VERSION = '1.0.0'
 RESULTS_REQUIRED_COLUMNS = ['scenario_id', 'method']
@@ -224,7 +224,7 @@ def _write_progress_artifacts(
     run_prefix: str,
     results_df: pd.DataFrame,
     trace_df: pd.DataFrame,
-    cfg: TrackBConfig,
+    cfg: ClosedLoopConfig,
     search_cfg: SearchConfig,
     thresholds: Dict[str, Any],
     static_frames: Optional[Dict[str, pd.DataFrame]] = None,
@@ -329,9 +329,9 @@ def _write_progress_artifacts(
             Path(out_path).parent.mkdir(parents=True, exist_ok=True)
             obj.to_csv(out_path, index=False)
 
-def summarize_method_outputs(trackb_results_df: pd.DataFrame, trackb_trace_df: pd.DataFrame):
-    usable_df = trackb_results_df[
-        trackb_results_df['method'].isin(['random', 'risk_only', 'surprise_only', 'prism_joint'])
+def summarize_method_outputs(closedloop_results_df: pd.DataFrame, closedloop_trace_df: pd.DataFrame):
+    usable_df = closedloop_results_df[
+        closedloop_results_df['method'].isin(['random', 'risk_only', 'surprise_only', 'prism_joint'])
     ].copy()
 
     quick_summary_df = (
@@ -374,9 +374,9 @@ def summarize_method_outputs(trackb_results_df: pd.DataFrame, trackb_trace_df: p
         )
     )
 
-    if isinstance(trackb_trace_df, pd.DataFrame) and len(trackb_trace_df) > 0:
+    if isinstance(closedloop_trace_df, pd.DataFrame) and len(closedloop_trace_df) > 0:
         trace_diag_df = (
-            trackb_trace_df.groupby('method', as_index=False)
+            closedloop_trace_df.groupby('method', as_index=False)
             .agg(
                 n_eval_rows=('eval_index', 'size'),
                 final_eval_index_mean=('eval_index', 'mean'),
@@ -392,19 +392,19 @@ def summarize_method_outputs(trackb_results_df: pd.DataFrame, trackb_trace_df: p
 
     return quick_summary_df, sanity_df, fairness_checks_df, trace_diag_df
 
-def export_trackb_artifacts(
-    cfg: TrackBConfig,
+def export_closedloop_artifacts(
+    cfg: ClosedLoopConfig,
     search_cfg: SearchConfig,
     eval_idx: np.ndarray,
-    trackb_results_df: pd.DataFrame,
-    trackb_trace_df: pd.DataFrame,
+    closedloop_results_df: pd.DataFrame,
+    closedloop_trace_df: pd.DataFrame,
     base_eval_openloop_df: pd.DataFrame,
     reference_df: pd.DataFrame,
     closedloop_calib_df: pd.DataFrame,
     preflight_df: pd.DataFrame,
     calib_diag_df: pd.DataFrame,
     calib_quant_df: pd.DataFrame,
-    trackb_thresholds: Dict[str, Any],
+    closedloop_thresholds: Dict[str, Any],
     quick_summary_df: pd.DataFrame,
     sanity_df: pd.DataFrame,
     fairness_checks_df: pd.DataFrame,
@@ -455,7 +455,7 @@ def export_trackb_artifacts(
         Path(p).parent.mkdir(parents=True, exist_ok=True)
 
     if not _validate_required_columns(
-        trackb_results_df,
+        closedloop_results_df,
         RESULTS_REQUIRED_COLUMNS,
         'per_scenario_results',
         per_scenario_path,
@@ -463,10 +463,10 @@ def export_trackb_artifacts(
         raise ValueError(
             'Cannot export per_scenario_results: required columns are missing.'
         )
-    trackb_results_df.to_csv(per_scenario_path, index=False)
-    if isinstance(trackb_trace_df, pd.DataFrame):
-        if len(trackb_trace_df) > 0 and (not _validate_required_columns(
-            trackb_trace_df,
+    closedloop_results_df.to_csv(per_scenario_path, index=False)
+    if isinstance(closedloop_trace_df, pd.DataFrame):
+        if len(closedloop_trace_df) > 0 and (not _validate_required_columns(
+            closedloop_trace_df,
             TRACE_REQUIRED_COLUMNS,
             'per_eval_trace',
             per_eval_trace_path,
@@ -474,7 +474,7 @@ def export_trackb_artifacts(
             raise ValueError(
                 'Cannot export per_eval_trace: required columns are missing.'
             )
-        trackb_trace_df.to_csv(per_eval_trace_path, index=False)
+        closedloop_trace_df.to_csv(per_eval_trace_path, index=False)
     base_eval_openloop_df.to_csv(base_eval_openloop_path, index=False)
     reference_df.to_csv(reference_openloop_path, index=False)
     closedloop_calib_df.to_csv(closedloop_calib_path, index=False)
@@ -487,8 +487,8 @@ def export_trackb_artifacts(
     if isinstance(trace_diag_df, pd.DataFrame):
         trace_diag_df.to_csv(trace_diag_path, index=False)
 
-    seed_map_df = trackb_results_df[
-        trackb_results_df['method'].isin(['random', 'risk_only', 'surprise_only', 'prism_joint'])
+    seed_map_df = closedloop_results_df[
+        closedloop_results_df['method'].isin(['random', 'risk_only', 'surprise_only', 'prism_joint'])
     ][['scenario_id', 'seed_used']].drop_duplicates().sort_values('scenario_id')
     seed_map_df.to_csv(seed_map_path, index=False)
 
@@ -500,7 +500,7 @@ def export_trackb_artifacts(
                     if isinstance(v, (np.floating, float, int)) and k not in ['source', 'surprise_metric_name']
                     else v
                 )
-                for k, v in trackb_thresholds.items()
+                for k, v in closedloop_thresholds.items()
             },
             f,
             indent=2,
@@ -546,7 +546,7 @@ def export_trackb_artifacts(
             'eval_scenario_ids': [int(x) for x in eval_idx],
         },
         'optimization': dataclasses.asdict(search_cfg),
-        'thresholds': trackb_thresholds,
+        'thresholds': closedloop_thresholds,
         'risk_failure_thresholds': {
             'collision_distance': float(cfg.collision_distance),
             'ttc_fail_seconds': float(cfg.ttc_fail_seconds),

@@ -14,21 +14,21 @@ RESULTS_REQUIRED_COLUMNS: List[str] = ["scenario_id", "method"]
 TRACE_REQUIRED_COLUMNS: List[str] = ["scenario_id", "method", "eval_index"]
 
 
-def _load_trackb_config_module():
+def _load_closedloop_config_module():
     repo_root = Path(__file__).resolve().parents[2]
-    config_path = repo_root / "src" / "trackb" / "config.py"
-    spec = importlib.util.spec_from_file_location("trackb_config_for_eval", str(config_path))
+    config_path = repo_root / "src" / "closedloop" / "config.py"
+    spec = importlib.util.spec_from_file_location("closedloop_config_for_eval", str(config_path))
     if spec is None or spec.loader is None:
         raise RuntimeError(f"Unable to load config module from {config_path}")
     module = importlib.util.module_from_spec(spec)
-    sys.modules["trackb_config_for_eval"] = module
+    sys.modules["closedloop_config_for_eval"] = module
     spec.loader.exec_module(module)
     return module
 
 
-_trackb_config = _load_trackb_config_module()
-build_run_artifact_paths = _trackb_config.build_run_artifact_paths
-shard_run_prefix = _trackb_config.shard_run_prefix
+_closedloop_config = _load_closedloop_config_module()
+build_run_artifact_paths = _closedloop_config.build_run_artifact_paths
+shard_run_prefix = _closedloop_config.shard_run_prefix
 
 
 @dataclass
