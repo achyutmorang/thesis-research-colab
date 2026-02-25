@@ -66,6 +66,27 @@ def _repair_numeric_stack() -> None:
     _sh(f"pip install --no-cache-dir --force-reinstall {NUMERIC_REPAIR_REQUIREMENTS}")
 
 
+def _probe_core_runtime() -> tuple[bool, str]:
+    probe = subprocess.run(
+        [
+            "python",
+            "-c",
+            (
+                "import jax, waymax, numpy as np, pandas as pd, scipy, sklearn; "
+                "from numpy._core.umath import _center, _expandtabs; "
+                "print('ok', np.__version__, pd.__version__, scipy.__version__, sklearn.__version__, jax.__version__)"
+            ),
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        check=False,
+    )
+    if probe.returncode == 0:
+        return True, (probe.stdout.strip() or "core runtime probe succeeded")
+    return False, ((probe.stderr or probe.stdout).strip())
+
+
 def _patch_transformers_import_block(repo_path: Path) -> None:
     gpt2_model_path = repo_path / "src/policy/latentdriver/gpt2_model.py"
     if not gpt2_model_path.exists():
@@ -204,10 +225,18 @@ def _install_requirements(requirements_path: Path) -> None:
     if not requirements_path.exists():
         raise FileNotFoundError(f"Missing requirements file: {requirements_path}")
     _sh("pip install --upgrade pip")
-    _sh(f"pip install --no-cache-dir --force-reinstall --upgrade -r '{requirements_path}'")
+    _sh(f"pip install --upgrade -r '{requirements_path}'")
 
 
-def run_deterministic_setup(run_setup: bool = False) -> None:
+def _sync_latentdriver_repo() -> None:
+    latentdriver_repo = Path("/content/LatentDriver")
+    if latentdriver_repo.exists():
+        print(f"[setup] LatentDriver repo already exists: {latentdriver_repo}")
+        return
+    _sh(LATENTDRIVER_CLONE_CMD)
+
+
+def run_deterministic_setup(run_setup: bool = False, force_reinstall: bool = False) -> None:
     _verify_repo_layout(REPO_ROOT)
 
     if not run_setup:
@@ -223,8 +252,18 @@ def run_deterministic_setup(run_setup: bool = False) -> None:
         return
 
     print("[setup] Starting deterministic environment bootstrap")
-    _install_requirements(REQUIREMENTS_COLAB_PATH)
-    _sh(LATENTDRIVER_CLONE_CMD)
+
+    core_ok, core_details = _probe_core_runtime()
+    if core_ok and (not force_reinstall):
+        print(f"[setup] Core runtime already healthy; skipping heavy pip install ({core_details}).")
+    else:
+        if force_reinstall:
+            print("[setup] force_reinstall=True -> running full dependency install.")
+        else:
+            print(f"[setup] Core runtime probe failed; installing dependencies.\n[setup] probe error: {core_details}")
+        _install_requirements(REQUIREMENTS_COLAB_PATH)
+
+    _sync_latentdriver_repo()
 
     latentdriver_repo = Path("/content/LatentDriver")
     if str(latentdriver_repo) not in sys.path:
