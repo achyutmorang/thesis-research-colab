@@ -35,29 +35,6 @@ def _pip(args: List[str]) -> None:
     if rc.returncode != 0:
         raise RuntimeError(f"Command failed ({rc.returncode}): {' '.join(cmd)}")
 
-
-def _verify_repo_layout(repo_root: Path) -> None:
-    src_root = repo_root / "src"
-    closedloop_path = src_root / "closedloop"
-    if not closedloop_path.exists():
-        raise RuntimeError(
-            f"Expected module path missing: {closedloop_path}. "
-            "You may be on a stale checkout; re-clone the repository."
-        )
-
-    allowed_dirs = {"closedloop", "eval", "__pycache__"}
-    legacy_dirs = sorted(
-        p.name
-        for p in src_root.iterdir()
-        if p.is_dir() and p.name not in allowed_dirs and (not p.name.startswith("."))
-    )
-    if legacy_dirs:
-        raise RuntimeError(
-            f"Unexpected legacy module directories under {src_root}: {legacy_dirs}. "
-            "Delete /content/thesis-research-colab and clone the latest main branch."
-        )
-
-
 def _probe_numpy_runtime() -> tuple[bool, str]:
     probe = _run_cmd([
         sys.executable,
@@ -248,8 +225,6 @@ def _sync_latentdriver_repo() -> None:
 
 
 def run_deterministic_setup(run_setup: bool = False, force_reinstall: bool = False) -> None:
-    _verify_repo_layout(REPO_ROOT)
-
     if not run_setup:
         ok, details = _probe_numpy_runtime()
         if not ok:
