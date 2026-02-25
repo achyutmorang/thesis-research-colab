@@ -3,11 +3,11 @@
 Research repository for PRiSM Track B closed-loop simulation experiments.
 
 ## Open In Colab
-- Notebook: [PRiSM_trackB_closedloop_simulation_colab.ipynb](https://colab.research.google.com/github/achyutmorang/thesis-research-colab/blob/main/PRiSM_trackB_closedloop_simulation_colab.ipynb)
+- Notebook: [notebooks/PRiSM_trackB_closedloop_simulation_colab.ipynb](https://colab.research.google.com/github/achyutmorang/thesis-research-colab/blob/main/notebooks/PRiSM_trackB_closedloop_simulation_colab.ipynb)
 - If the repo is private, open the link while signed in to GitHub in Colab.
 
 ## What This Repo Contains
-- `PRiSM_trackB_closedloop_simulation_colab.ipynb`: thin Colab orchestration notebook.
+- `notebooks/PRiSM_trackB_closedloop_simulation_colab.ipynb`: thin Colab orchestration notebook.
 - `scripts/colab_setup.py`: deterministic Colab bootstrap (dependency install + compatibility patches + checkpoint fetch).
 - `scripts/merge_shards.py`: validates and merges shard outputs into consolidated artifacts.
 - `src/trackb/config.py`: dataclass configs and run artifact path helpers.
