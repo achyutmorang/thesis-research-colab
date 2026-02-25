@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import subprocess
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -272,7 +272,6 @@ def run_trackb_closed_loop(
     thresholds: Dict[str, float],
     run_prefix: Optional[str] = None,
     static_frames: Optional[Dict[str, pd.DataFrame]] = None,
-    progress_hook: Optional[Callable[[str], None]] = None,
 ) -> Tuple[pd.DataFrame, pd.DataFrame]:
     methods = ['random', 'risk_only', 'surprise_only', 'prism_joint']
 
@@ -436,11 +435,6 @@ def run_trackb_closed_loop(
                     thresholds=thresholds,
                     static_frames=static_frames,
                 )
-                if progress_hook is not None:
-                    try:
-                        progress_hook(run_prefix)
-                    except Exception as e:
-                        print(f'[progress_hook] warning: {e}')
 
         existing_df = _flush_checkpoint(rows_buffer, existing_df, checkpoint_path)
         rows_buffer = []
@@ -461,11 +455,6 @@ def run_trackb_closed_loop(
             thresholds=thresholds,
             static_frames=static_frames,
         )
-        if progress_hook is not None:
-            try:
-                progress_hook(run_prefix)
-            except Exception as e:
-                print(f'[progress_hook] warning: {e}')
         completed_now = _completed_scenarios(existing_df, methods)
         print(
             f'[progress] chunk {chunk_id} saved. '
