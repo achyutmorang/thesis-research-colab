@@ -1,0 +1,307 @@
+from __future__ import annotations
+
+import math
+import os
+import random
+import time
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
+
+import numpy as np
+import pandas as pd
+
+
+@dataclass
+class TrackBConfig:
+    global_seed: int = 17
+
+    # Dataset scale (pilot defaults; scale up after first successful run)
+    n_total_scenarios: int = 2400
+    n_eval_scenarios: int = 200
+    strict_min_eval: int = 200
+    train_fraction: float = 0.75
+
+    # Trajectory slicing
+    n_agents: int = 8
+    history_steps: int = 10
+    future_steps: int = 15
+
+    # WOMD / Waymax source
+    waymax_path: str = (
+        'gs://waymo_open_dataset_motion_v_1_1_0/uncompressed/'
+        'tf_example/training/training_tfexample.tfrecord@1000'
+    )
+    waymax_max_rg_points: int = 20000
+    waymax_batch_dims: Tuple[int, ...] = ()
+
+    # Risk metric controls
+    collision_distance: float = 1.5
+    risk_w_dist: float = 1.0
+    risk_w_ttc: float = 0.5
+    risk_w_sks: float = 0.01
+
+    # Failure proxy thresholds
+    ttc_fail_seconds: float = 2.0
+    no_hazard_ttc_seconds: float = 3.0
+    no_hazard_dist_m: float = 8.0
+    hard_brake_mps2: float = 6.0
+    hard_jerk_mps3: float = 8.0
+    enable_intervention_proxy: bool = True
+
+    # Closed-loop planner settings
+    planner_kind: str = 'latentdriver'  # 'latentdriver' or 'idm_route'
+    planner_name: str = 'latentdriver_waypoint_sdc'
+
+    # Planner-dependent surprise settings
+    planner_surprise_name: str = 'predictive_kl'
+    predictive_kl_estimator: str = 'mixture_mc'  # 'mixture_mc' or 'moment_match'
+    predictive_kl_mc_samples: int = 192
+    predictive_kl_mc_seed: int = 12345
+    predictive_kl_eps: float = 1e-6
+    predictive_kl_symmetric: bool = True
+    predictive_kl_skip_fallback_steps: bool = True
+
+    # LatentDriver integration
+    latentdriver_repo_path: str = '/content/LatentDriver'
+    latentdriver_method_name: str = 'latentdriver'
+    latentdriver_ckpt_path: str = '/content/checkpoints/lantentdriver_t2_J3.ckpt'
+    latentdriver_context_len: int = 2
+    latentdriver_action_type: str = 'waypoint'  # waypoint (dx,dy,dyaw) or bicycle
+    latentdriver_action_clip: Tuple[float, float, float] = (6.0, 0.35, 0.35)
+    latentdriver_yaw_sigma: float = 0.15
+    latentdriver_log_std_clip: Tuple[float, float] = (-1.609, 5.0)
+
+    # Calibration from closed-loop base rollouts
+    n_closedloop_calib: int = 120
+    n_surprise_calib_proposals: int = 6
+    high_quantile: float = 0.80
+
+    # Run controls: fairness, chunking, resume
+    run_prefix: str = 'prism_trackB_run'
+    run_chunk_size: int = 200
+    checkpoint_every_scenarios: int = 25
+    resume_from_existing: bool = True
+    save_per_eval_trace: bool = True
+    rollout_seed_stride: int = 10000
+    require_preflight_pass: bool = True
+
+    # Keep raw simulator states for eval scenarios
+    keep_raw_state: bool = True
+
+
+@dataclass
+class SearchConfig:
+    # Fair query budget per method per scenario (includes initial evaluation)
+    budget_evals: int = 15
+
+    # Stochastic hill-climb hyperparameters
+    step_scale_init: float = 0.35
+    step_scale_decay: float = 0.75
+
+    # Feasibility projection on 2D delta (meters)
+    delta_clip: float = 1.2
+    delta_l2_budget: float = 1.5
+
+    # Objective regularization
+    reg_lambda: float = 1e-3
+
+    # Random baseline proposal scale
+    random_scale: float = 0.35
+
+    # Objective scales floor
+    min_scale: float = 1e-6
+
+    # Method weights
+    w_risk_only: Tuple[float, float] = (1.0, 0.0)
+    w_surprise_only: Tuple[float, float] = (0.0, 1.0)
+    w_prism_joint: Tuple[float, float] = (1.0, 1.0)
+
+
+def required_total_scenarios(min_eval: int, train_fraction: float) -> int:
+    test_frac = max(1e-9, 1.0 - float(train_fraction))
+    return int(math.ceil(float(min_eval) / test_frac))
+
+
+def align_dataset_scale(cfg: TrackBConfig) -> TrackBConfig:
+    required_eval = int(max(cfg.n_eval_scenarios, cfg.strict_min_eval))
+    required_total = required_total_scenarios(required_eval, cfg.train_fraction)
+    if cfg.n_total_scenarios < required_total:
+        old = cfg.n_total_scenarios
+        cfg.n_total_scenarios = required_total
+        print(
+            f"[config auto-fix] n_total_scenarios increased from {old} to {cfg.n_total_scenarios} "
+            f"to support eval target={required_eval} with train_fraction={cfg.train_fraction:.2f}."
+        )
+    return cfg
+
+
+def scan_latentdriver_checkpoints(search_roots: Optional[List[str]] = None) -> pd.DataFrame:
+    roots = search_roots or [
+        '/content/checkpoints',
+        '/content/LatentDriver/checkpoints',
+        '/content',
+    ]
+    seen = set()
+    rows: List[Dict[str, Any]] = []
+
+    preferred_names = {
+        'lantentdriver_t2_j3.ckpt': 100,
+        'lantentdriver_t2_j4.ckpt': 95,
+        'latentdriver_t2_j3.ckpt': 90,
+        'latentdriver_t2_j4.ckpt': 85,
+        'plant.ckpt': 50,
+    }
+
+    for root_rank, root in enumerate(roots):
+        rp = Path(root)
+        if not rp.exists():
+            continue
+        for fp in rp.rglob('*'):
+            if not fp.is_file():
+                continue
+            name_l = fp.name.lower()
+            if not (name_l.endswith('.ckpt') or name_l.endswith('.pth.tar')):
+                continue
+            key = str(fp.resolve())
+            if key in seen:
+                continue
+            seen.add(key)
+
+            st = fp.stat()
+            rows.append({
+                'path': key,
+                'name': fp.name,
+                'size_mb': float(st.st_size / (1024 ** 2)),
+                'mtime_utc': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(st.st_mtime)),
+                'root': root,
+                'root_rank': int(root_rank),
+                'name_score': int(preferred_names.get(name_l, 0)),
+            })
+
+    if len(rows) == 0:
+        return pd.DataFrame(columns=['path', 'name', 'size_mb', 'mtime_utc', 'root', 'root_rank', 'name_score', 'score'])
+
+    df = pd.DataFrame(rows)
+    df['score'] = (df['name_score'] * 1000.0) + (100.0 - df['root_rank']) + np.clip(df['size_mb'], 0.0, 5000.0) / 10000.0
+    df = df.sort_values(['score', 'size_mb'], ascending=[False, False]).reset_index(drop=True)
+    return df
+
+
+def resolve_latentdriver_checkpoint(cfg: TrackBConfig) -> Tuple[TrackBConfig, pd.DataFrame]:
+    if cfg.planner_kind != 'latentdriver':
+        return cfg, pd.DataFrame()
+
+    configured = Path(cfg.latentdriver_ckpt_path)
+    scan_df = scan_latentdriver_checkpoints()
+
+    if configured.exists():
+        print(f'[ckpt] using configured checkpoint: {configured}')
+        return cfg, scan_df
+
+    if len(scan_df) == 0:
+        print('[ckpt] no checkpoint found under /content.')
+        print(f'[ckpt] expected path missing: {cfg.latentdriver_ckpt_path}')
+        return cfg, scan_df
+
+    best = str(scan_df.iloc[0]['path'])
+    old = cfg.latentdriver_ckpt_path
+    cfg.latentdriver_ckpt_path = best
+    print(f'[ckpt] configured checkpoint missing: {old}')
+    print(f'[ckpt] auto-selected checkpoint: {best}')
+    return cfg, scan_df
+
+
+def initialize_configs() -> Tuple[TrackBConfig, SearchConfig, pd.DataFrame]:
+    cfg = align_dataset_scale(TrackBConfig())
+    search_cfg = SearchConfig()
+    cfg, scan_df = resolve_latentdriver_checkpoint(cfg)
+
+    np.random.seed(cfg.global_seed)
+    random.seed(cfg.global_seed)
+
+    print('[ckpt] final cfg.latentdriver_ckpt_path =', cfg.latentdriver_ckpt_path)
+    return cfg, search_cfg, scan_df
+
+
+def configure_persistent_run_prefix(
+    cfg: TrackBConfig,
+    run_tag: str,
+    persist_root: str,
+    shard_id: int,
+    n_shards: int,
+) -> str:
+    n_shards = int(max(1, n_shards))
+    shard_id = int(shard_id)
+    if shard_id < 0 or shard_id >= n_shards:
+        raise ValueError(f'Invalid shard_id={shard_id} for n_shards={n_shards}.')
+
+    run_name = str(run_tag)
+    if n_shards > 1:
+        run_name = f'{run_name}_shard{shard_id:02d}of{n_shards:02d}'
+
+    root = Path(str(persist_root)).expanduser()
+    root.mkdir(parents=True, exist_ok=True)
+    cfg.run_prefix = str(root / run_name)
+    return cfg.run_prefix
+
+
+def build_run_artifact_paths(run_prefix: str) -> Dict[str, str]:
+    return {
+        'per_scenario_results': f'{run_prefix}_per_scenario_results.csv',
+        'per_eval_trace': f'{run_prefix}_per_eval_trace.csv',
+        'thresholds': f'{run_prefix}_thresholds.json',
+        'closedloop_calibration': f'{run_prefix}_closedloop_calibration.csv',
+        'calibration_diagnostics': f'{run_prefix}_calibration_diagnostics.csv',
+        'calibration_quantiles': f'{run_prefix}_calibration_quantiles.csv',
+    }
+
+
+def restore_artifacts_via_upload(run_prefix: str, required_keys: Optional[List[str]] = None) -> Dict[str, str]:
+    paths = build_run_artifact_paths(run_prefix)
+    keys = required_keys or list(paths.keys())
+    missing = [k for k in keys if not Path(paths[k]).exists()]
+    if len(missing) == 0:
+        print('[resume-upload] all requested artifacts already exist.')
+        return paths
+
+    try:
+        from google.colab import files
+    except Exception:
+        print('[resume-upload] google.colab.files not available in this environment.')
+        print('[resume-upload] missing:', missing)
+        return paths
+
+    import shutil
+
+    expected = {Path(paths[k]).name: paths[k] for k in missing}
+    print('[resume-upload] upload any of these exact filenames:')
+    for name in expected:
+        print(' -', name)
+
+    uploaded = files.upload()
+    for src_name in list(uploaded.keys()):
+        src = Path(src_name)
+        matched_dst = None
+        if src.name in expected:
+            matched_dst = expected[src.name]
+        else:
+            for exp_name, dst_path in expected.items():
+                if src.name.endswith(exp_name):
+                    matched_dst = dst_path
+                    break
+
+        if matched_dst is not None:
+            dst = Path(matched_dst)
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(src), str(dst))
+            print(f'[resume-upload] restored: {dst}')
+        else:
+            print(f'[resume-upload] ignored unmatched file: {src.name}')
+
+    still_missing = [k for k in keys if not Path(paths[k]).exists()]
+    if still_missing:
+        print('[resume-upload] still missing:', still_missing)
+    else:
+        print('[resume-upload] all requested artifacts restored.')
+    return paths
