@@ -4,6 +4,7 @@ Research repository for PRiSM Track B closed-loop simulation experiments.
 
 ## Open In Colab
 - Notebook: [notebooks/PRiSM_trackB_closedloop_simulation_colab.ipynb](https://colab.research.google.com/github/achyutmorang/thesis-research-colab/blob/main/notebooks/PRiSM_trackB_closedloop_simulation_colab.ipynb)
+- Evaluation notebook: [notebooks/PRiSM_trackB_evaluation_colab.ipynb](https://colab.research.google.com/github/achyutmorang/thesis-research-colab/blob/main/notebooks/PRiSM_trackB_evaluation_colab.ipynb)
 - If the repo is private, open the link while signed in to GitHub in Colab.
 
 ## What This Repo Contains
@@ -17,6 +18,9 @@ Research repository for PRiSM Track B closed-loop simulation experiments.
 - `src/trackb/search.py`: optimization/search methods for closed-loop perturbations.
 - `src/trackb/resume_io.py`: checkpoint resume and export/report artifact writing.
 - `src/trackb/core.py`: top-level orchestration over split modules.
+- `src/eval/io.py`: run-prefix discovery and artifact loading from Drive/local outputs.
+- `src/eval/analysis.py`: reusable evaluation metrics/tables for conditional lift and discovery efficiency.
+- `notebooks/PRiSM_trackB_evaluation_colab.ipynb`: analysis notebook consuming simulation outputs (`csv` + `json`).
 - `requirements-colab.txt`: pinned Colab runtime dependency lock.
 - `requirements-dev.txt`: local/CI test dependency lock.
 - `tests/`: unit tests for deterministic metric and sharding logic.
