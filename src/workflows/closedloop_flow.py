@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import copy
+import json
+from datetime import datetime, timezone
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Dict, Iterable, Optional, Sequence, Tuple
 
 import numpy as np
@@ -68,8 +71,19 @@ class RunContextBundle:
     search_cfg: SearchConfig
     ckpt_scan_df: pd.DataFrame = field(default_factory=pd.DataFrame)
     shard_progress_df: pd.DataFrame = field(default_factory=pd.DataFrame)
+    run_plan_df: pd.DataFrame = field(default_factory=pd.DataFrame)
+    config_drift_df: pd.DataFrame = field(default_factory=pd.DataFrame)
     run_prefix: str = ""
+    requested_run_tag: str = ""
     run_tag: str = ""
+    run_mode_requested: str = "auto"
+    run_mode_inferred: str = "fresh"
+    run_mode_applied: str = "fresh"
+    auto_generated_run_tag: bool = False
+    has_existing_progress: bool = False
+    existing_results_files: int = 0
+    total_touched_scenarios: int = 0
+    total_completed_scenarios: int = 0
     persist_root: str = ""
     n_shards: int = 1
     shard_id: int = 0
@@ -140,6 +154,112 @@ class SignalBundle:
     signal_within_scenario_df: pd.DataFrame = field(default_factory=pd.DataFrame)
 
 
+def _sanitize_run_tag_prefix(prefix: str) -> str:
+    out = "".join(ch if (ch.isalnum() or ch in {"-", "_"}) else "_" for ch in str(prefix).strip().lower())
+    out = out.strip("_")
+    return out or "closedloop"
+
+
+def _auto_generate_run_tag(prefix: str) -> str:
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    return f"{_sanitize_run_tag_prefix(prefix)}_{stamp}"
+
+
+def _normalize_resume_mode(value: Any) -> str:
+    mode = str(value).strip().lower()
+    if mode not in {"auto", "fresh", "resume"}:
+        raise ValueError(f"Invalid resume_mode={value!r}. Expected one of: auto, fresh, resume.")
+    return mode
+
+
+def _normalize_value_for_compare(value: Any) -> Any:
+    if isinstance(value, (list, tuple)):
+        return tuple(_normalize_value_for_compare(v) for v in value)
+    if isinstance(value, (np.bool_, bool)):
+        return bool(value)
+    if isinstance(value, (np.integer, int)):
+        return int(value)
+    if isinstance(value, (np.floating, float)):
+        v = float(value)
+        if not np.isfinite(v):
+            return str(v)
+        return float(v)
+    return value
+
+
+def _values_differ(current: Any, previous: Any, atol: float = 1e-9) -> bool:
+    c = _normalize_value_for_compare(current)
+    p = _normalize_value_for_compare(previous)
+
+    if isinstance(c, float) and isinstance(p, float):
+        return bool(abs(c - p) > float(atol))
+    return bool(c != p)
+
+
+def _safe_load_json(path: Path) -> Dict[str, Any]:
+    try:
+        raw = json.loads(path.read_text())
+    except Exception:
+        return {}
+    return raw if isinstance(raw, dict) else {}
+
+
+def _build_config_drift_df(cfg: ClosedLoopConfig, search_cfg: SearchConfig, run_prefix: str) -> pd.DataFrame:
+    carry_path = Path(f"{run_prefix}_carry_forward_config.json")
+    if not carry_path.exists():
+        return pd.DataFrame()
+
+    carry_cfg = _safe_load_json(carry_path)
+    if not carry_cfg:
+        return pd.DataFrame([{
+            "field": "carry_forward_config",
+            "current_value": "<unavailable>",
+            "previous_value": str(carry_path),
+            "severity": "info",
+            "note": "Existing carry-forward config is unreadable; drift check skipped.",
+        }])
+
+    planner_prev = carry_cfg.get("planner", {}) if isinstance(carry_cfg.get("planner"), dict) else {}
+    surprise_prev = carry_cfg.get("surprise_definition", {}) if isinstance(carry_cfg.get("surprise_definition"), dict) else {}
+    run_prev = carry_cfg.get("run_controls", {}) if isinstance(carry_cfg.get("run_controls"), dict) else {}
+    split_prev = carry_cfg.get("data_split", {}) if isinstance(carry_cfg.get("data_split"), dict) else {}
+    opt_prev = carry_cfg.get("optimization", {}) if isinstance(carry_cfg.get("optimization"), dict) else {}
+
+    checks = [
+        ("planner_kind", cfg.planner_kind, planner_prev.get("planner_kind")),
+        ("planner_name", cfg.planner_name, planner_prev.get("planner_name_config")),
+        ("planner_surprise_name", cfg.planner_surprise_name, surprise_prev.get("name")),
+        ("predictive_kl_estimator", cfg.predictive_kl_estimator, surprise_prev.get("predictive_kl_estimator")),
+        ("predictive_kl_mc_samples", int(cfg.predictive_kl_mc_samples), surprise_prev.get("predictive_kl_mc_samples")),
+        ("n_total_scenarios", int(cfg.n_total_scenarios), split_prev.get("n_total_scenarios")),
+        ("run_chunk_size", int(cfg.run_chunk_size), run_prev.get("run_chunk_size")),
+        ("checkpoint_every_scenarios", int(cfg.checkpoint_every_scenarios), run_prev.get("checkpoint_every_scenarios")),
+        ("search.budget_evals", int(search_cfg.budget_evals), opt_prev.get("budget_evals")),
+        ("search.random_scale", float(search_cfg.random_scale), opt_prev.get("random_scale")),
+        ("search.delta_l2_budget", float(search_cfg.delta_l2_budget), opt_prev.get("delta_l2_budget")),
+        ("search.delta_clip", float(search_cfg.delta_clip), opt_prev.get("delta_clip")),
+        (
+            "search.proposal_scale_ladder",
+            tuple(float(x) for x in tuple(search_cfg.proposal_scale_ladder)),
+            tuple(float(x) for x in opt_prev.get("proposal_scale_ladder", [])) if opt_prev.get("proposal_scale_ladder") is not None else None,
+        ),
+    ]
+
+    rows = []
+    for field_name, current_value, previous_value in checks:
+        if previous_value is None:
+            continue
+        if _values_differ(current_value, previous_value):
+            rows.append({
+                "field": str(field_name),
+                "current_value": str(current_value),
+                "previous_value": str(previous_value),
+                "severity": "warn",
+                "note": "Config differs from existing carry-forward settings for this run prefix.",
+            })
+    return pd.DataFrame(rows)
+
+
 def initialize_run_context(
     run_tag: str,
     persist_root: str,
@@ -153,6 +273,10 @@ def initialize_run_context(
     latentdriver_auto_align_token_count: bool = True,
     latentdriver_log_forward_errors: bool = True,
     latentdriver_log_forward_errors_max: int = 10,
+    run_tag_prefix: str = "closedloop",
+    auto_generate_run_tag_if_empty: bool = True,
+    resume_mode: str = "auto",
+    warn_on_config_drift: bool = True,
 ) -> RunContextBundle:
     cfg, search_cfg, ckpt_scan_df = initialize_configs()
 
@@ -166,16 +290,36 @@ def initialize_run_context(
     cfg.latentdriver_log_forward_errors = bool(latentdriver_log_forward_errors)
     cfg.latentdriver_log_forward_errors_max = int(max(1, latentdriver_log_forward_errors_max))
 
+    requested_run_tag = str(run_tag).strip()
+    auto_generated_run_tag = False
+    if not requested_run_tag:
+        if not bool(auto_generate_run_tag_if_empty):
+            raise ValueError("RUN_TAG is empty. Set RUN_TAG or enable auto_generate_run_tag_if_empty.")
+        requested_run_tag = _auto_generate_run_tag(prefix=run_tag_prefix)
+        auto_generated_run_tag = True
+
     n_shards = int(max(1, n_shards))
     shard_progress_df = inspect_shard_progress(
-        run_tag=str(run_tag),
+        run_tag=str(requested_run_tag),
         persist_root=str(persist_root),
         n_shards=n_shards,
     )
+    existing_results_files = int(shard_progress_df.get("results_exists", pd.Series(dtype=int)).sum()) if len(shard_progress_df) else 0
+    total_touched_scenarios = int(shard_progress_df.get("n_touched_scenarios", pd.Series(dtype=int)).sum()) if len(shard_progress_df) else 0
+    total_completed_scenarios = int(shard_progress_df.get("n_completed_scenarios", pd.Series(dtype=int)).sum()) if len(shard_progress_df) else 0
+    has_existing_progress = bool(
+        (existing_results_files > 0)
+        or (total_touched_scenarios > 0)
+        or (total_completed_scenarios > 0)
+    )
+    run_mode_requested = _normalize_resume_mode(resume_mode)
+    run_mode_inferred = "resume" if has_existing_progress else "fresh"
+    run_mode_applied = run_mode_inferred if run_mode_requested == "auto" else run_mode_requested
+    cfg.resume_from_existing = bool(run_mode_applied == "resume")
 
     if isinstance(shard_id, str) and shard_id.strip().lower() == "auto":
         shard_id_int = auto_select_shard_id(
-            run_tag=str(run_tag),
+            run_tag=str(requested_run_tag),
             persist_root=str(persist_root),
             n_shards=n_shards,
         )
@@ -184,19 +328,53 @@ def initialize_run_context(
 
     run_prefix = configure_persistent_run_prefix(
         cfg=cfg,
-        run_tag=str(run_tag),
+        run_tag=str(requested_run_tag),
         persist_root=str(persist_root),
         shard_id=int(shard_id_int),
         n_shards=n_shards,
     )
+
+    config_drift_df = pd.DataFrame()
+    if bool(warn_on_config_drift) and bool(run_mode_applied == "resume"):
+        config_drift_df = _build_config_drift_df(
+            cfg=cfg,
+            search_cfg=search_cfg,
+            run_prefix=str(run_prefix),
+        )
+
+    run_plan_df = pd.DataFrame([{
+        "run_tag": str(requested_run_tag),
+        "auto_generated_run_tag": int(bool(auto_generated_run_tag)),
+        "run_mode_requested": str(run_mode_requested),
+        "run_mode_inferred": str(run_mode_inferred),
+        "run_mode_applied": str(run_mode_applied),
+        "resume_from_existing": int(bool(cfg.resume_from_existing)),
+        "n_shards": int(n_shards),
+        "shard_id": int(shard_id_int),
+        "existing_results_files": int(existing_results_files),
+        "total_touched_scenarios": int(total_touched_scenarios),
+        "total_completed_scenarios": int(total_completed_scenarios),
+        "has_existing_progress": int(bool(has_existing_progress)),
+    }])
 
     return RunContextBundle(
         cfg=cfg,
         search_cfg=search_cfg,
         ckpt_scan_df=ckpt_scan_df,
         shard_progress_df=shard_progress_df,
+        run_plan_df=run_plan_df,
+        config_drift_df=config_drift_df,
         run_prefix=str(run_prefix),
-        run_tag=str(run_tag),
+        requested_run_tag=str(run_tag),
+        run_tag=str(requested_run_tag),
+        run_mode_requested=str(run_mode_requested),
+        run_mode_inferred=str(run_mode_inferred),
+        run_mode_applied=str(run_mode_applied),
+        auto_generated_run_tag=bool(auto_generated_run_tag),
+        has_existing_progress=bool(has_existing_progress),
+        existing_results_files=int(existing_results_files),
+        total_touched_scenarios=int(total_touched_scenarios),
+        total_completed_scenarios=int(total_completed_scenarios),
         persist_root=str(persist_root),
         n_shards=int(n_shards),
         shard_id=int(shard_id_int),
@@ -434,6 +612,13 @@ def run_preflight_bundle(
 
 
 def report_run_context(bundle: RunContextBundle, display_fn: Optional[Any] = None) -> None:
+    if bundle.auto_generated_run_tag:
+        print(f"[run-tag] auto-generated RUN_TAG={bundle.run_tag}")
+    print(
+        "[run-mode] "
+        f"requested={bundle.run_mode_requested}, inferred={bundle.run_mode_inferred}, "
+        f"applied={bundle.run_mode_applied}, resume_from_existing={bool(bundle.cfg.resume_from_existing)}"
+    )
     print("run_prefix =", bundle.run_prefix)
     print(f"[shard] running {bundle.shard_id + 1}/{max(1, bundle.n_shards)}")
     print(
@@ -441,9 +626,20 @@ def report_run_context(bundle: RunContextBundle, display_fn: Optional[Any] = Non
         f"AUTO_RUN_MAIN_LOOP_WHEN_READY={bundle.auto_run_main_loop_when_ready}, "
         f"RUN_MAIN_LOOP_OVERRIDE={bundle.run_main_loop_override}"
     )
+    if bundle.run_mode_applied == "fresh" and bundle.has_existing_progress:
+        print(
+            "[run-mode warning] fresh mode requested but existing progress was detected for this RUN_TAG. "
+            "Outputs for this run prefix will be recomputed."
+        )
+    if len(bundle.config_drift_df):
+        print("[run-plan warning] config drift detected vs existing carry-forward config for this run prefix.")
     if display_fn is not None:
+        if len(bundle.run_plan_df):
+            display_fn(bundle.run_plan_df)
         if len(bundle.shard_progress_df):
             display_fn(bundle.shard_progress_df)
+        if len(bundle.config_drift_df):
+            display_fn(bundle.config_drift_df)
         if len(bundle.ckpt_scan_df):
             display_fn(bundle.ckpt_scan_df.head(10))
 

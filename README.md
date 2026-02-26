@@ -1,134 +1,112 @@
-# Thesis Research Colab
+# Waymax Simulation Experiments
 
-Research repository for closed-loop simulation experiments.
+Experiment-first research repository for closed-loop planning, calibration, and evaluation on Waymax/WOMD.
+
+## Experimental Status
+This codebase is intentionally experimental.
+
+- Methods, interfaces, and defaults can change as thesis experiments evolve.
+- Notebooks are orchestration/reporting surfaces; core logic is in `src/` modules.
+- Results should always be cited with commit hash + run artifacts, not notebook screenshots alone.
 
 ## Open In Colab
-- Notebook: [notebooks/closedloop_simulation_colab.ipynb](https://colab.research.google.com/github/achyutmorang/waymax-simulation-experiments/blob/main/notebooks/closedloop_simulation_colab.ipynb)
-- Evaluation notebook: [notebooks/closedloop_evaluation_colab.ipynb](https://colab.research.google.com/github/achyutmorang/waymax-simulation-experiments/blob/main/notebooks/closedloop_evaluation_colab.ipynb)
-- Compute-normalized blindspot notebook: [notebooks/compute_normalized_blindspot_discovery_colab.ipynb](https://colab.research.google.com/github/achyutmorang/waymax-simulation-experiments/blob/main/notebooks/compute_normalized_blindspot_discovery_colab.ipynb)
+- Closed-loop simulation notebook: [notebooks/closedloop_simulation_colab.ipynb](https://colab.research.google.com/github/achyutmorang/waymax-simulation-experiments/blob/main/notebooks/closedloop_simulation_colab.ipynb)
+- Closed-loop evaluation notebook: [notebooks/closedloop_evaluation_colab.ipynb](https://colab.research.google.com/github/achyutmorang/waymax-simulation-experiments/blob/main/notebooks/closedloop_evaluation_colab.ipynb)
+- Compute-normalized discovery notebook: [notebooks/compute_normalized_blindspot_discovery_colab.ipynb](https://colab.research.google.com/github/achyutmorang/waymax-simulation-experiments/blob/main/notebooks/compute_normalized_blindspot_discovery_colab.ipynb)
 - Counterfactual sensitivity notebook: [notebooks/counterfactual_risk_sensitivity_atlas_colab.ipynb](https://colab.research.google.com/github/achyutmorang/waymax-simulation-experiments/blob/main/notebooks/counterfactual_risk_sensitivity_atlas_colab.ipynb)
-- If the repo is private, open the link while signed in to GitHub in Colab.
 
-## Notebook Overview
-- `notebooks/closedloop_simulation_colab.ipynb`: runs closed-loop Waymax simulation and exports per-scenario/per-trace artifacts.
-- `notebooks/closedloop_evaluation_colab.ipynb`: loads simulation JSON/CSV outputs and computes core thesis evaluation metrics and plots.
-- `notebooks/compute_normalized_blindspot_discovery_colab.ipynb`: evaluates compute-normalized blindspot discovery efficiency under multiple definitions/thresholds.
-- `notebooks/counterfactual_risk_sensitivity_atlas_colab.ipynb`: builds a counterfactual factor-response atlas to measure risk sensitivity and ranking stability.
+## Research Focus
+- Closed-loop search under fixed compute budget.
+- Calibration + quality gates before expensive runs.
+- Surprise-signal usefulness diagnostics for ranking quality.
+- Counterfactual and compute-normalized post-hoc evaluation.
 
-## Source Layout
-- `src/closedloop/`: closed-loop domain logic (planner integration, calibration, search, metrics, artifact IO).
-- `src/workflows/`: reusable notebook orchestration flows (`closedloop_flow.py`) for thin Colab notebooks.
-- `src/platform/`: Colab/runtime lifecycle helpers (repo sync, Drive mount checks, deterministic setup, hot-reload prep).
-- Backward-compatible shims are kept in `src/closedloop/notebook_flow.py` and `src/closedloop/colab_runtime.py`.
-
-## Research Notice
-Everything in this repository is experimental and part of ongoing Master's research work at IIT Hyderabad. Results, methods, and interfaces may change as the thesis evolves.
-
-## Paper-Ready Evaluation Outputs
-- Both new experiment notebooks emit:
-  - explicit hypothesis verdict tables (`PASS` / `INCONCLUSIVE` / `FAIL`)
-  - robustness sweeps over key threshold/definition settings
-  - repo-inspired evaluation views:
-    - STRIVE/FREA-style plausibility-filtered discovery metrics
-    - SEAL-style realism-gap metrics (distribution-distance based)
-    - VerifAI-style rulebook-based multi-objective ranking
-  - plot artifacts (`.png`) and analysis tables (`.csv`, `.json`) under experiment-specific export folders in Drive
-- Recommended for reporting:
-  - include hypothesis verdict table in main paper body
-  - include full definition/threshold robustness tables in appendix
+## Repository Layout
+- `notebooks/`: thin Colab notebooks for orchestration, diagnostics, and reporting.
+- `src/closedloop/`: domain logic (planner integration, calibration, search, metrics, artifact IO).
+- `src/workflows/`: notebook workflow orchestration (`closedloop_flow.py`).
+- `src/platform/`: Colab/runtime bootstrap (repo sync, Drive checks, deterministic setup, hot reload).
+- `scripts/`: setup and utility scripts.
 
 ## Recommended Workflow
-1. Open notebook in Colab.
-2. Run the single bootstrap setup cell (repo sync + Drive validation + deterministic runtime setup + import hot-reload).
-3. Keep `AUTO_RESTART_AFTER_SETUP=True` so Colab restarts automatically if compiled dependencies changed.
-4. After setup completes, run the remaining cells top-to-bottom.
-5. Keep `RUN_TAG`, `PERSIST_ROOT`, and `N_SHARDS` stable for resumable runs.
-6. Use `SHARD_ID="auto"` to pick the next shard automatically from existing progress files.
+1. Open `notebooks/closedloop_simulation_colab.ipynb` in Colab.
+2. Run Step 1 bootstrap cell.
+3. In Step 2, set user knobs (`RUN_TAG`, `RUN_MODE`, `PERSIST_ROOT`, sharding).
+4. Run quick probe (Step 3) before full dataset build.
+5. Continue preflight, calibration, gate, main loop, and export cells top-to-bottom.
 
-## Contributor Access To Logged Artifacts (Drive Shortcut)
-If you want to contribute and inspect logged simulation artifacts, ask for access to the shared Drive folder `waymax_experiments` (owner: Achyut Morang), then add a shortcut in your own Drive:
+## Run Management Semantics
+Step 2 is auto-aware and produces an explicit run plan.
 
-1. Open Google Drive with the same Google account you use in Colab.
-2. Go to `Shared with me` and open `waymax_experiments`.
-3. Right-click the `waymax_experiments` folder.
-4. Select `Organize` -> `Add shortcut`.
-5. In the dialog, choose `My Drive` (or a subfolder inside it) and click `Add`.
-6. Confirm the shortcut now appears under `My Drive` as `waymax_experiments`.
-7. In Colab, mount Drive and keep:
-   - `PERSIST_ROOT = "/content/drive/MyDrive/waymax_experiments/closedloop_runs/v1"`
+- `RUN_TAG`:
+  - If empty, auto-generated as `<RUN_TAG_PREFIX>_YYYYMMDD_HHMMSS` (UTC).
+- `RUN_MODE`:
+  - `auto`: infer `fresh`/`resume` from existing shard artifacts.
+  - `fresh`: force recomputation for the selected run prefix.
+  - `resume`: continue from existing artifacts when present.
+- `SHARD_ID="auto"`:
+  - picks the least-complete shard first.
+- Config drift warning:
+  - in resume mode, Step 2 compares key config/search fields against prior carry-forward config and warns on mismatches.
 
-Notes:
-- This shortcut does not duplicate files; it points to the shared folder.
-- To write/update artifacts, your shared-folder permission must include edit access.
-- If the mount check in notebook Step 2 fails, verify the shortcut exists under `My Drive` for the active Colab account.
+## Contributor Access To Persisted Artifacts (Drive Shortcut)
+Ask for edit access to shared folder `waymax_experiments` (owner: Achyut Morang), then add a shortcut:
 
-## Environment Reproducibility
-- Core runtime dependencies are pinned in `requirements-colab.txt`.
-- Notebook setup calls `scripts/colab_setup.py`, which uses the active kernel interpreter (`sys.executable -m pip`), probes the runtime first, attempts targeted numeric-stack repair for common NumPy mismatch states, skips heavy installs when possible, applies LatentDriver compatibility patches, fetches the expected checkpoint when missing, and validates core imports.
-- CI/test dependencies are pinned in `requirements-dev.txt`.
+1. Open Google Drive with the same account used in Colab.
+2. Go to `Shared with me` and find `waymax_experiments`.
+3. Right-click folder -> `Organize` -> `Add shortcut`.
+4. Choose `My Drive` (or subfolder) and confirm.
 
-## WOMD Data Access
-- Before running WOMD/Waymax notebooks, register your Google account for Waymo Open Dataset access:
-  1. Go to [https://waymo.com/open/terms](https://waymo.com/open/terms).
-  2. Click **Access Waymo Open Dataset** (Google sign-in is required).
-  3. Sign in with the same Gmail account you plan to use in Colab.
-  4. Accept the Waymo Open Dataset non-commercial license terms.
-  5. Wait a few minutes for access propagation, then open/restart your Colab session.
-- In Colab, the notebook handles Google auth via `ensure_womd_gcs_access(...)` before dataset creation.
-- If needed, manually authenticate in Colab with:
+Then use:
 
 ```python
-from google.colab import auth
-auth.authenticate_user()
+PERSIST_ROOT = "/content/drive/MyDrive/waymax_experiments/closedloop_runs/v1"
 ```
 
-- Optional sanity check in a notebook cell:
+## WOMD Access Prerequisite
+Before dataset access in Colab, register your Google account on Waymo Open:
+
+1. Visit [waymo.com/open/terms](https://waymo.com/open/terms).
+2. Sign in with your target Colab Google account.
+3. Accept terms and wait for access propagation.
+
+Optional Colab sanity check:
 
 ```bash
 !gsutil ls gs://waymo_open_dataset_motion_v_1_1_0/
 ```
 
-- GCS auth is handled via `ensure_womd_gcs_access(...)` before dataset creation.
-- If access is missing, the notebook triggers Colab auth and verifies bucket access for WOMD.
+## Reproducibility Notes
+- Colab runtime dependencies are pinned in `requirements-colab.txt`.
+- Deterministic bootstrap is handled by `scripts/colab_setup.py`.
+- Runtime setup caches healthy states and only reinstalls when required.
+- Exported artifacts include runtime/config manifests for provenance.
 
-## Resume And Artifacts
-- Intermediate and final outputs are written under `cfg.run_prefix`.
-- Artifact schema is versioned (`artifact_schema.json`) to prevent incompatible resume across schema changes.
-- Key artifacts include:
-  - `*_per_scenario_results.csv`
-  - `*_per_eval_trace.csv`
-  - `*_closedloop_calibration.csv`
-  - `*_thresholds.json`
-  - `*_quick_summary.csv`
-  - `*_runtime_manifest.json`
-  - `*_artifact_schema.json`
+## Key Exported Artifacts
+Given run prefix `<run_prefix>`:
 
-## Shard Merge Workflow
-After all shards finish, merge them with:
-
-```bash
-python scripts/merge_shards.py \
-  --run-tag closedloop_v1 \
-  --persist-root /content/drive/MyDrive/closedloop_runs \
-  --n-shards 4
-```
-
-This writes merged CSVs and a merge manifest under the same `persist_root`.
+- `<run_prefix>_per_scenario_results.csv`
+- `<run_prefix>_per_eval_trace.csv`
+- `<run_prefix>_closedloop_calibration.csv`
+- `<run_prefix>_thresholds.json`
+- `<run_prefix>_quick_summary.csv`
+- `<run_prefix>_runtime_manifest.json`
+- `<run_prefix>_carry_forward_config.json`
+- `<run_prefix>_artifact_schema.json`
 
 ## Testing And CI
-- Run unit tests locally:
+Run locally:
 
 ```bash
 pip install -r requirements-dev.txt
 pytest -q
 ```
 
-- GitHub Actions workflow (`.github/workflows/ci.yml`) runs syntax checks and tests on push/PR.
+CI (`.github/workflows/ci.yml`) validates syntax and tests on push/PR.
 
-## Ownership And Reuse
-- This repository is for thesis research and is not open source.
-- Keep the repository private to minimize unauthorized reuse.
-- If attribution is required in papers/slides, cite the repository URL and commit hash used for experiments.
+## Ownership And License
+This repository is thesis research code and is not open source.
 
-## License
-This project is distributed under a **proprietary, all-rights-reserved** license. See [LICENSE](LICENSE).
+- Unauthorized reuse is not permitted.
+- Cite repository URL and exact commit hash when referencing results.
+- License: proprietary, all rights reserved (see `LICENSE`).
