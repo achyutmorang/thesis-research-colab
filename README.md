@@ -5,6 +5,8 @@ Research repository for closed-loop simulation experiments.
 ## Open In Colab
 - Notebook: [notebooks/closedloop_simulation_colab.ipynb](https://colab.research.google.com/github/achyutmorang/thesis-research-colab/blob/main/notebooks/closedloop_simulation_colab.ipynb)
 - Evaluation notebook: [notebooks/closedloop_evaluation_colab.ipynb](https://colab.research.google.com/github/achyutmorang/thesis-research-colab/blob/main/notebooks/closedloop_evaluation_colab.ipynb)
+- Compute-normalized blindspot notebook: [notebooks/compute_normalized_blindspot_discovery_colab.ipynb](https://colab.research.google.com/github/achyutmorang/thesis-research-colab/blob/main/notebooks/compute_normalized_blindspot_discovery_colab.ipynb)
+- Counterfactual sensitivity notebook: [notebooks/counterfactual_risk_sensitivity_atlas_colab.ipynb](https://colab.research.google.com/github/achyutmorang/thesis-research-colab/blob/main/notebooks/counterfactual_risk_sensitivity_atlas_colab.ipynb)
 - If the repo is private, open the link while signed in to GitHub in Colab.
 
 ## What This Repo Contains
@@ -21,9 +23,26 @@ Research repository for closed-loop simulation experiments.
 - `src/eval/io.py`: run-prefix discovery and artifact loading from Drive/local outputs.
 - `src/eval/analysis.py`: reusable evaluation metrics/tables for conditional lift and discovery efficiency.
 - `notebooks/closedloop_evaluation_colab.ipynb`: analysis notebook consuming simulation outputs (`csv` + `json`).
+- `src/eval_compute_normalized_discovery/`: definition-grid evaluation for compute-normalized blindspot discovery.
+- `src/eval_counterfactual_risk_sensitivity/`: counterfactual factor-response atlas utilities.
+- `notebooks/compute_normalized_blindspot_discovery_colab.ipynb`: Colab pipeline for definition-robust discovery efficiency analysis.
+- `notebooks/counterfactual_risk_sensitivity_atlas_colab.ipynb`: Colab pipeline for factor sensitivity ranking and counterfactual stats.
 - `requirements-colab.txt`: pinned Colab runtime dependency lock.
 - `requirements-dev.txt`: local/CI test dependency lock.
 - `tests/`: unit tests for deterministic metric and sharding logic.
+
+## Paper-Ready Evaluation Outputs
+- Both new experiment notebooks emit:
+  - explicit hypothesis verdict tables (`PASS` / `INCONCLUSIVE` / `FAIL`)
+  - robustness sweeps over key threshold/definition settings
+  - repo-inspired evaluation views:
+    - STRIVE/FREA-style plausibility-filtered discovery metrics
+    - SEAL-style realism-gap metrics (distribution-distance based)
+    - VerifAI-style rulebook-based multi-objective ranking
+  - plot artifacts (`.png`) and analysis tables (`.csv`, `.json`) under experiment-specific export folders in Drive
+- Recommended for reporting:
+  - include hypothesis verdict table in main paper body
+  - include full definition/threshold robustness tables in appendix
 
 ## Recommended Workflow
 1. Open notebook in Colab.
