@@ -40,6 +40,23 @@ Everything in this repository is experimental and part of ongoing Master's resea
 6. Keep `RUN_TAG`, `PERSIST_ROOT`, and `N_SHARDS` stable for resumable runs.
 7. Use `SHARD_ID="auto"` to pick the next shard automatically from existing progress files.
 
+## Contributor Access To Logged Artifacts (Drive Shortcut)
+If you want to contribute and inspect logged simulation artifacts, ask for access to the shared Drive folder `waymax_experiments` (owner: Achyut Morang), then add a shortcut in your own Drive:
+
+1. Open Google Drive with the same Google account you use in Colab.
+2. Go to `Shared with me` and open `waymax_experiments`.
+3. Right-click the `waymax_experiments` folder.
+4. Select `Organize` -> `Add shortcut`.
+5. In the dialog, choose `My Drive` (or a subfolder inside it) and click `Add`.
+6. Confirm the shortcut now appears under `My Drive` as `waymax_experiments`.
+7. In Colab, mount Drive and keep:
+   - `PERSIST_ROOT = "/content/drive/MyDrive/waymax_experiments/closedloop_runs/v1"`
+
+Notes:
+- This shortcut does not duplicate files; it points to the shared folder.
+- To write/update artifacts, your shared-folder permission must include edit access.
+- If the mount check in notebook Step 2 fails, verify the shortcut exists under `My Drive` for the active Colab account.
+
 ## Environment Reproducibility
 - Core runtime dependencies are pinned in `requirements-colab.txt`.
 - Notebook setup calls `scripts/colab_setup.py`, which uses the active kernel interpreter (`sys.executable -m pip`), probes the runtime first, attempts targeted numeric-stack repair for common NumPy mismatch states, skips heavy installs when possible, applies LatentDriver compatibility patches, fetches the expected checkpoint when missing, and validates core imports.
