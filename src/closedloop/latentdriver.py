@@ -235,10 +235,7 @@ def _patch_latentdriver_world_padding_mask(repo_path: Path) -> None:
         return
 
     txt = world_path.read_text()
-
-    # Already patched.
-    if 'padding_mask.unsqueeze(-1).repeat(1, 1, sentence_length)' in txt:
-        return
+    changed = False
 
     old_block = """        if padding_mask is None:
             # attention mask for GPT: 1 if can be attended to, 0 if not
@@ -262,20 +259,31 @@ def _patch_latentdriver_world_padding_mask(repo_path: Path) -> None:
 """
     if old_block in txt:
         txt = txt.replace(old_block, new_block)
-    else:
-        print('[LatentDriver patch] expected padding_mask block not found; keeping original file.')
-        return
+        changed = True
 
     old_line = '        stacked_padding_mask = padding_mask.repeat(1, 1, sentence_length)\n'
     new_line = '        stacked_padding_mask = padding_mask.unsqueeze(-1).repeat(1, 1, sentence_length)\n'
     if old_line in txt:
         txt = txt.replace(old_line, new_line)
-    else:
-        print('[LatentDriver patch] expected stacked_padding_mask line not found; keeping original file.')
-        return
+        changed = True
 
-    world_path.write_text(txt)
-    print('[LatentDriver patch] world padding_mask compatibility patch applied')
+    old_rep_line = '        r_decoder_input = (bert_embeddings+self.pe_rep).reshape(batch_size*seq_length, -1, self.enc_hidden_size)\n'
+    new_rep_block = """        pe_rep = self.pe_rep
+        if pe_rep.shape[2] != bert_embeddings.shape[2]:
+            if pe_rep.shape[2] >= bert_embeddings.shape[2]:
+                pe_rep = pe_rep[:, :, :bert_embeddings.shape[2], :]
+            else:
+                reps = int((bert_embeddings.shape[2] + pe_rep.shape[2] - 1) // max(1, pe_rep.shape[2]))
+                pe_rep = pe_rep.repeat(1, 1, reps, 1)[:, :, :bert_embeddings.shape[2], :]
+        r_decoder_input = (bert_embeddings + pe_rep).reshape(batch_size*seq_length, -1, self.enc_hidden_size)
+"""
+    if old_rep_line in txt:
+        txt = txt.replace(old_rep_line, new_rep_block)
+        changed = True
+
+    if changed:
+        world_path.write_text(txt)
+        print('[LatentDriver patch] world compatibility patch applied')
 
 def _latentdriver_fallback_dist(action_dim: int = 3) -> Dict[str, np.ndarray]:
     d = int(max(1, action_dim))
