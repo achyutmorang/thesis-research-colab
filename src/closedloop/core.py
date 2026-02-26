@@ -15,6 +15,7 @@ from waymax import dataloader as waymax_dataloader
 from .calibration import (
     build_calibration_diagnostics,
     calibrate_closed_loop_thresholds,
+    make_calibration_delta_proposal,
     run_closedloop_preflight_checks,
 )
 from .config import (
@@ -24,8 +25,15 @@ from .config import (
     required_total_scenarios,
     restore_artifacts_via_upload,
 )
-from .latentdriver import _choose_target_non_ego, make_closed_loop_components
-from .metrics import compute_risk_metrics, risk_kwargs_from_cfg
+from .latentdriver import (
+    _choose_target_non_ego,
+    closed_loop_rollout_selected,
+    dist_trace_change_stats,
+    dist_trace_diagnostics,
+    make_closed_loop_components,
+    predictive_kl_from_dist_traces,
+)
+from .metrics import compute_risk_metrics, planner_action_surprise_kl, risk_kwargs_from_cfg
 from .resume_io import (
     RESULTS_REQUIRED_COLUMNS,
     TRACE_REQUIRED_COLUMNS,
@@ -278,6 +286,278 @@ class ClosedLoopRunner:
             })
 
         return pd.DataFrame(rows)
+
+
+def _trajectory_effect_l2_mean(
+    base_xy: np.ndarray,
+    base_valid: np.ndarray,
+    prop_xy: np.ndarray,
+    prop_valid: np.ndarray,
+) -> float:
+    bx = np.asarray(base_xy, dtype=float)
+    px = np.asarray(prop_xy, dtype=float)
+    bv = np.asarray(base_valid, dtype=bool)
+    pv = np.asarray(prop_valid, dtype=bool)
+
+    if bx.ndim != 3 or px.ndim != 3:
+        return 0.0
+
+    n_obj = int(min(bx.shape[0], px.shape[0]))
+    n_steps = int(min(bx.shape[1], px.shape[1]))
+    if n_obj <= 0 or n_steps <= 0:
+        return 0.0
+
+    bx = bx[:n_obj, :n_steps, :2]
+    px = px[:n_obj, :n_steps, :2]
+    bv = bv[:n_obj, :n_steps]
+    pv = pv[:n_obj, :n_steps]
+    valid = bv & pv
+    if not bool(np.any(valid)):
+        return 0.0
+
+    step_l2 = np.linalg.norm(bx - px, axis=-1)
+    vals = step_l2[valid]
+    if vals.size == 0:
+        return 0.0
+    return float(np.nanmean(vals))
+
+
+def run_quick_surprise_probe(
+    cfg: ClosedLoopConfig,
+    search_cfg: SearchConfig,
+    n_probe_scenarios: int = 8,
+    proposals_per_scenario: int = 4,
+    data_iter: Optional[Iterable[Any]] = None,
+    dataset_config: Optional[Any] = None,
+) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    n_probe_scenarios = int(max(1, n_probe_scenarios))
+    proposals_per_scenario = int(max(1, proposals_per_scenario))
+
+    loader = WaymaxScenarioLoader(cfg, data_iter=data_iter, dataset_config=dataset_config)
+    keep_state_ids = set(range(n_probe_scenarios))
+    probe_scenarios = loader.generate(
+        n_scenarios=n_probe_scenarios,
+        keep_state_ids=keep_state_ids,
+        show_progress=True,
+    )
+
+    rows: List[Dict[str, Any]] = []
+    iterator = tqdm(probe_scenarios, desc='Quick surprise probe', total=len(probe_scenarios))
+    for rec in iterator:
+        sid = int(rec.get('scenario_id', -1))
+        if 'state' not in rec:
+            rows.append({
+                'scenario_id': sid,
+                'proposal_id': -1,
+                'surprise_pd': np.nan,
+                'surprise_source': 'no_state',
+                'proposal_effect_l2_mean': np.nan,
+                'proposal_dist_fallback_ratio': np.nan,
+                'proposal_dist_actor_fallback_ratio': np.nan,
+                'proposal_dist_source_model_ratio': np.nan,
+                'proposal_dist_source_proxy_ratio': np.nan,
+                'trace_pair_ratio': np.nan,
+                'trace_pair_ratio_all': np.nan,
+                'step_mean_l2_mean': np.nan,
+                'step_mean_l2_all_mean': np.nan,
+                'step_logit_l1_mean': np.nan,
+                'step_logit_l1_all_mean': np.nan,
+                'proposal_rollout_feasible': 0,
+                'probe_error': 'state_missing',
+            })
+            continue
+
+        try:
+            selected_idx = np.asarray(rec['selected_indices'], dtype=np.int32)
+            target_idx = _choose_target_non_ego(rec['state'], selected_idx)
+            planner_bundle = make_closed_loop_components(rec['state'], cfg.planner_kind, cfg.planner_name, cfg)
+
+            base_xy, base_valid, base_actions, base_action_valid, base_dist_trace, base_feasible, _ = closed_loop_rollout_selected(
+                base_state=rec['state'],
+                selected_idx=selected_idx,
+                target_obj_idx=target_idx,
+                delta_xy=np.zeros((2,), dtype=float),
+                cfg=cfg,
+                planner_bundle=planner_bundle,
+                seed=int(cfg.global_seed + sid),
+            )
+
+            if planner_bundle['planner_type'] == 'latentdriver':
+                base_dist_diag = dist_trace_diagnostics(base_dist_trace)
+            else:
+                base_dist_diag = {
+                    'dist_fallback_ratio': np.nan,
+                    'dist_actor_fallback_ratio': np.nan,
+                    'dist_source_model_ratio': np.nan,
+                    'dist_source_proxy_ratio': np.nan,
+                }
+
+            rng = np.random.default_rng(int(cfg.global_seed + sid * 10007 + 77))
+            for k in range(proposals_per_scenario):
+                prop = make_calibration_delta_proposal(rng, k, search_cfg)
+                p_xy, p_valid, p_actions, p_action_valid, p_dist_trace, p_feasible, _ = closed_loop_rollout_selected(
+                    base_state=rec['state'],
+                    selected_idx=selected_idx,
+                    target_obj_idx=target_idx,
+                    delta_xy=prop,
+                    cfg=cfg,
+                    planner_bundle=planner_bundle,
+                    seed=int(cfg.global_seed + sid + 1000 + k),
+                )
+
+                if planner_bundle['planner_type'] == 'latentdriver':
+                    p_surprise = predictive_kl_from_dist_traces(
+                        p_dist_trace,
+                        base_dist_trace,
+                        estimator=cfg.predictive_kl_estimator,
+                        n_mc_samples=cfg.predictive_kl_mc_samples,
+                        seed=int(cfg.predictive_kl_mc_seed + sid * 1000 + k),
+                        eps=float(cfg.predictive_kl_eps),
+                        symmetric=bool(cfg.predictive_kl_symmetric),
+                        skip_fallback_steps=bool(cfg.predictive_kl_skip_fallback_steps),
+                    )
+                    p_dist_diag = dist_trace_diagnostics(p_dist_trace)
+                    trace_diag = dist_trace_change_stats(p_dist_trace, base_dist_trace)
+                    surprise_source = 'predictive_kl'
+
+                    if (not np.isfinite(p_surprise)) or (float(p_surprise) <= 1e-12):
+                        action_surprise = planner_action_surprise_kl(
+                            p_actions,
+                            p_action_valid,
+                            base_actions,
+                            base_action_valid,
+                            sigma=0.25,
+                        )
+                        if np.isfinite(action_surprise) and float(action_surprise) > 1e-12:
+                            p_surprise = float(action_surprise)
+                            if float(trace_diag.get('trace_pair_ratio', 0.0)) > 0.0:
+                                surprise_source = 'action_kl_fallback'
+                            else:
+                                surprise_source = 'action_kl_no_dist_pairs'
+                        elif float(trace_diag.get('trace_pair_ratio', 0.0)) <= 0.0:
+                            p_surprise = np.nan
+                else:
+                    p_surprise = planner_action_surprise_kl(
+                        p_actions,
+                        p_action_valid,
+                        base_actions,
+                        base_action_valid,
+                        sigma=0.25,
+                    )
+                    p_dist_diag = {
+                        'dist_fallback_ratio': np.nan,
+                        'dist_actor_fallback_ratio': np.nan,
+                        'dist_source_model_ratio': np.nan,
+                        'dist_source_proxy_ratio': np.nan,
+                    }
+                    trace_diag = {
+                        'trace_pair_ratio': np.nan,
+                        'trace_pair_ratio_all': np.nan,
+                        'step_mean_l2_mean': np.nan,
+                        'step_mean_l2_all_mean': np.nan,
+                        'step_logit_l1_mean': np.nan,
+                        'step_logit_l1_all_mean': np.nan,
+                    }
+                    surprise_source = 'action_kl'
+
+                rows.append({
+                    'scenario_id': int(sid),
+                    'proposal_id': int(k),
+                    'base_rollout_feasible': int(base_feasible),
+                    'proposal_rollout_feasible': int(p_feasible),
+                    'delta_x': float(prop[0]),
+                    'delta_y': float(prop[1]),
+                    'delta_l2': float(np.linalg.norm(prop)),
+                    'surprise_pd': float(p_surprise),
+                    'surprise_source': str(surprise_source),
+                    'proposal_effect_l2_mean': float(_trajectory_effect_l2_mean(base_xy, base_valid, p_xy, p_valid)),
+                    'base_dist_fallback_ratio': float(base_dist_diag.get('dist_fallback_ratio', np.nan)),
+                    'base_dist_actor_fallback_ratio': float(base_dist_diag.get('dist_actor_fallback_ratio', np.nan)),
+                    'base_dist_source_model_ratio': float(base_dist_diag.get('dist_source_model_ratio', np.nan)),
+                    'base_dist_source_proxy_ratio': float(base_dist_diag.get('dist_source_proxy_ratio', np.nan)),
+                    'proposal_dist_fallback_ratio': float(p_dist_diag.get('dist_fallback_ratio', np.nan)),
+                    'proposal_dist_actor_fallback_ratio': float(p_dist_diag.get('dist_actor_fallback_ratio', np.nan)),
+                    'proposal_dist_source_model_ratio': float(p_dist_diag.get('dist_source_model_ratio', np.nan)),
+                    'proposal_dist_source_proxy_ratio': float(p_dist_diag.get('dist_source_proxy_ratio', np.nan)),
+                    'trace_pair_ratio': float(trace_diag.get('trace_pair_ratio', np.nan)),
+                    'trace_pair_ratio_all': float(trace_diag.get('trace_pair_ratio_all', np.nan)),
+                    'step_mean_l2_mean': float(trace_diag.get('step_mean_l2_mean', np.nan)),
+                    'step_mean_l2_all_mean': float(trace_diag.get('step_mean_l2_all_mean', np.nan)),
+                    'step_logit_l1_mean': float(trace_diag.get('step_logit_l1_mean', np.nan)),
+                    'step_logit_l1_all_mean': float(trace_diag.get('step_logit_l1_all_mean', np.nan)),
+                    'probe_error': '',
+                })
+        except Exception as e:
+            rows.append({
+                'scenario_id': int(sid),
+                'proposal_id': -1,
+                'surprise_pd': np.nan,
+                'surprise_source': 'probe_exception',
+                'proposal_effect_l2_mean': np.nan,
+                'proposal_dist_fallback_ratio': np.nan,
+                'proposal_dist_actor_fallback_ratio': np.nan,
+                'proposal_dist_source_model_ratio': np.nan,
+                'proposal_dist_source_proxy_ratio': np.nan,
+                'trace_pair_ratio': np.nan,
+                'trace_pair_ratio_all': np.nan,
+                'step_mean_l2_mean': np.nan,
+                'step_mean_l2_all_mean': np.nan,
+                'step_logit_l1_mean': np.nan,
+                'step_logit_l1_all_mean': np.nan,
+                'proposal_rollout_feasible': 0,
+                'probe_error': str(e),
+            })
+
+    probe_df = pd.DataFrame(rows)
+    if probe_df.empty:
+        summary_df = pd.DataFrame([{
+            'n_rows': 0,
+            'n_scenarios': 0,
+            'n_finite_surprise': 0,
+            'finite_surprise_rate': 0.0,
+            'nonzero_surprise_fraction': 0.0,
+            'surprise_std': np.nan,
+            'proposal_effect_l2_mean': np.nan,
+            'proposal_fallback_ratio_mean': np.nan,
+            'proposal_actor_fallback_ratio_mean': np.nan,
+            'proposal_model_source_ratio_mean': np.nan,
+            'proposal_proxy_source_ratio_mean': np.nan,
+            'trace_pair_ratio_mean': np.nan,
+            'trace_pair_ratio_all_mean': np.nan,
+            'step_mean_l2_all_mean': np.nan,
+            'step_logit_l1_all_mean': np.nan,
+            'n_probe_errors': 0,
+            'surprise_source_counts': '{}',
+        }])
+        return probe_df, summary_df
+
+    finite_mask = np.isfinite(probe_df['surprise_pd'].to_numpy(dtype=float))
+    finite_df = probe_df[finite_mask].copy()
+    source_counts = (
+        probe_df['surprise_source'].fillna('unknown').astype(str).value_counts(dropna=False).to_dict()
+        if 'surprise_source' in probe_df.columns
+        else {}
+    )
+    summary_df = pd.DataFrame([{
+        'n_rows': int(len(probe_df)),
+        'n_scenarios': int(probe_df['scenario_id'].nunique()) if 'scenario_id' in probe_df else 0,
+        'n_finite_surprise': int(np.sum(finite_mask)),
+        'finite_surprise_rate': float(np.mean(finite_mask)),
+        'nonzero_surprise_fraction': float(np.mean(finite_df['surprise_pd'].to_numpy(dtype=float) > 1e-9)) if len(finite_df) > 0 else 0.0,
+        'surprise_std': float(np.nanstd(finite_df['surprise_pd'].to_numpy(dtype=float))) if len(finite_df) > 1 else np.nan,
+        'proposal_effect_l2_mean': float(np.nanmean(probe_df['proposal_effect_l2_mean'].to_numpy(dtype=float))) if 'proposal_effect_l2_mean' in probe_df else np.nan,
+        'proposal_fallback_ratio_mean': float(np.nanmean(probe_df['proposal_dist_fallback_ratio'].to_numpy(dtype=float))) if 'proposal_dist_fallback_ratio' in probe_df else np.nan,
+        'proposal_actor_fallback_ratio_mean': float(np.nanmean(probe_df['proposal_dist_actor_fallback_ratio'].to_numpy(dtype=float))) if 'proposal_dist_actor_fallback_ratio' in probe_df else np.nan,
+        'proposal_model_source_ratio_mean': float(np.nanmean(probe_df['proposal_dist_source_model_ratio'].to_numpy(dtype=float))) if 'proposal_dist_source_model_ratio' in probe_df else np.nan,
+        'proposal_proxy_source_ratio_mean': float(np.nanmean(probe_df['proposal_dist_source_proxy_ratio'].to_numpy(dtype=float))) if 'proposal_dist_source_proxy_ratio' in probe_df else np.nan,
+        'trace_pair_ratio_mean': float(np.nanmean(probe_df['trace_pair_ratio'].to_numpy(dtype=float))) if 'trace_pair_ratio' in probe_df else np.nan,
+        'trace_pair_ratio_all_mean': float(np.nanmean(probe_df['trace_pair_ratio_all'].to_numpy(dtype=float))) if 'trace_pair_ratio_all' in probe_df else np.nan,
+        'step_mean_l2_all_mean': float(np.nanmean(probe_df['step_mean_l2_all_mean'].to_numpy(dtype=float))) if 'step_mean_l2_all_mean' in probe_df else np.nan,
+        'step_logit_l1_all_mean': float(np.nanmean(probe_df['step_logit_l1_all_mean'].to_numpy(dtype=float))) if 'step_logit_l1_all_mean' in probe_df else np.nan,
+        'n_probe_errors': int(np.sum(probe_df.get('probe_error', '').astype(str).str.len() > 0)),
+        'surprise_source_counts': json.dumps(source_counts),
+    }])
+    return probe_df, summary_df
 
 def run_closed_loop(
     runner: ClosedLoopRunner,

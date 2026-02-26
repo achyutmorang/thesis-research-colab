@@ -15,6 +15,7 @@ from .calibration import diagnose_surprise_root_cause, run_surprise_quality_gate
 from .core import (
     build_closedloop_runner_and_splits,
     make_waymax_data_iter,
+    run_quick_surprise_probe,
     run_preflight_and_calibration,
     run_closed_loop,
 )
@@ -37,6 +38,7 @@ __all__ = [
     'initialize_configs',
     'inspect_shard_progress',
     'make_waymax_data_iter',
+    'run_quick_surprise_probe',
     'resolve_latentdriver_checkpoint',
     'restore_artifacts_via_upload',
     'run_preflight_and_calibration',
