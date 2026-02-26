@@ -650,6 +650,22 @@ def report_quick_probe_bundle(
     display_fn: Optional[Any] = None,
     probe_preview_rows: int = 20,
 ) -> None:
+    if len(bundle.quick_probe_summary_df):
+        row = bundle.quick_probe_summary_df.iloc[0]
+        used_raw = row.get("n_scenarios_used", row.get("n_scenarios", 0.0))
+        used = int(max(0, _float_or_default(used_raw, 0.0)))
+        skipped_infeasible = int(max(0, _float_or_default(row.get("n_scenarios_skipped_base_infeasible"), 0.0)))
+        if used <= 0:
+            print(
+                "[probe] no scenario produced a feasible base rollout; "
+                "inspect preflight/LatentDriver forward path before trusting probe calibration."
+            )
+        elif skipped_infeasible > 0:
+            print(
+                f"[probe] skipped {skipped_infeasible} candidate scenarios with infeasible base rollouts "
+                "before collecting probe rows."
+            )
+
     if display_fn is not None:
         if len(bundle.quick_probe_attempts_df):
             display_fn(bundle.quick_probe_attempts_df)

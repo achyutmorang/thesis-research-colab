@@ -93,6 +93,7 @@ class ClosedLoopConfig:
     sensitivity_scan_max_scenarios: int = 20
     sensitivity_scan_num_angles: int = 8
     sensitivity_scan_scales: Tuple[float, float, float] = (0.45, 0.9, 1.2)
+    quick_probe_scenario_oversample_factor: int = 6
     quick_probe_repeat_seeds: int = 3
     quick_probe_stability_topk: int = 3
     high_quantile: float = 0.80

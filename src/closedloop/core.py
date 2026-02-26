@@ -464,43 +464,29 @@ def run_quick_surprise_probe(
     repeat_seeds = int(max(1, repeat_seeds if repeat_seeds is not None else getattr(cfg, 'quick_probe_repeat_seeds', 3)))
     max_resample_attempts = int(max(1, max_resample_attempts if max_resample_attempts is not None else getattr(cfg, 'surprise_proposal_max_resample_attempts', 4)))
     topk = int(max(1, getattr(cfg, 'quick_probe_stability_topk', 3)))
+    scenario_oversample_factor = int(max(1, getattr(cfg, 'quick_probe_scenario_oversample_factor', 6)))
+    n_candidate_scenarios = int(max(n_probe_scenarios, n_probe_scenarios * scenario_oversample_factor))
 
     loader = WaymaxScenarioLoader(cfg, data_iter=data_iter, dataset_config=dataset_config)
-    keep_state_ids = set(range(n_probe_scenarios))
+    keep_state_ids = set(range(n_candidate_scenarios))
     probe_scenarios = loader.generate(
-        n_scenarios=n_probe_scenarios,
+        n_scenarios=n_candidate_scenarios,
         keep_state_ids=keep_state_ids,
         show_progress=True,
     )
 
     rows: List[Dict[str, Any]] = []
+    n_scenarios_used = 0
+    n_scenarios_skipped_no_state = 0
+    n_scenarios_skipped_base_infeasible = 0
     iterator = tqdm(probe_scenarios, desc='Quick surprise probe', total=len(probe_scenarios))
     for rec in iterator:
+        if n_scenarios_used >= n_probe_scenarios:
+            break
+
         sid = int(rec.get('scenario_id', -1))
         if 'state' not in rec:
-            rows.append({
-                'scenario_id': sid,
-                'proposal_id': -1,
-                'repeat_id': 0,
-                'surprise_pd': np.nan,
-                'surprise_source': 'no_state',
-                'proposal_effect_l2_mean': np.nan,
-                'proposal_realized': 0,
-                'proposal_attempts': 0,
-                'proposal_realization_reason': 'state_missing',
-                'proposal_dist_fallback_ratio': np.nan,
-                'proposal_dist_actor_fallback_ratio': np.nan,
-                'proposal_dist_source_model_ratio': np.nan,
-                'proposal_dist_source_proxy_ratio': np.nan,
-                'trace_pair_ratio': np.nan,
-                'trace_pair_ratio_all': np.nan,
-                'step_mean_l2_mean': np.nan,
-                'step_mean_l2_all_mean': np.nan,
-                'step_logit_l1_mean': np.nan,
-                'step_logit_l1_all_mean': np.nan,
-                'proposal_rollout_feasible': 0,
-                'probe_error': 'state_missing',
-            })
+            n_scenarios_skipped_no_state += 1
             continue
 
         try:
@@ -538,6 +524,13 @@ def run_quick_surprise_probe(
                     'base_feasible': base_feasible,
                     'base_dist_diag': base_dist_diag,
                 })
+
+            feasible_repeat_ids = [rid for rid, info in enumerate(base_rollouts) if bool(info['base_feasible'])]
+            if len(feasible_repeat_ids) == 0:
+                n_scenarios_skipped_base_infeasible += 1
+                continue
+            anchor_repeat_id = int(feasible_repeat_ids[0])
+            n_scenarios_used += 1
 
             def _compute_surprise_for_repeat(
                 p_actions: np.ndarray,
@@ -624,12 +617,12 @@ def run_quick_surprise_probe(
                         p_actions=p_actions_try,
                         p_action_valid=p_action_valid_try,
                         p_dist_trace=p_dist_trace_try,
-                        repeat_id=0,
+                        repeat_id=anchor_repeat_id,
                         seed_offset=1000 + k * 101 + attempt,
                     )
                     effect_try = float(_trajectory_effect_l2_mean(
-                        base_rollouts[0]['base_xy'],
-                        base_rollouts[0]['base_valid'],
+                        base_rollouts[anchor_repeat_id]['base_xy'],
+                        base_rollouts[anchor_repeat_id]['base_valid'],
                         p_xy_try,
                         p_valid_try,
                     ))
@@ -671,13 +664,18 @@ def run_quick_surprise_probe(
                         p_xy,
                         p_valid,
                     ))
-                    realized_ok, realize_reason = proposal_realization_ok(
-                        cfg=cfg,
-                        effect_l2_mean=effect_l2_mean,
-                        trace_change_diag=trace_diag,
-                    )
-                    if not realized_ok:
+                    if (not bool(base_rollouts[repeat_id]['base_feasible'])) or (not bool(p_feasible)):
+                        realized_ok = False
+                        realize_reason = 'rollout_infeasible'
                         p_surprise = np.nan
+                    else:
+                        realized_ok, realize_reason = proposal_realization_ok(
+                            cfg=cfg,
+                            effect_l2_mean=effect_l2_mean,
+                            trace_change_diag=trace_diag,
+                        )
+                        if not realized_ok:
+                            p_surprise = np.nan
 
                     base_dist_diag = base_rollouts[repeat_id]['base_dist_diag']
                     rows.append({
@@ -736,11 +734,35 @@ def run_quick_surprise_probe(
                 'probe_error': str(e),
             })
 
+    if n_scenarios_used < n_probe_scenarios:
+        print(
+            f"[probe] used {n_scenarios_used}/{n_probe_scenarios} scenarios with feasible base rollouts. "
+            f"candidates_loaded={len(probe_scenarios)}, "
+            f"skipped_no_state={n_scenarios_skipped_no_state}, "
+            f"skipped_base_infeasible={n_scenarios_skipped_base_infeasible}."
+        )
+
     probe_df = pd.DataFrame(rows)
+
+    def _safe_col_nanmean(df: pd.DataFrame, col: str) -> float:
+        if col not in df.columns:
+            return np.nan
+        arr = df[col].to_numpy(dtype=float)
+        if arr.size == 0:
+            return np.nan
+        arr = arr[np.isfinite(arr)]
+        if arr.size == 0:
+            return np.nan
+        return float(np.mean(arr))
+
     if probe_df.empty:
         summary_df = pd.DataFrame([{
             'n_rows': 0,
             'n_scenarios': 0,
+            'n_candidate_scenarios_loaded': int(len(probe_scenarios)),
+            'n_scenarios_used': int(n_scenarios_used),
+            'n_scenarios_skipped_no_state': int(n_scenarios_skipped_no_state),
+            'n_scenarios_skipped_base_infeasible': int(n_scenarios_skipped_base_infeasible),
             'n_finite_surprise': 0,
             'finite_surprise_rate': 0.0,
             'nonzero_surprise_fraction': 0.0,
@@ -777,21 +799,25 @@ def run_quick_surprise_probe(
     summary_df = pd.DataFrame([{
         'n_rows': int(len(probe_df)),
         'n_scenarios': int(probe_df['scenario_id'].nunique()) if 'scenario_id' in probe_df else 0,
+        'n_candidate_scenarios_loaded': int(len(probe_scenarios)),
+        'n_scenarios_used': int(n_scenarios_used),
+        'n_scenarios_skipped_no_state': int(n_scenarios_skipped_no_state),
+        'n_scenarios_skipped_base_infeasible': int(n_scenarios_skipped_base_infeasible),
         'n_finite_surprise': int(np.sum(finite_mask)),
         'finite_surprise_rate': float(np.mean(finite_mask)),
         'nonzero_surprise_fraction': float(np.mean(finite_df['surprise_pd'].to_numpy(dtype=float) > 1e-9)) if len(finite_df) > 0 else 0.0,
         'surprise_std': float(np.nanstd(finite_df['surprise_pd'].to_numpy(dtype=float))) if len(finite_df) > 1 else np.nan,
-        'proposal_effect_l2_mean': float(np.nanmean(probe_df['proposal_effect_l2_mean'].to_numpy(dtype=float))) if 'proposal_effect_l2_mean' in probe_df else np.nan,
-        'proposal_fallback_ratio_mean': float(np.nanmean(probe_df['proposal_dist_fallback_ratio'].to_numpy(dtype=float))) if 'proposal_dist_fallback_ratio' in probe_df else np.nan,
-        'proposal_actor_fallback_ratio_mean': float(np.nanmean(probe_df['proposal_dist_actor_fallback_ratio'].to_numpy(dtype=float))) if 'proposal_dist_actor_fallback_ratio' in probe_df else np.nan,
-        'proposal_model_source_ratio_mean': float(np.nanmean(probe_df['proposal_dist_source_model_ratio'].to_numpy(dtype=float))) if 'proposal_dist_source_model_ratio' in probe_df else np.nan,
-        'proposal_proxy_source_ratio_mean': float(np.nanmean(probe_df['proposal_dist_source_proxy_ratio'].to_numpy(dtype=float))) if 'proposal_dist_source_proxy_ratio' in probe_df else np.nan,
-        'trace_pair_ratio_mean': float(np.nanmean(probe_df['trace_pair_ratio'].to_numpy(dtype=float))) if 'trace_pair_ratio' in probe_df else np.nan,
-        'trace_pair_ratio_all_mean': float(np.nanmean(probe_df['trace_pair_ratio_all'].to_numpy(dtype=float))) if 'trace_pair_ratio_all' in probe_df else np.nan,
-        'step_mean_l2_all_mean': float(np.nanmean(probe_df['step_mean_l2_all_mean'].to_numpy(dtype=float))) if 'step_mean_l2_all_mean' in probe_df else np.nan,
-        'step_logit_l1_all_mean': float(np.nanmean(probe_df['step_logit_l1_all_mean'].to_numpy(dtype=float))) if 'step_logit_l1_all_mean' in probe_df else np.nan,
-        'proposal_realized_fraction': float(np.nanmean(probe_df['proposal_realized'].to_numpy(dtype=float))) if 'proposal_realized' in probe_df else np.nan,
-        'proposal_attempts_mean': float(np.nanmean(probe_df['proposal_attempts'].to_numpy(dtype=float))) if 'proposal_attempts' in probe_df else np.nan,
+        'proposal_effect_l2_mean': _safe_col_nanmean(probe_df, 'proposal_effect_l2_mean'),
+        'proposal_fallback_ratio_mean': _safe_col_nanmean(probe_df, 'proposal_dist_fallback_ratio'),
+        'proposal_actor_fallback_ratio_mean': _safe_col_nanmean(probe_df, 'proposal_dist_actor_fallback_ratio'),
+        'proposal_model_source_ratio_mean': _safe_col_nanmean(probe_df, 'proposal_dist_source_model_ratio'),
+        'proposal_proxy_source_ratio_mean': _safe_col_nanmean(probe_df, 'proposal_dist_source_proxy_ratio'),
+        'trace_pair_ratio_mean': _safe_col_nanmean(probe_df, 'trace_pair_ratio'),
+        'trace_pair_ratio_all_mean': _safe_col_nanmean(probe_df, 'trace_pair_ratio_all'),
+        'step_mean_l2_all_mean': _safe_col_nanmean(probe_df, 'step_mean_l2_all_mean'),
+        'step_logit_l1_all_mean': _safe_col_nanmean(probe_df, 'step_logit_l1_all_mean'),
+        'proposal_realized_fraction': _safe_col_nanmean(probe_df, 'proposal_realized'),
+        'proposal_attempts_mean': _safe_col_nanmean(probe_df, 'proposal_attempts'),
         'ranking_scenarios_count': float(stability.get('ranking_scenarios_count', 0.0)),
         'rank_spearman_mean': float(stability.get('rank_spearman_mean', np.nan)),
         'rank_spearman_min': float(stability.get('rank_spearman_min', np.nan)),
