@@ -227,6 +227,56 @@ def _replace_action(output: Any, new_action: Any) -> Any:
     except Exception:
         raise RuntimeError('Unable to replace actor action output.')
 
+
+def _patch_latentdriver_world_padding_mask(repo_path: Path) -> None:
+    world_path = repo_path / 'src/policy/latentdriver/world/latent_world_model.py'
+    if not world_path.exists():
+        print(f'[LatentDriver patch] world model file missing, skipped: {world_path}')
+        return
+
+    txt = world_path.read_text()
+
+    # Already patched.
+    if 'padding_mask.unsqueeze(-1).repeat(1, 1, sentence_length)' in txt:
+        return
+
+    old_block = """        if padding_mask is None:
+            # attention mask for GPT: 1 if can be attended to, 0 if not
+            padding_mask = torch.ones((batch_size, seq_length), dtype=torch.long)
+        batch_size, seq_length = bert_embeddings.shape[0], bert_embeddings.shape[1]
+"""
+    new_block = """        batch_size, seq_length = bert_embeddings.shape[0], bert_embeddings.shape[1]
+        if padding_mask is None:
+            # attention mask for GPT: 1 if can be attended to, 0 if not
+            padding_mask = torch.ones((batch_size, seq_length), dtype=torch.long, device=bert_embeddings.device)
+        else:
+            padding_mask = torch.as_tensor(padding_mask, device=bert_embeddings.device)
+            if padding_mask.ndim == 1:
+                padding_mask = padding_mask.reshape(1, -1)
+            elif padding_mask.ndim > 2:
+                padding_mask = padding_mask.reshape(batch_size, -1)
+            if (padding_mask.shape[0] != batch_size) or (padding_mask.shape[1] != seq_length):
+                padding_mask = torch.ones((batch_size, seq_length), dtype=torch.long, device=bert_embeddings.device)
+            else:
+                padding_mask = padding_mask.to(dtype=torch.long)
+"""
+    if old_block in txt:
+        txt = txt.replace(old_block, new_block)
+    else:
+        print('[LatentDriver patch] expected padding_mask block not found; keeping original file.')
+        return
+
+    old_line = '        stacked_padding_mask = padding_mask.repeat(1, 1, sentence_length)\n'
+    new_line = '        stacked_padding_mask = padding_mask.unsqueeze(-1).repeat(1, 1, sentence_length)\n'
+    if old_line in txt:
+        txt = txt.replace(old_line, new_line)
+    else:
+        print('[LatentDriver patch] expected stacked_padding_mask line not found; keeping original file.')
+        return
+
+    world_path.write_text(txt)
+    print('[LatentDriver patch] world padding_mask compatibility patch applied')
+
 def _latentdriver_fallback_dist(action_dim: int = 3) -> Dict[str, np.ndarray]:
     d = int(max(1, action_dim))
     return {
@@ -444,6 +494,8 @@ class LatentDriverPredictiveKLAdapter:
         repo_str = str(self.repo_path)
         if repo_str not in sys.path:
             sys.path.insert(0, repo_str)
+
+        _patch_latentdriver_world_padding_mask(self.repo_path)
 
         import torch
         from omegaconf import OmegaConf
