@@ -63,6 +63,26 @@ Notes:
 - CI/test dependencies are pinned in `requirements-dev.txt`.
 
 ## WOMD Data Access
+- Before running WOMD/Waymax notebooks, register your Google account for Waymo Open Dataset access:
+  1. Go to [https://waymo.com/open/terms](https://waymo.com/open/terms).
+  2. Click **Access Waymo Open Dataset** (Google sign-in is required).
+  3. Sign in with the same Gmail account you plan to use in Colab.
+  4. Accept the Waymo Open Dataset non-commercial license terms.
+  5. Wait a few minutes for access propagation, then open/restart your Colab session.
+- In Colab, the notebook handles Google auth via `ensure_womd_gcs_access(...)` before dataset creation.
+- If needed, manually authenticate in Colab with:
+
+```python
+from google.colab import auth
+auth.authenticate_user()
+```
+
+- Optional sanity check in a notebook cell:
+
+```bash
+!gsutil ls gs://waymo_open_dataset_motion_v_1_1_0/
+```
+
 - GCS auth is handled via `ensure_womd_gcs_access(...)` before dataset creation.
 - If access is missing, the notebook triggers Colab auth and verifies bucket access for WOMD.
 
