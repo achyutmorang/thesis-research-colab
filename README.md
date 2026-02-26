@@ -9,27 +9,14 @@ Research repository for closed-loop simulation experiments.
 - Counterfactual sensitivity notebook: [notebooks/counterfactual_risk_sensitivity_atlas_colab.ipynb](https://colab.research.google.com/github/achyutmorang/thesis-research-colab/blob/main/notebooks/counterfactual_risk_sensitivity_atlas_colab.ipynb)
 - If the repo is private, open the link while signed in to GitHub in Colab.
 
-## What This Repo Contains
-- `notebooks/closedloop_simulation_colab.ipynb`: thin Colab orchestration notebook.
-- `scripts/colab_setup.py`: deterministic Colab bootstrap (dependency install + compatibility patches + checkpoint fetch).
-- `scripts/merge_shards.py`: validates and merges shard outputs into consolidated artifacts.
-- `src/closedloop/config.py`: dataclass configs and run artifact path helpers.
-- `src/closedloop/metrics.py`: risk and surprise metric primitives.
-- `src/closedloop/latentdriver.py`: planner integration, rollouts, predictive-KL utilities.
-- `src/closedloop/calibration.py`: preflight checks, calibration, surprise quality gates.
-- `src/closedloop/search.py`: optimization/search methods for closed-loop perturbations.
-- `src/closedloop/resume_io.py`: checkpoint resume and export/report artifact writing.
-- `src/closedloop/core.py`: top-level orchestration over split modules.
-- `src/eval/io.py`: run-prefix discovery and artifact loading from Drive/local outputs.
-- `src/eval/analysis.py`: reusable evaluation metrics/tables for conditional lift and discovery efficiency.
-- `notebooks/closedloop_evaluation_colab.ipynb`: analysis notebook consuming simulation outputs (`csv` + `json`).
-- `src/eval_compute_normalized_discovery/`: definition-grid evaluation for compute-normalized blindspot discovery.
-- `src/eval_counterfactual_risk_sensitivity/`: counterfactual factor-response atlas utilities.
-- `notebooks/compute_normalized_blindspot_discovery_colab.ipynb`: Colab pipeline for definition-robust discovery efficiency analysis.
-- `notebooks/counterfactual_risk_sensitivity_atlas_colab.ipynb`: Colab pipeline for factor sensitivity ranking and counterfactual stats.
-- `requirements-colab.txt`: pinned Colab runtime dependency lock.
-- `requirements-dev.txt`: local/CI test dependency lock.
-- `tests/`: unit tests for deterministic metric and sharding logic.
+## Notebook Overview
+- `notebooks/closedloop_simulation_colab.ipynb`: runs closed-loop Waymax simulation and exports per-scenario/per-trace artifacts.
+- `notebooks/closedloop_evaluation_colab.ipynb`: loads simulation JSON/CSV outputs and computes core thesis evaluation metrics and plots.
+- `notebooks/compute_normalized_blindspot_discovery_colab.ipynb`: evaluates compute-normalized blindspot discovery efficiency under multiple definitions/thresholds.
+- `notebooks/counterfactual_risk_sensitivity_atlas_colab.ipynb`: builds a counterfactual factor-response atlas to measure risk sensitivity and ranking stability.
+
+## Research Notice
+Everything in this repository is experimental and part of ongoing Master's research work at IIT Hyderabad. Results, methods, and interfaces may change as the thesis evolves.
 
 ## Paper-Ready Evaluation Outputs
 - Both new experiment notebooks emit:
