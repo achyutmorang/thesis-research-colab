@@ -36,6 +36,14 @@ class SetupResult:
     cache_path: str
 
 
+@dataclass
+class RuntimeBootstrapResult:
+    repo_sync: RepoSyncResult
+    drive_status: DriveReadyResult
+    setup: SetupResult
+    prepared_repo_dir: str
+
+
 _DRIVE_READY_CACHE = False
 
 
@@ -315,3 +323,44 @@ def prepare_repo_imports(repo_dir: str = "/content/thesis-research-colab", force
         importlib.invalidate_caches()
 
     return str(repo_path)
+
+
+def bootstrap_colab_runtime(
+    repo_url: str,
+    repo_dir: str = "/content/thesis-research-colab",
+    repo_branch: str = "main",
+    required_drive_folder: str = "/content/drive/MyDrive/waymax_experiments",
+    verify_drive_access_every_run: bool = False,
+    force_reinstall: bool = False,
+    auto_restart_after_setup: bool = True,
+    strict_lockfile_check: bool = True,
+    setup_cache_enabled: bool = True,
+    revalidate_core_imports_on_cache_hit: bool = True,
+    setup_cache_path: str = "/content/.closedloop_setup_cache.json",
+    force_module_hot_reload: bool = True,
+) -> RuntimeBootstrapResult:
+    repo_sync = ensure_repo_checkout(repo_url=repo_url, repo_dir=repo_dir, branch=repo_branch)
+    drive_status = ensure_drive_ready(
+        required_drive_folder=required_drive_folder,
+        verify_drive_access_every_run=bool(verify_drive_access_every_run),
+    )
+    setup = run_cached_deterministic_setup(
+        repo_root=repo_sync.repo_dir,
+        force_reinstall=bool(force_reinstall),
+        auto_restart_after_setup=bool(auto_restart_after_setup),
+        strict_lockfile_check=bool(strict_lockfile_check),
+        setup_cache_enabled=bool(setup_cache_enabled),
+        revalidate_core_imports_on_cache_hit=bool(revalidate_core_imports_on_cache_hit),
+        setup_cache_path=setup_cache_path,
+        repo_rev=repo_sync.repo_rev,
+    )
+    prepared_repo_dir = prepare_repo_imports(
+        repo_dir=repo_sync.repo_dir,
+        force_module_hot_reload=bool(force_module_hot_reload),
+    )
+    return RuntimeBootstrapResult(
+        repo_sync=repo_sync,
+        drive_status=drive_status,
+        setup=setup,
+        prepared_repo_dir=prepared_repo_dir,
+    )

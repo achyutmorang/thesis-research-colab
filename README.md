@@ -39,12 +39,11 @@ Everything in this repository is experimental and part of ongoing Master's resea
 
 ## Recommended Workflow
 1. Open notebook in Colab.
-2. Run the repo-sync cell (`git clone`/`git pull`) or use a Drive copy of this repo.
-3. Run the deterministic setup cell once; it auto-checks runtime health and lockfile versions, then installs only when required.
-4. Keep `AUTO_RESTART_AFTER_SETUP=True` so Colab restarts automatically if compiled dependencies changed.
-5. After setup completes, run the remaining cells top-to-bottom.
-6. Keep `RUN_TAG`, `PERSIST_ROOT`, and `N_SHARDS` stable for resumable runs.
-7. Use `SHARD_ID="auto"` to pick the next shard automatically from existing progress files.
+2. Run the single bootstrap setup cell (repo sync + Drive validation + deterministic runtime setup + import hot-reload).
+3. Keep `AUTO_RESTART_AFTER_SETUP=True` so Colab restarts automatically if compiled dependencies changed.
+4. After setup completes, run the remaining cells top-to-bottom.
+5. Keep `RUN_TAG`, `PERSIST_ROOT`, and `N_SHARDS` stable for resumable runs.
+6. Use `SHARD_ID="auto"` to pick the next shard automatically from existing progress files.
 
 ## Contributor Access To Logged Artifacts (Drive Shortcut)
 If you want to contribute and inspect logged simulation artifacts, ask for access to the shared Drive folder `waymax_experiments` (owner: Achyut Morang), then add a shortcut in your own Drive:
