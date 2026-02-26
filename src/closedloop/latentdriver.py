@@ -571,6 +571,7 @@ class LatentDriverPredictiveKLAdapter:
         states_t: Any,
         actions_t: Any,
         timesteps_t: Any,
+        padding_mask_t: Optional[Any] = None,
     ) -> Dict[str, Any]:
         try:
             sig = inspect.signature(self.model.forward)
@@ -595,9 +596,9 @@ class LatentDriverPredictiveKLAdapter:
         _bind_first(['timesteps', 'timestep', 'time_steps', 'times', 'time'], timesteps_t)
 
         if has_var_kwargs or ('padding_mask' in params):
-            kwargs.setdefault('padding_mask', None)
+            kwargs.setdefault('padding_mask', padding_mask_t)
         elif 'attention_mask' in params:
-            kwargs.setdefault('attention_mask', None)
+            kwargs.setdefault('attention_mask', padding_mask_t)
 
         return kwargs
 
@@ -606,11 +607,12 @@ class LatentDriverPredictiveKLAdapter:
         states_t: Any,
         actions_t: Any,
         timesteps_t: Any,
+        padding_mask_t: Optional[Any] = None,
     ) -> Any:
         attempts: List[Tuple[str, Any]] = [
             (
                 'positional+padding_mask',
-                lambda: self.model.forward(states_t, actions_t, timesteps_t, padding_mask=None),
+                lambda: self.model.forward(states_t, actions_t, timesteps_t, padding_mask=padding_mask_t),
             ),
             (
                 'positional',
@@ -626,7 +628,12 @@ class LatentDriverPredictiveKLAdapter:
             ),
         ]
 
-        kw = self._forward_kwargs_from_signature(states_t, actions_t, timesteps_t)
+        kw = self._forward_kwargs_from_signature(
+            states_t=states_t,
+            actions_t=actions_t,
+            timesteps_t=timesteps_t,
+            padding_mask_t=padding_mask_t,
+        )
         if len(kw) > 0:
             attempts.append(('keyword', lambda kw=kw: self.model.forward(**kw)))
             kw_no_mask = {
@@ -674,10 +681,21 @@ class LatentDriverPredictiveKLAdapter:
         states_t = torch.tensor(states[None, ...], dtype=torch.float32, device=self.device)
         actions_t = torch.tensor(actions[None, ...], dtype=torch.float32, device=self.device)
         timesteps_t = torch.tensor(timesteps[None, ...], dtype=torch.long, device=self.device)
+        # Some LatentDriver world-model versions require a non-None padding mask.
+        padding_mask_t = torch.ones(
+            (states_t.shape[0], states_t.shape[1]),
+            dtype=torch.long,
+            device=self.device,
+        )
 
         try:
             with torch.no_grad():
-                model_out = self._call_model_forward_flexible(states_t, actions_t, timesteps_t)
+                model_out = self._call_model_forward_flexible(
+                    states_t=states_t,
+                    actions_t=actions_t,
+                    timesteps_t=timesteps_t,
+                    padding_mask_t=padding_mask_t,
+                )
             action_dis = self._extract_action_distribution(model_out)  # [M,7]
         except Exception as e:
             self._maybe_log_forward_error(e, states_t=states_t, actions_t=actions_t, timesteps_t=timesteps_t)
