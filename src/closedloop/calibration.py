@@ -689,6 +689,18 @@ def run_surprise_quality_gate(
     surprise_max_flat_sensitivity_fraction: float = 0.80,
     surprise_min_model_source_ratio: float = 0.01,
 ):
+    raw_calib = closedloop_calib_df.copy() if isinstance(closedloop_calib_df, pd.DataFrame) else pd.DataFrame()
+
+    raw_finite_mask = (
+        np.isfinite(raw_calib['base_risk_sks']) & np.isfinite(raw_calib['surprise_pd'])
+    ) if len(raw_calib) > 0 else np.asarray([], dtype=bool)
+    raw_finite_rows = int(np.sum(raw_finite_mask)) if raw_finite_mask.size > 0 else 0
+    raw_effect_valid_rows = (
+        int(np.sum(np.asarray(raw_calib['proposal_effect_valid'], dtype=float) > 0.5))
+        if (len(raw_calib) > 0 and 'proposal_effect_valid' in raw_calib.columns)
+        else np.nan
+    )
+
     usable_mask = (
         np.isfinite(closedloop_calib_df['base_risk_sks']) & np.isfinite(closedloop_calib_df['surprise_pd'])
     ) if isinstance(closedloop_calib_df, pd.DataFrame) and len(closedloop_calib_df) > 0 else np.asarray([], dtype=bool)
@@ -697,7 +709,61 @@ def run_surprise_quality_gate(
     usable_calib = closedloop_calib_df[usable_mask].copy() if isinstance(closedloop_calib_df, pd.DataFrame) and len(closedloop_calib_df) > 0 else pd.DataFrame()
 
     if len(usable_calib) == 0:
-        raise RuntimeError('No usable closed-loop calibration rows. Cannot validate surprise signal.')
+        gate_summary = pd.DataFrame([{
+            'usable_calibration_rows': 0,
+            'raw_calibration_rows': int(len(raw_calib)),
+            'raw_finite_surprise_rows': int(raw_finite_rows),
+            'raw_effect_valid_rows': raw_effect_valid_rows,
+            'surprise_std': np.nan,
+            'nonzero_surprise_fraction': np.nan,
+            'fallback_usage_rate': np.nan,
+            'actor_fallback_usage_rate': np.nan,
+            'model_source_ratio': np.nan,
+            'proxy_source_ratio': np.nan,
+            'proposal_effect_l2_mean': np.nan,
+            'proposal_effect_valid_fraction': np.nan,
+            'trace_pair_ratio_mean': np.nan,
+            'trace_pair_ratio_all_mean': np.nan,
+            'trace_fallback_pair_ratio_mean': np.nan,
+            'step_logit_l1_mean': np.nan,
+            'step_logit_l1_all_mean': np.nan,
+            'sensitivity_flat_scenario_fraction': np.nan,
+        }])
+        dist_change_summary = pd.DataFrame([{
+            'trace_pair_ratio_mean': np.nan,
+            'trace_pair_ratio_all_mean': np.nan,
+            'trace_fallback_pair_ratio_mean': np.nan,
+            'step_mean_l2_mean': np.nan,
+            'step_mean_l2_all_mean': np.nan,
+            'step_std_l2_mean': np.nan,
+            'step_std_l2_all_mean': np.nan,
+            'step_mean_l2_p50': np.nan,
+            'step_mean_l2_p95': np.nan,
+            'step_moment_kl_mean': np.nan,
+            'step_moment_kl_all_mean': np.nan,
+            'step_moment_kl_p50': np.nan,
+            'step_moment_kl_p95': np.nan,
+            'step_moment_kl_nonzero_ratio_mean': np.nan,
+            'step_moment_kl_all_nonzero_ratio_mean': np.nan,
+            'step_logit_l1_mean': np.nan,
+            'step_logit_l1_all_mean': np.nan,
+            'step_logit_l1_p50': np.nan,
+            'step_logit_l1_p95': np.nan,
+            'step_logit_l1_nonzero_ratio_mean': np.nan,
+            'step_logit_l1_all_nonzero_ratio_mean': np.nan,
+            'proposal_dist_source_model_ratio_mean': np.nan,
+            'proposal_dist_source_fallback_ratio_mean': np.nan,
+            'proposal_dist_source_proxy_ratio_mean': np.nan,
+        }])
+        reason = (
+            'No usable closed-loop calibration rows. '
+            f'raw_rows={len(raw_calib)}, raw_finite_surprise_rows={raw_finite_rows}, '
+            f'raw_effect_valid_rows={raw_effect_valid_rows}.'
+        )
+        if surprise_gate_enabled:
+            raise RuntimeError(reason)
+        print(f'[gate] warning: {reason}')
+        return gate_summary, dist_change_summary
 
     def _col_mean(df: pd.DataFrame, col: str) -> float:
         if col not in df.columns or len(df) == 0:
@@ -755,6 +821,9 @@ def run_surprise_quality_gate(
 
     gate_summary = pd.DataFrame([{
         'usable_calibration_rows': int(len(usable_calib)),
+        'raw_calibration_rows': int(len(raw_calib)),
+        'raw_finite_surprise_rows': int(raw_finite_rows),
+        'raw_effect_valid_rows': raw_effect_valid_rows,
         'surprise_std': surprise_std,
         'nonzero_surprise_fraction': nonzero_surprise_fraction,
         'fallback_usage_rate': fallback_usage_rate,
@@ -846,9 +915,24 @@ def diagnose_surprise_root_cause(
             return float('nan')
         return float(np.mean(arr > float(thr)))
 
-    usable = closedloop_calib_df.copy() if isinstance(closedloop_calib_df, pd.DataFrame) else pd.DataFrame()
+    raw = closedloop_calib_df.copy() if isinstance(closedloop_calib_df, pd.DataFrame) else pd.DataFrame()
+    usable = raw.copy()
     if len(usable) > 0 and 'proposal_effect_valid' in usable.columns:
         usable = usable[np.asarray(usable['proposal_effect_valid'], dtype=float) > 0.5].copy()
+
+    raw_finite_surprise_rows = (
+        int(np.sum(np.isfinite(raw['surprise_pd'].to_numpy(dtype=float))))
+        if (len(raw) > 0 and 'surprise_pd' in raw.columns)
+        else 0
+    )
+    raw_effect_valid_rows = (
+        int(np.sum(np.asarray(raw['proposal_effect_valid'], dtype=float) > 0.5))
+        if (len(raw) > 0 and 'proposal_effect_valid' in raw.columns)
+        else 0
+    )
+    raw_surprise_nonzero_fraction = _safe_rate(raw, 'surprise_pd', thr=1e-9)
+    raw_fallback_ratio = _safe_mean(raw, 'proposal_dist_fallback_ratio')
+    raw_trace_pair_ratio = _safe_mean(raw, 'trace_pair_ratio')
 
     surprise_nonzero_fraction = _safe_rate(usable, 'surprise_pd', thr=1e-9)
     fallback_ratio = _safe_mean(usable, 'proposal_dist_fallback_ratio')
@@ -882,6 +966,11 @@ def diagnose_surprise_root_cause(
         'preflight_failed_checks': failed_checks,
         'forward_fail_detail': forward_fail_detail,
         'calibration_rows': int(len(closedloop_calib_df)) if isinstance(closedloop_calib_df, pd.DataFrame) else 0,
+        'raw_finite_surprise_rows': int(raw_finite_surprise_rows),
+        'raw_effect_valid_rows': int(raw_effect_valid_rows),
+        'raw_surprise_nonzero_fraction': raw_surprise_nonzero_fraction,
+        'raw_fallback_ratio': raw_fallback_ratio,
+        'raw_trace_pair_ratio': raw_trace_pair_ratio,
         'usable_rows': int(len(usable)),
         'surprise_nonzero_fraction': surprise_nonzero_fraction,
         'proposal_fallback_ratio': fallback_ratio,
@@ -913,6 +1002,27 @@ def diagnose_surprise_root_cause(
             'high',
             failed_checks if len(failed_checks) > 0 else 'preflight contains failed checks',
             'Fix preflight failures before relying on calibration/gate outputs.',
+        )
+    if len(raw) > 0 and len(usable) == 0:
+        add_finding(
+            'all_rows_filtered_before_gate',
+            'high',
+            f'raw_rows={len(raw)}, raw_finite_surprise_rows={raw_finite_surprise_rows}, raw_effect_valid_rows={raw_effect_valid_rows}',
+            'Check proposal_effect_valid filtering and surprise NaN generation in calibration rows.',
+        )
+    if len(raw) > 0 and raw_finite_surprise_rows == 0:
+        add_finding(
+            'surprise_nan_for_all_calibration_rows',
+            'high',
+            f'raw_finite_surprise_rows={raw_finite_surprise_rows}, raw_trace_pair_ratio={raw_trace_pair_ratio:.4f}, raw_fallback_ratio={raw_fallback_ratio:.4f}',
+            'Inspect surprise_source distribution and trace_pair_ratio; predictive distribution comparisons are not yielding valid surprise.',
+        )
+    if len(raw) > 0 and ('proposal_effect_valid' in raw.columns) and raw_effect_valid_rows == 0:
+        add_finding(
+            'proposal_effect_filter_eliminated_all_rows',
+            'high',
+            f'raw_effect_valid_rows={raw_effect_valid_rows}, mean_effect={_safe_mean(raw, "proposal_effect_l2_mean"):.4f}',
+            'Lower cfg.surprise_min_effect_l2_mean or increase proposal perturbation scale/coverage.',
         )
     if np.isfinite(fallback_ratio) and fallback_ratio >= 0.95:
         add_finding(
