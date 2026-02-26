@@ -655,11 +655,14 @@ def report_quick_probe_bundle(
         used_raw = row.get("n_scenarios_used", row.get("n_scenarios", 0.0))
         used = int(max(0, _float_or_default(used_raw, 0.0)))
         skipped_infeasible = int(max(0, _float_or_default(row.get("n_scenarios_skipped_base_infeasible"), 0.0)))
+        skipped_reason_counts = str(row.get("skipped_base_infeasible_reason_counts", "")).strip()
         if used <= 0:
             print(
                 "[probe] no scenario produced a feasible base rollout; "
                 "inspect preflight/LatentDriver forward path before trusting probe calibration."
             )
+            if skipped_reason_counts and skipped_reason_counts not in {"{}", "nan"}:
+                print(f"[probe] base infeasibility reasons: {skipped_reason_counts}")
         elif skipped_infeasible > 0:
             print(
                 f"[probe] skipped {skipped_infeasible} candidate scenarios with infeasible base rollouts "

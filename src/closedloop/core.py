@@ -479,6 +479,7 @@ def run_quick_surprise_probe(
     n_scenarios_used = 0
     n_scenarios_skipped_no_state = 0
     n_scenarios_skipped_base_infeasible = 0
+    skipped_base_infeasible_notes: List[str] = []
     iterator = tqdm(probe_scenarios, desc='Quick surprise probe', total=len(probe_scenarios))
     for rec in iterator:
         if n_scenarios_used >= n_probe_scenarios:
@@ -497,7 +498,7 @@ def run_quick_surprise_probe(
             base_rollouts: List[Dict[str, Any]] = []
             for r in range(repeat_seeds):
                 base_seed = int(cfg.global_seed + sid + r * 100003)
-                base_xy, base_valid, base_actions, base_action_valid, base_dist_trace, base_feasible, _ = closed_loop_rollout_selected(
+                base_xy, base_valid, base_actions, base_action_valid, base_dist_trace, base_feasible, base_note = closed_loop_rollout_selected(
                     base_state=rec['state'],
                     selected_idx=selected_idx,
                     target_obj_idx=target_idx,
@@ -522,12 +523,17 @@ def run_quick_surprise_probe(
                     'base_action_valid': base_action_valid,
                     'base_dist_trace': base_dist_trace,
                     'base_feasible': base_feasible,
+                    'base_note': str(base_note),
                     'base_dist_diag': base_dist_diag,
                 })
 
             feasible_repeat_ids = [rid for rid, info in enumerate(base_rollouts) if bool(info['base_feasible'])]
             if len(feasible_repeat_ids) == 0:
                 n_scenarios_skipped_base_infeasible += 1
+                for info in base_rollouts:
+                    note = str(info.get('base_note', '')).strip()
+                    if note:
+                        skipped_base_infeasible_notes.append(note)
                 continue
             anchor_repeat_id = int(feasible_repeat_ids[0])
             n_scenarios_used += 1
@@ -604,7 +610,7 @@ def run_quick_surprise_probe(
                     proposal_key = int(k + attempt * proposals_per_scenario)
                     prop_try = make_calibration_delta_proposal(rng, proposal_key, search_cfg)
                     seed_try = int(cfg.global_seed + sid + 1000 + k * 101 + attempt)
-                    p_xy_try, p_valid_try, p_actions_try, p_action_valid_try, p_dist_trace_try, _, _ = closed_loop_rollout_selected(
+                    p_xy_try, p_valid_try, p_actions_try, p_action_valid_try, p_dist_trace_try, p_try_feasible, _ = closed_loop_rollout_selected(
                         base_state=rec['state'],
                         selected_idx=selected_idx,
                         target_obj_idx=target_idx,
@@ -631,6 +637,9 @@ def run_quick_surprise_probe(
                         effect_l2_mean=effect_try,
                         trace_change_diag=trace_diag_try,
                     )
+                    if not bool(p_try_feasible):
+                        realized_ok = False
+                        realize_reason = 'rollout_infeasible'
                     chosen_prop = np.asarray(prop_try, dtype=float)
                     chosen_attempts = int(attempt + 1)
                     if realized_ok:
@@ -642,7 +651,7 @@ def run_quick_surprise_probe(
 
                 for repeat_id in range(repeat_seeds):
                     seed_offset = int(1000 + k * 101 + repeat_id * 10007)
-                    p_xy, p_valid, p_actions, p_action_valid, p_dist_trace, p_feasible, _ = closed_loop_rollout_selected(
+                    p_xy, p_valid, p_actions, p_action_valid, p_dist_trace, p_feasible, p_note = closed_loop_rollout_selected(
                         base_state=rec['state'],
                         selected_idx=selected_idx,
                         target_obj_idx=target_idx,
@@ -683,7 +692,9 @@ def run_quick_surprise_probe(
                         'proposal_id': int(k),
                         'repeat_id': int(repeat_id),
                         'base_rollout_feasible': int(base_rollouts[repeat_id]['base_feasible']),
+                        'base_rollout_note': str(base_rollouts[repeat_id].get('base_note', '')),
                         'proposal_rollout_feasible': int(p_feasible),
+                        'proposal_rollout_note': str(p_note),
                         'delta_x': float(chosen_prop[0]),
                         'delta_y': float(chosen_prop[1]),
                         'delta_l2': float(np.linalg.norm(chosen_prop)),
@@ -744,6 +755,25 @@ def run_quick_surprise_probe(
 
     probe_df = pd.DataFrame(rows)
 
+    skipped_base_note_counts = (
+        pd.Series(skipped_base_infeasible_notes, dtype='object')
+        .fillna('')
+        .astype(str)
+        .str.strip()
+    )
+    skipped_base_note_counts = skipped_base_note_counts[skipped_base_note_counts.str.len() > 0]
+    skipped_base_note_counts_dict = skipped_base_note_counts.value_counts().to_dict() if len(skipped_base_note_counts) else {}
+
+    def _reason_counts(df: pd.DataFrame, feasible_col: str, note_col: str) -> Dict[str, int]:
+        if feasible_col not in df.columns or note_col not in df.columns or df.empty:
+            return {}
+        mask = (df[feasible_col].fillna(0).astype(int) == 0)
+        notes = df.loc[mask, note_col].fillna('').astype(str).str.strip()
+        notes = notes[notes.str.len() > 0]
+        if len(notes) == 0:
+            return {}
+        return notes.value_counts().to_dict()
+
     def _safe_col_nanmean(df: pd.DataFrame, col: str) -> float:
         if col not in df.columns:
             return np.nan
@@ -763,6 +793,7 @@ def run_quick_surprise_probe(
             'n_scenarios_used': int(n_scenarios_used),
             'n_scenarios_skipped_no_state': int(n_scenarios_skipped_no_state),
             'n_scenarios_skipped_base_infeasible': int(n_scenarios_skipped_base_infeasible),
+            'skipped_base_infeasible_reason_counts': json.dumps(skipped_base_note_counts_dict),
             'n_finite_surprise': 0,
             'finite_surprise_rate': 0.0,
             'nonzero_surprise_fraction': 0.0,
@@ -778,6 +809,8 @@ def run_quick_surprise_probe(
             'step_logit_l1_all_mean': np.nan,
             'proposal_realized_fraction': np.nan,
             'proposal_attempts_mean': np.nan,
+            'base_infeasible_reason_counts': '{}',
+            'proposal_infeasible_reason_counts': '{}',
             'ranking_scenarios_count': 0.0,
             'rank_spearman_mean': np.nan,
             'rank_spearman_min': np.nan,
@@ -803,6 +836,7 @@ def run_quick_surprise_probe(
         'n_scenarios_used': int(n_scenarios_used),
         'n_scenarios_skipped_no_state': int(n_scenarios_skipped_no_state),
         'n_scenarios_skipped_base_infeasible': int(n_scenarios_skipped_base_infeasible),
+        'skipped_base_infeasible_reason_counts': json.dumps(skipped_base_note_counts_dict),
         'n_finite_surprise': int(np.sum(finite_mask)),
         'finite_surprise_rate': float(np.mean(finite_mask)),
         'nonzero_surprise_fraction': float(np.mean(finite_df['surprise_pd'].to_numpy(dtype=float) > 1e-9)) if len(finite_df) > 0 else 0.0,
@@ -818,6 +852,8 @@ def run_quick_surprise_probe(
         'step_logit_l1_all_mean': _safe_col_nanmean(probe_df, 'step_logit_l1_all_mean'),
         'proposal_realized_fraction': _safe_col_nanmean(probe_df, 'proposal_realized'),
         'proposal_attempts_mean': _safe_col_nanmean(probe_df, 'proposal_attempts'),
+        'base_infeasible_reason_counts': json.dumps(_reason_counts(probe_df, 'base_rollout_feasible', 'base_rollout_note')),
+        'proposal_infeasible_reason_counts': json.dumps(_reason_counts(probe_df, 'proposal_rollout_feasible', 'proposal_rollout_note')),
         'ranking_scenarios_count': float(stability.get('ranking_scenarios_count', 0.0)),
         'rank_spearman_mean': float(stability.get('rank_spearman_mean', np.nan)),
         'rank_spearman_min': float(stability.get('rank_spearman_min', np.nan)),
