@@ -251,12 +251,101 @@ def _safe_state_timestep(base_state: Any) -> int:
         return 0
 
 
+def _state_xy_at_time(state: Any, target_obj_idx: int, time_index: int) -> Optional[np.ndarray]:
+    traj_cur = getattr(state, 'current_sim_trajectory', None)
+    if traj_cur is not None and hasattr(traj_cur, 'xy'):
+        try:
+            x, y = _xy_for_object(getattr(traj_cur, 'xy'), int(target_obj_idx))
+            out = np.asarray([x, y], dtype=float)
+            if np.isfinite(out).all():
+                return out
+        except Exception:
+            pass
+
+    traj = getattr(state, 'sim_trajectory', getattr(state, 'log_trajectory', None))
+    if traj is None or (not hasattr(traj, 'xy')):
+        return None
+    try:
+        arr = np.asarray(getattr(traj, 'xy'))
+        if arr.size == 0:
+            return None
+        while arr.ndim > 3 and arr.shape[0] == 1:
+            arr = np.squeeze(arr, axis=0)
+        if arr.ndim == 2 and arr.shape[1] >= 2 and int(target_obj_idx) < int(arr.shape[0]):
+            out = np.asarray(arr[int(target_obj_idx), :2], dtype=float)
+            return out if np.isfinite(out).all() else None
+        if arr.ndim >= 3 and arr.shape[-1] >= 2:
+            coord_axis = int(arr.ndim - 1)
+            candidates: List[Tuple[int, int]] = []
+            for obj_axis in range(arr.ndim):
+                if obj_axis == coord_axis:
+                    continue
+                if int(arr.shape[obj_axis]) <= int(target_obj_idx):
+                    continue
+                for time_axis in range(arr.ndim):
+                    if time_axis == coord_axis or time_axis == obj_axis:
+                        continue
+                    candidates.append((obj_axis, time_axis))
+            candidates.sort(key=lambda pair: int(arr.shape[pair[0]]), reverse=True)
+            for obj_axis, time_axis in candidates:
+                try:
+                    idx = [slice(None)] * arr.ndim
+                    idx[obj_axis] = int(target_obj_idx)
+                    t_idx = int(np.clip(int(time_index), 0, max(0, int(arr.shape[time_axis]) - 1)))
+                    idx[time_axis] = t_idx
+                    idx[coord_axis] = slice(0, 2)
+                    out = np.asarray(arr[tuple(idx)], dtype=float).reshape(-1)[:2]
+                    if out.size == 2 and np.isfinite(out).all():
+                        return out
+                except Exception:
+                    continue
+    except Exception:
+        return None
+    return None
+
+
+def _pre_reset_perturb_l2(base_state: Any, perturbed_state: Any, target_obj_idx: int, time_index: int) -> float:
+    base_xy = _state_xy_at_time(base_state, int(target_obj_idx), int(time_index))
+    pert_xy = _state_xy_at_time(perturbed_state, int(target_obj_idx), int(time_index))
+    if base_xy is None or pert_xy is None:
+        return float("nan")
+    if base_xy.shape[0] < 2 or pert_xy.shape[0] < 2:
+        return float("nan")
+    diff = np.asarray(pert_xy[:2], dtype=float) - np.asarray(base_xy[:2], dtype=float)
+    val = float(np.linalg.norm(diff))
+    return val if np.isfinite(val) else float("nan")
+
+
 def _shift_traj_xy_at_time(
     traj: Any,
     target_obj_idx: int,
     delta_xy_j: jnp.ndarray,
     time_index: int,
 ) -> Any:
+    def _candidate_axis_pairs(shape: Tuple[int, ...], target_idx: int, t_idx_hint: int, excluded: Tuple[int, ...] = ()) -> List[Tuple[int, int]]:
+        ndim = len(shape)
+        excluded_norm = {ax % ndim for ax in excluded}
+        rows: List[Tuple[int, int, int, int]] = []
+        for obj_axis in range(ndim):
+            if obj_axis in excluded_norm:
+                continue
+            obj_dim = int(shape[obj_axis])
+            if obj_dim <= int(target_idx):
+                continue
+            for time_axis in range(ndim):
+                if time_axis == obj_axis or time_axis in excluded_norm:
+                    continue
+                time_dim = int(shape[time_axis])
+                if time_dim <= 0:
+                    continue
+                # Prefer larger object dimension (usually true object axis) and
+                # time axis close to the requested timestep range.
+                score_obj = obj_dim
+                score_time = -abs(int(t_idx_hint) - (time_dim - 1))
+                rows.append((score_obj, score_time, obj_axis, time_axis))
+        rows.sort(reverse=True)
+        return [(int(obj_axis), int(time_axis)) for _, _, obj_axis, time_axis in rows]
+
     # Waymax trajectory schemas vary across versions.
     # In many versions, xy is a derived property while canonical fields are x/y.
     if hasattr(traj, 'x') and hasattr(traj, 'y'):
@@ -271,25 +360,31 @@ def _shift_traj_xy_at_time(
                     return _replace_obj(traj, x=x_new, y=y_new)
                 raise RuntimeError(f'target_obj_idx out of range for x/y vectors: idx={target_obj_idx}, n_obj={obj_count}')
             if x_arr.ndim >= 2 and y_arr.ndim >= 2:
-                obj_axis = int(x_arr.ndim - 2)
-                time_axis = int(x_arr.ndim - 1)
-                obj_count = int(x_arr.shape[obj_axis])
-                time_count = int(x_arr.shape[time_axis])
-                if 0 <= int(target_obj_idx) < obj_count:
-                    ix = [slice(None)] * x_arr.ndim
-                    iy = [slice(None)] * y_arr.ndim
-                    ix[obj_axis] = int(target_obj_idx)
-                    iy[obj_axis] = int(target_obj_idx)
-                    t_idx = int(np.clip(int(time_index), 0, max(0, time_count - 1)))
-                    ix[time_axis] = t_idx
-                    iy[time_axis] = t_idx
-                    x_new = x_arr.at[tuple(ix)].add(delta_xy_j[0])
-                    y_new = y_arr.at[tuple(iy)].add(delta_xy_j[1])
-                else:
-                    raise RuntimeError(f'target_obj_idx out of range for x/y arrays: idx={target_obj_idx}, n_obj={obj_count}')
+                axis_pairs = _candidate_axis_pairs(tuple(int(s) for s in x_arr.shape), int(target_obj_idx), int(time_index))
+                for obj_axis, time_axis in axis_pairs:
+                    try:
+                        obj_count = int(x_arr.shape[obj_axis])
+                        time_count = int(x_arr.shape[time_axis])
+                        if not (0 <= int(target_obj_idx) < obj_count):
+                            continue
+                        ix = [slice(None)] * x_arr.ndim
+                        iy = [slice(None)] * y_arr.ndim
+                        ix[obj_axis] = int(target_obj_idx)
+                        iy[obj_axis] = int(target_obj_idx)
+                        t_idx = int(np.clip(int(time_index), 0, max(0, time_count - 1)))
+                        ix[time_axis] = t_idx
+                        iy[time_axis] = t_idx
+                        x_new = x_arr.at[tuple(ix)].add(delta_xy_j[0])
+                        y_new = y_arr.at[tuple(iy)].add(delta_xy_j[1])
+                        return _replace_obj(traj, x=x_new, y=y_new)
+                    except Exception:
+                        continue
+                raise RuntimeError(
+                    f'unable to infer object/time axes for x/y arrays: '
+                    f'shape={tuple(int(s) for s in x_arr.shape)}, target_obj_idx={int(target_obj_idx)}, time_index={int(time_index)}'
+                )
             else:
                 raise RuntimeError(f'unexpected x/y tensor ranks: x.ndim={x_arr.ndim}, y.ndim={y_arr.ndim}')
-            return _replace_obj(traj, x=x_new, y=y_new)
         except Exception:
             pass
 
@@ -306,23 +401,34 @@ def _shift_traj_xy_at_time(
                     return _replace_obj(traj, xy=xy_new)
                 raise RuntimeError(f'target_obj_idx out of range for xy matrix: idx={target_obj_idx}, n_obj={obj_count}')
             if xy_arr.ndim >= 3:
-                obj_axis = int(xy_arr.ndim - 3)
-                time_axis = int(xy_arr.ndim - 2)
                 coord_axis = int(xy_arr.ndim - 1)
-                obj_count = int(xy_arr.shape[obj_axis])
-                time_count = int(xy_arr.shape[time_axis])
-                if 0 <= int(target_obj_idx) < obj_count:
-                    idx = [slice(None)] * xy_arr.ndim
-                    idx[obj_axis] = int(target_obj_idx)
-                    t_idx = int(np.clip(int(time_index), 0, max(0, time_count - 1)))
-                    idx[time_axis] = t_idx
-                    idx[coord_axis] = slice(0, 2)
-                    xy_new = xy_arr.at[tuple(idx)].add(delta_xy_j[:2])
-                else:
-                    raise RuntimeError(f'target_obj_idx out of range for xy array: idx={target_obj_idx}, n_obj={obj_count}')
+                axis_pairs = _candidate_axis_pairs(
+                    tuple(int(s) for s in xy_arr.shape),
+                    int(target_obj_idx),
+                    int(time_index),
+                    excluded=(coord_axis,),
+                )
+                for obj_axis, time_axis in axis_pairs:
+                    try:
+                        obj_count = int(xy_arr.shape[obj_axis])
+                        time_count = int(xy_arr.shape[time_axis])
+                        if not (0 <= int(target_obj_idx) < obj_count):
+                            continue
+                        idx = [slice(None)] * xy_arr.ndim
+                        idx[obj_axis] = int(target_obj_idx)
+                        t_idx = int(np.clip(int(time_index), 0, max(0, time_count - 1)))
+                        idx[time_axis] = t_idx
+                        idx[coord_axis] = slice(0, 2)
+                        xy_new = xy_arr.at[tuple(idx)].add(delta_xy_j[:2])
+                        return _replace_obj(traj, xy=xy_new)
+                    except Exception:
+                        continue
+                raise RuntimeError(
+                    f'unable to infer object/time axes for xy array: '
+                    f'shape={tuple(int(s) for s in xy_arr.shape)}, target_obj_idx={int(target_obj_idx)}, time_index={int(time_index)}'
+                )
             else:
                 raise RuntimeError(f'unexpected xy tensor rank: xy.ndim={xy_arr.ndim}')
-            return _replace_obj(traj, xy=xy_new)
         except Exception:
             pass
 
@@ -552,7 +658,7 @@ def _gaussian_kl(mu_p: np.ndarray, cov_p: np.ndarray, mu_q: np.ndarray, cov_q: n
     inv_q = np.linalg.inv(cov_q)
     diff = (mu_q - mu_p).reshape(-1, 1)
     term_trace = float(np.trace(inv_q @ cov_p))
-    term_quad = float(diff.T @ inv_q @ diff)
+    term_quad = float((diff.T @ inv_q @ diff).reshape(-1)[0])
     sign_p, logdet_p = np.linalg.slogdet(cov_p)
     sign_q, logdet_q = np.linalg.slogdet(cov_q)
     if sign_p <= 0 or sign_q <= 0:
@@ -1382,6 +1488,10 @@ def closed_loop_rollout_selected(
 
     try:
         perturbed = perturb_initial_state(base_state, target_obj_idx, delta_xy, cfg=cfg)
+        delta_norm = float(np.linalg.norm(np.asarray(delta_xy, dtype=float).reshape(-1)[:2])) if np.asarray(delta_xy).size > 0 else 0.0
+        start_time = _safe_state_timestep(base_state)
+        pre_reset_shift_l2 = _pre_reset_perturb_l2(base_state, perturbed, int(target_obj_idx), int(start_time))
+        perturb_noop = bool((delta_norm > 1e-9) and np.isfinite(pre_reset_shift_l2) and (pre_reset_shift_l2 <= 1e-8))
         state = env.reset(perturbed)
 
         rng = jax.random.PRNGKey(int(seed))
@@ -1518,7 +1628,14 @@ def closed_loop_rollout_selected(
         finite_ok = bool(np.isfinite(xy).all()) and bool(np.isfinite(planner_actions).all())
         any_valid = bool(valid.any()) and bool(planner_action_valid.any())
         rollout_feasible = bool(finite_ok and any_valid)
-        note = '' if rollout_feasible else 'non_finite_or_all_invalid_rollout_or_action'
+        note_parts: List[str] = []
+        if not rollout_feasible:
+            note_parts.append('non_finite_or_all_invalid_rollout_or_action')
+        if perturb_noop:
+            note_parts.append('perturbation_noop_pre_reset')
+        if np.isfinite(pre_reset_shift_l2):
+            note_parts.append(f'pre_reset_shift_l2={pre_reset_shift_l2:.6f}')
+        note = '|'.join(note_parts)
         return xy, valid, planner_actions, planner_action_valid, dist_trace, rollout_feasible, note
 
     except Exception as e:
