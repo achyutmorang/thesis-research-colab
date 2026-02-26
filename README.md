@@ -39,7 +39,8 @@ This codebase is intentionally experimental.
 Step 2 is auto-aware and produces an explicit run plan.
 
 - `RUN_TAG`:
-  - If empty, auto-generated as `<RUN_TAG_PREFIX>_YYYYMMDD_HHMMSS` (UTC).
+  - If empty and `RUN_MODE` is `auto`/`resume`, Step 2 first tries to auto-adopt the most recent matching run tag under `PERSIST_ROOT` (filtered by `RUN_TAG_PREFIX` and `N_SHARDS`).
+  - If no matching history is found, it auto-generates `<RUN_TAG_PREFIX>_YYYYMMDD_HHMMSS` (UTC).
 - `RUN_MODE`:
   - `auto`: infer `fresh`/`resume` from existing shard artifacts.
   - `fresh`: force recomputation for the selected run prefix.

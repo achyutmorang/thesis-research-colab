@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import json
+import re
 from datetime import datetime, timezone
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -71,15 +72,18 @@ class RunContextBundle:
     search_cfg: SearchConfig
     ckpt_scan_df: pd.DataFrame = field(default_factory=pd.DataFrame)
     shard_progress_df: pd.DataFrame = field(default_factory=pd.DataFrame)
+    run_tag_candidates_df: pd.DataFrame = field(default_factory=pd.DataFrame)
     run_plan_df: pd.DataFrame = field(default_factory=pd.DataFrame)
     config_drift_df: pd.DataFrame = field(default_factory=pd.DataFrame)
     run_prefix: str = ""
     requested_run_tag: str = ""
     run_tag: str = ""
+    run_tag_selection_source: str = "provided"
     run_mode_requested: str = "auto"
     run_mode_inferred: str = "fresh"
     run_mode_applied: str = "fresh"
     auto_generated_run_tag: bool = False
+    adopted_existing_run_tag: bool = False
     has_existing_progress: bool = False
     existing_results_files: int = 0
     total_touched_scenarios: int = 0
@@ -163,6 +167,92 @@ def _sanitize_run_tag_prefix(prefix: str) -> str:
 def _auto_generate_run_tag(prefix: str) -> str:
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     return f"{_sanitize_run_tag_prefix(prefix)}_{stamp}"
+
+
+def _format_utc_from_epoch(ts: float) -> str:
+    try:
+        if not np.isfinite(float(ts)):
+            return ""
+        return datetime.fromtimestamp(float(ts), tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    except Exception:
+        return ""
+
+
+def _discover_run_tag_candidates(
+    persist_root: str,
+    run_tag_prefix: str,
+    n_shards: int,
+) -> pd.DataFrame:
+    root = Path(str(persist_root)).expanduser()
+    if not root.exists():
+        return pd.DataFrame()
+
+    prefix = _sanitize_run_tag_prefix(run_tag_prefix)
+    pattern = re.compile(r"^(?P<tag>.+)_shard(?P<sid>\d{2})of(?P<n>\d{2})$")
+    suffix = "_per_scenario_results.csv"
+    tags = set()
+
+    for path in root.glob(f"*{suffix}"):
+        name = path.name
+        if not name.endswith(suffix):
+            continue
+        stem = name[: -len(suffix)]
+        m = pattern.match(stem)
+        if m:
+            try:
+                n = int(m.group("n"))
+            except Exception:
+                continue
+            if int(n) != int(max(1, n_shards)):
+                continue
+            tag = str(m.group("tag"))
+        else:
+            if int(max(1, n_shards)) != 1:
+                continue
+            tag = str(stem)
+
+        if not tag:
+            continue
+        if not (tag == prefix or tag.startswith(prefix + "_")):
+            continue
+        tags.add(tag)
+
+    rows = []
+    for tag in sorted(tags):
+        progress = inspect_shard_progress(
+            run_tag=str(tag),
+            persist_root=str(persist_root),
+            n_shards=int(max(1, n_shards)),
+        )
+        if progress.empty:
+            continue
+
+        mtimes = []
+        for run_prefix in progress.get("run_prefix", pd.Series(dtype=object)).astype(str).tolist():
+            p = Path(f"{run_prefix}_per_scenario_results.csv")
+            if p.exists():
+                try:
+                    mtimes.append(float(p.stat().st_mtime))
+                except Exception:
+                    pass
+        latest_mtime = max(mtimes) if len(mtimes) > 0 else float("nan")
+        rows.append({
+            "run_tag": str(tag),
+            "existing_results_files": int(progress.get("results_exists", pd.Series(dtype=int)).sum()),
+            "total_touched_scenarios": int(progress.get("n_touched_scenarios", pd.Series(dtype=int)).sum()),
+            "total_completed_scenarios": int(progress.get("n_completed_scenarios", pd.Series(dtype=int)).sum()),
+            "total_rows": int(progress.get("n_rows", pd.Series(dtype=int)).sum()),
+            "latest_results_mtime_epoch": float(latest_mtime) if np.isfinite(latest_mtime) else np.nan,
+            "latest_results_mtime_utc": _format_utc_from_epoch(latest_mtime),
+        })
+
+    if len(rows) == 0:
+        return pd.DataFrame()
+    out = pd.DataFrame(rows).sort_values(
+        ["latest_results_mtime_epoch", "total_rows", "run_tag"],
+        ascending=[False, False, True],
+    ).reset_index(drop=True)
+    return out
 
 
 def _normalize_resume_mode(value: Any) -> str:
@@ -290,13 +380,30 @@ def initialize_run_context(
     cfg.latentdriver_log_forward_errors = bool(latentdriver_log_forward_errors)
     cfg.latentdriver_log_forward_errors_max = int(max(1, latentdriver_log_forward_errors_max))
 
+    run_mode_requested = _normalize_resume_mode(resume_mode)
     requested_run_tag = str(run_tag).strip()
+    run_tag_candidates_df = pd.DataFrame()
+    run_tag_selection_source = "provided"
     auto_generated_run_tag = False
+    adopted_existing_run_tag = False
     if not requested_run_tag:
-        if not bool(auto_generate_run_tag_if_empty):
-            raise ValueError("RUN_TAG is empty. Set RUN_TAG or enable auto_generate_run_tag_if_empty.")
-        requested_run_tag = _auto_generate_run_tag(prefix=run_tag_prefix)
-        auto_generated_run_tag = True
+        if run_mode_requested in {"auto", "resume"}:
+            run_tag_candidates_df = _discover_run_tag_candidates(
+                persist_root=str(persist_root),
+                run_tag_prefix=str(run_tag_prefix),
+                n_shards=int(max(1, n_shards)),
+            )
+            if len(run_tag_candidates_df) > 0:
+                requested_run_tag = str(run_tag_candidates_df.iloc[0]["run_tag"])
+                adopted_existing_run_tag = True
+                run_tag_selection_source = "adopt_existing"
+
+        if not requested_run_tag:
+            if not bool(auto_generate_run_tag_if_empty):
+                raise ValueError("RUN_TAG is empty. Set RUN_TAG or enable auto_generate_run_tag_if_empty.")
+            requested_run_tag = _auto_generate_run_tag(prefix=run_tag_prefix)
+            auto_generated_run_tag = True
+            run_tag_selection_source = "auto_generated"
 
     n_shards = int(max(1, n_shards))
     shard_progress_df = inspect_shard_progress(
@@ -312,7 +419,6 @@ def initialize_run_context(
         or (total_touched_scenarios > 0)
         or (total_completed_scenarios > 0)
     )
-    run_mode_requested = _normalize_resume_mode(resume_mode)
     run_mode_inferred = "resume" if has_existing_progress else "fresh"
     run_mode_applied = run_mode_inferred if run_mode_requested == "auto" else run_mode_requested
     cfg.resume_from_existing = bool(run_mode_applied == "resume")
@@ -344,7 +450,10 @@ def initialize_run_context(
 
     run_plan_df = pd.DataFrame([{
         "run_tag": str(requested_run_tag),
+        "requested_run_tag": str(run_tag),
+        "run_tag_selection_source": str(run_tag_selection_source),
         "auto_generated_run_tag": int(bool(auto_generated_run_tag)),
+        "adopted_existing_run_tag": int(bool(adopted_existing_run_tag)),
         "run_mode_requested": str(run_mode_requested),
         "run_mode_inferred": str(run_mode_inferred),
         "run_mode_applied": str(run_mode_applied),
@@ -362,15 +471,18 @@ def initialize_run_context(
         search_cfg=search_cfg,
         ckpt_scan_df=ckpt_scan_df,
         shard_progress_df=shard_progress_df,
+        run_tag_candidates_df=run_tag_candidates_df,
         run_plan_df=run_plan_df,
         config_drift_df=config_drift_df,
         run_prefix=str(run_prefix),
         requested_run_tag=str(run_tag),
         run_tag=str(requested_run_tag),
+        run_tag_selection_source=str(run_tag_selection_source),
         run_mode_requested=str(run_mode_requested),
         run_mode_inferred=str(run_mode_inferred),
         run_mode_applied=str(run_mode_applied),
         auto_generated_run_tag=bool(auto_generated_run_tag),
+        adopted_existing_run_tag=bool(adopted_existing_run_tag),
         has_existing_progress=bool(has_existing_progress),
         existing_results_files=int(existing_results_files),
         total_touched_scenarios=int(total_touched_scenarios),
@@ -614,6 +726,8 @@ def run_preflight_bundle(
 def report_run_context(bundle: RunContextBundle, display_fn: Optional[Any] = None) -> None:
     if bundle.auto_generated_run_tag:
         print(f"[run-tag] auto-generated RUN_TAG={bundle.run_tag}")
+    if bundle.adopted_existing_run_tag:
+        print(f"[run-tag] auto-adopted existing RUN_TAG={bundle.run_tag} from persist root history.")
     print(
         "[run-mode] "
         f"requested={bundle.run_mode_requested}, inferred={bundle.run_mode_inferred}, "
@@ -634,6 +748,8 @@ def report_run_context(bundle: RunContextBundle, display_fn: Optional[Any] = Non
     if len(bundle.config_drift_df):
         print("[run-plan warning] config drift detected vs existing carry-forward config for this run prefix.")
     if display_fn is not None:
+        if len(bundle.run_tag_candidates_df):
+            display_fn(bundle.run_tag_candidates_df.head(10))
         if len(bundle.run_plan_df):
             display_fn(bundle.run_plan_df)
         if len(bundle.shard_progress_df):
