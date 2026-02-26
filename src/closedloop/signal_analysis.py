@@ -196,7 +196,20 @@ def analyze_surprise_signal_usefulness(
                 "corr_pearson": _corr_or_nan(s, y, "pearson"),
             }
         )
-    within_scenario_df = pd.DataFrame(scenario_rows).sort_values("scenario_id").reset_index(drop=True)
+    if len(scenario_rows) > 0:
+        within_scenario_df = pd.DataFrame(scenario_rows).sort_values("scenario_id").reset_index(drop=True)
+    else:
+        within_scenario_df = pd.DataFrame(
+            columns=[
+                "scenario_id",
+                "n",
+                "surprise_std",
+                "delta_risk_std",
+                "corr_spearman",
+                "corr_kendall",
+                "corr_pearson",
+            ]
+        )
 
     within_count = int(len(within_scenario_df))
     within_spearman_mean = (
