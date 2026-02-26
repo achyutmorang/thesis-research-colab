@@ -74,6 +74,8 @@ class ClosedLoopConfig:
     latentdriver_log_std_clip: Tuple[float, float] = (-1.609, 5.0)
     latentdriver_log_forward_errors: bool = True
     latentdriver_log_forward_errors_max: int = 5
+    latentdriver_auto_align_token_count: bool = True
+    latentdriver_expected_token_count: int = 0
     latentdriver_preflight_max_fallback_ratio: float = 0.95
 
     # Calibration from closed-loop base rollouts

@@ -325,15 +325,76 @@ def _patch_latentdriver_world_padding_mask(repo_path: Path) -> None:
         world_path.write_text(txt)
         print('[LatentDriver patch] world compatibility patch applied')
 
-def _latentdriver_fallback_dist(action_dim: int = 3) -> Dict[str, np.ndarray]:
+def _latentdriver_fallback_dist(
+    action_dim: int = 3,
+    mean_hint: Optional[np.ndarray] = None,
+    source: str = 'fallback',
+) -> Dict[str, np.ndarray]:
     d = int(max(1, action_dim))
+    means = np.zeros((1, d), dtype=np.float32)
+    if mean_hint is not None:
+        v = np.asarray(mean_hint, dtype=np.float32).reshape(-1)
+        n = int(min(d, v.size))
+        if n > 0:
+            means[0, :n] = v[:n]
     return {
         'weights': np.asarray([1.0], dtype=np.float32),
-        'means': np.zeros((1, d), dtype=np.float32),
+        'means': means,
         'stds': np.ones((1, d), dtype=np.float32) * 0.5,
         'fallback': np.asarray(1, dtype=np.int32),
-        'source': 'fallback',
+        'source': str(source),
     }
+
+
+def _inject_action_proxy_into_dist(
+    dist_step: Optional[Dict[str, np.ndarray]],
+    action_vec: np.ndarray,
+    source: str,
+) -> Dict[str, np.ndarray]:
+    vec = np.asarray(action_vec, dtype=np.float32).reshape(-1)
+    d = int(max(1, vec.size))
+    if not isinstance(dist_step, dict):
+        return _latentdriver_fallback_dist(
+            action_dim=d,
+            mean_hint=vec,
+            source=source,
+        )
+
+    out = dict(dist_step)
+    means = np.asarray(out.get('means', np.zeros((1, d), dtype=np.float32)), dtype=np.float32)
+    if means.ndim == 1:
+        means = means.reshape(1, -1)
+    if means.shape[1] != d:
+        resized = np.zeros((means.shape[0], d), dtype=np.float32)
+        n = int(min(means.shape[1], d))
+        if n > 0:
+            resized[:, :n] = means[:, :n]
+        means = resized
+    means[0, :d] = vec[:d]
+
+    stds = np.asarray(out.get('stds', np.ones((means.shape[0], d), dtype=np.float32) * 0.5), dtype=np.float32)
+    if stds.ndim == 1:
+        stds = stds.reshape(1, -1)
+    if stds.shape != means.shape:
+        fixed = np.ones_like(means, dtype=np.float32) * 0.5
+        n0 = int(min(stds.shape[0], fixed.shape[0]))
+        n1 = int(min(stds.shape[1], fixed.shape[1])) if stds.ndim == 2 else 0
+        if n0 > 0 and n1 > 0:
+            fixed[:n0, :n1] = stds[:n0, :n1]
+        stds = fixed
+    stds = np.maximum(stds, 1e-3).astype(np.float32)
+
+    weights = np.asarray(out.get('weights', np.asarray([1.0], dtype=np.float32)), dtype=np.float32).reshape(-1)
+    if weights.size != means.shape[0]:
+        weights = np.ones((means.shape[0],), dtype=np.float32)
+    weights = np.maximum(weights, 1e-6)
+    weights = weights / np.sum(weights)
+
+    out['weights'] = weights
+    out['means'] = means
+    out['stds'] = stds
+    out['source'] = str(source)
+    return out
 
 def latentdriver_observation_contract() -> Dict[str, Any]:
     return {
@@ -540,6 +601,10 @@ class LatentDriverPredictiveKLAdapter:
         self._forward_error_count = 0
         self._last_forward_route = 'uninitialized'
         self._last_forward_error = ''
+        self._token_align_applied_count = 0
+        self._token_align_info: Dict[str, Any] = {}
+        self._expected_token_count = int(max(0, getattr(cfg, 'latentdriver_expected_token_count', 0)))
+        self._expected_token_count_source = 'config' if self._expected_token_count > 0 else 'unresolved'
 
         self._setup()
 
@@ -626,9 +691,87 @@ class LatentDriverPredictiveKLAdapter:
         self.model = model
 
         self.act_dim = int(getattr(model, 'act_dim', self.act_dim))
+        self._resolve_expected_token_count()
 
         print(f'[LatentDriver] loaded ckpt: {ckpt_path}')
         print(f'[LatentDriver] device: {self.device}, act_dim={self.act_dim}, context_len={self.context_len}')
+        if self._expected_token_count > 0:
+            print(
+                f'[LatentDriver] token_count_expected={self._expected_token_count} '
+                f'(source={self._expected_token_count_source})'
+            )
+
+    def _resolve_expected_token_count(self) -> None:
+        if self._expected_token_count > 0:
+            return
+        pe_candidates: List[Tuple[int, str]] = []
+        pos_candidates: List[Tuple[int, str]] = []
+        try:
+            for name, p in self.model.named_parameters():
+                shape = tuple(int(x) for x in p.shape)
+                lname = str(name).lower()
+                if ('pe_rep' in lname) and (len(shape) >= 3):
+                    pe_candidates.append((int(shape[-2]), f'param:{name}[{-2}]'))
+                if any(k in lname for k in ['position', 'pos_embed', 'positional']) and (len(shape) >= 3):
+                    pos_candidates.append((int(shape[-2]), f'param:{name}[{-2}]'))
+        except Exception:
+            pass
+
+        def _filter(vs: List[Tuple[int, str]]) -> List[Tuple[int, str]]:
+            return [
+                (v, src) for v, src in vs
+                if np.isfinite(v) and (int(v) >= 8) and (int(v) <= 512)
+            ]
+
+        valid_pe = _filter(pe_candidates)
+        valid_pos = _filter(pos_candidates)
+        valid = valid_pe if len(valid_pe) > 0 else valid_pos
+        if len(valid) == 0:
+            return
+
+        chosen_v, chosen_src = sorted(valid, key=lambda x: int(x[0]), reverse=True)[0]
+        self._expected_token_count = int(chosen_v)
+        self._expected_token_count_source = str(chosen_src)
+
+    def _align_state_tokens(self, states: np.ndarray) -> np.ndarray:
+        if not bool(getattr(self.cfg, 'latentdriver_auto_align_token_count', True)):
+            self._token_align_info = {
+                'enabled': 0,
+                'expected_tokens': int(self._expected_token_count),
+                'input_tokens': int(states.shape[1]),
+                'used_tokens': int(states.shape[1]),
+                'mode': 'disabled',
+            }
+            return states
+
+        expected = int(max(0, self._expected_token_count))
+        input_tokens = int(states.shape[1])
+        mode = 'none'
+        out = states
+
+        if expected > 0 and input_tokens != expected:
+            if input_tokens < expected:
+                pad = np.zeros(
+                    (states.shape[0], expected - input_tokens, states.shape[2]),
+                    dtype=states.dtype,
+                )
+                out = np.concatenate([states, pad], axis=1)
+                mode = 'pad'
+            else:
+                out = states[:, :expected, :]
+                mode = 'truncate'
+            self._token_align_applied_count += 1
+
+        self._token_align_info = {
+            'enabled': 1,
+            'expected_tokens': int(expected),
+            'expected_source': str(self._expected_token_count_source),
+            'input_tokens': int(input_tokens),
+            'used_tokens': int(out.shape[1]),
+            'mode': mode,
+            'applied_count': int(self._token_align_applied_count),
+        }
+        return out
 
     def build_control_actor(self, is_controlled_func):
         return self.control_actor_factory(is_controlled_func=is_controlled_func)
@@ -674,6 +817,8 @@ class LatentDriverPredictiveKLAdapter:
             'finite': bool(np.isfinite(tok).all()) if tok.size > 0 else True,
             'type_id_min': float(tok[:, 0].min()) if tok.ndim == 2 and tok.shape[0] > 0 else np.nan,
             'type_id_max': float(tok[:, 0].max()) if tok.ndim == 2 and tok.shape[0] > 0 else np.nan,
+            'token_count_expected': int(self._expected_token_count),
+            'token_count_expected_source': str(self._expected_token_count_source),
         }
         return tok
 
@@ -776,6 +921,7 @@ class LatentDriverPredictiveKLAdapter:
         import torch
 
         states = np.stack(state_hist[-self.context_len:], axis=0)
+        states = self._align_state_tokens(states)
         t = states.shape[0]
 
         if len(action_hist) >= t:
@@ -811,7 +957,12 @@ class LatentDriverPredictiveKLAdapter:
         except Exception as e:
             self._maybe_log_forward_error(e, states_t=states_t, actions_t=actions_t, timesteps_t=timesteps_t)
             # Keep rollout alive when model forward path is brittle under specific package/runtime combos.
-            return _latentdriver_fallback_dist(action_dim=self.act_dim)
+            fallback_mean = np.asarray(action_hist[-1], dtype=np.float32) if len(action_hist) > 0 else None
+            return _latentdriver_fallback_dist(
+                action_dim=self.act_dim,
+                mean_hint=fallback_mean,
+                source='fallback:model_forward_error',
+            )
 
         logits = action_dis[:, 0]
         out_model = action_dis[:, 1:6]
@@ -951,6 +1102,8 @@ class LatentDriverPredictiveKLAdapter:
             )
         except Exception:
             pass
+        if len(self._token_align_info) > 0:
+            print('[LatentDriver warning] token_align_info:', self._token_align_info)
 
     def _deterministic_action(self, dist: Dict[str, np.ndarray]) -> np.ndarray:
         weights = dist['weights']
@@ -1164,11 +1317,25 @@ def closed_loop_rollout_selected(
                     action_vec, dist_step = ld_adapter.predict_action_and_dist(ld_state_hist, ld_action_hist)
                 except Exception:
                     action_vec = np.zeros((3,), dtype=np.float32)
-                    dist_step = _latentdriver_fallback_dist(action_dim=np.asarray(action_vec).size)
+                    dist_step = _latentdriver_fallback_dist(
+                        action_dim=np.asarray(action_vec).size,
+                        mean_hint=action_vec,
+                        source='fallback:predict_action_exception',
+                    )
                 if isinstance(dist_step, dict):
                     dist_step.setdefault('fallback', np.asarray(0, dtype=np.int32))
                     dist_step.setdefault('source', 'model')
                     dist_step.setdefault('actor_fallback', np.asarray(0, dtype=np.int32))
+                    try:
+                        is_model_fallback = float(np.asarray(dist_step.get('fallback', 0)).reshape(-1)[0]) > 0.5
+                    except Exception:
+                        is_model_fallback = False
+                    if is_model_fallback:
+                        dist_step = _inject_action_proxy_into_dist(
+                            dist_step,
+                            action_vec=action_vec,
+                            source='proxy:model_fallback_action',
+                        )
                 ld_action_hist.append(np.asarray(action_vec, dtype=np.float32))
                 dist_trace.append(dist_step)
 
@@ -1192,6 +1359,11 @@ def closed_loop_rollout_selected(
                     action_vec, action_ok = _extract_sdc_action_vector(out_p, sdc_idx=sdc_idx, fallback_dim=3)
                     if isinstance(dist_step, dict):
                         dist_step['actor_fallback'] = np.asarray(1, dtype=np.int32)
+                        dist_step = _inject_action_proxy_into_dist(
+                            dist_step,
+                            action_vec=action_vec,
+                            source='proxy:actor_fallback_action',
+                        )
 
             if action_dim is None:
                 action_dim = int(np.asarray(action_vec).size)
@@ -1252,6 +1424,9 @@ def dist_trace_diagnostics(dist_trace: List[Optional[Dict[str, np.ndarray]]]) ->
             'dist_fallback_ratio': 0.0,
             'dist_actor_fallback_steps': 0.0,
             'dist_actor_fallback_ratio': 0.0,
+            'dist_source_model_ratio': 0.0,
+            'dist_source_fallback_ratio': 0.0,
+            'dist_source_proxy_ratio': 0.0,
         }
 
     comp_counts = []
@@ -1261,6 +1436,9 @@ def dist_trace_diagnostics(dist_trace: List[Optional[Dict[str, np.ndarray]]]) ->
     finite_flags = []
     fallback_flags = []
     actor_fallback_flags = []
+    source_model_flags = []
+    source_fallback_flags = []
+    source_proxy_flags = []
     for d in non_null:
         w = np.asarray(d.get('weights', []), dtype=float).reshape(-1)
         s = np.asarray(d.get('stds', []), dtype=float)
@@ -1271,6 +1449,11 @@ def dist_trace_diagnostics(dist_trace: List[Optional[Dict[str, np.ndarray]]]) ->
         finite_flags.append(float(np.isfinite(w).all() and np.isfinite(s).all()))
         fallback_flags.append(float(np.asarray(d.get('fallback', 0)).reshape(-1)[0]))
         actor_fallback_flags.append(float(np.asarray(d.get('actor_fallback', 0)).reshape(-1)[0]))
+        source = str(d.get('source', ''))
+        s_l = source.lower()
+        source_model_flags.append(float(s_l.startswith('model:')))
+        source_fallback_flags.append(float(s_l.startswith('fallback')))
+        source_proxy_flags.append(float(s_l.startswith('proxy:')))
 
     return {
         'dist_non_null_steps': float(non_null_steps),
@@ -1284,6 +1467,9 @@ def dist_trace_diagnostics(dist_trace: List[Optional[Dict[str, np.ndarray]]]) ->
         'dist_fallback_ratio': float(np.nanmean(fallback_flags)) if len(fallback_flags) else 0.0,
         'dist_actor_fallback_steps': float(np.nansum(actor_fallback_flags)) if len(actor_fallback_flags) else 0.0,
         'dist_actor_fallback_ratio': float(np.nanmean(actor_fallback_flags)) if len(actor_fallback_flags) else 0.0,
+        'dist_source_model_ratio': float(np.nanmean(source_model_flags)) if len(source_model_flags) else 0.0,
+        'dist_source_fallback_ratio': float(np.nanmean(source_fallback_flags)) if len(source_fallback_flags) else 0.0,
+        'dist_source_proxy_ratio': float(np.nanmean(source_proxy_flags)) if len(source_proxy_flags) else 0.0,
     }
 
 def dist_trace_change_stats(
@@ -1301,21 +1487,31 @@ def dist_trace_change_stats(
             'step_mean_l2_mean': np.nan,
             'step_mean_l2_p50': np.nan,
             'step_mean_l2_p95': np.nan,
+            'step_mean_l2_all_mean': np.nan,
             'step_std_l2_mean': np.nan,
+            'step_std_l2_all_mean': np.nan,
             'step_moment_kl_mean': np.nan,
             'step_moment_kl_p50': np.nan,
             'step_moment_kl_p95': np.nan,
             'step_moment_kl_nonzero_ratio': 0.0,
+            'step_moment_kl_all_mean': np.nan,
+            'step_moment_kl_all_nonzero_ratio': 0.0,
             'step_logit_l1_mean': np.nan,
             'step_logit_l1_p50': np.nan,
             'step_logit_l1_p95': np.nan,
             'step_logit_l1_nonzero_ratio': 0.0,
+            'step_logit_l1_all_mean': np.nan,
+            'step_logit_l1_all_nonzero_ratio': 0.0,
         }
 
     mean_l2_vals: List[float] = []
     std_l2_vals: List[float] = []
     kl_vals: List[float] = []
     logit_l1_vals: List[float] = []
+    mean_l2_all_vals: List[float] = []
+    std_l2_all_vals: List[float] = []
+    kl_all_vals: List[float] = []
+    logit_l1_all_vals: List[float] = []
     pair_steps_all = 0
 
     for i in range(n):
@@ -1324,8 +1520,6 @@ def dist_trace_change_stats(
         if dp is None or dq is None:
             continue
         pair_steps_all += 1
-        if _trace_step_is_fallback(dp) or _trace_step_is_fallback(dq):
-            continue
 
         mu_p, cov_p = _moment_match_diag_gmm(dp)
         mu_q, cov_q = _moment_match_diag_gmm(dq)
@@ -1334,17 +1528,32 @@ def dist_trace_change_stats(
         if d <= 0:
             continue
 
-        mean_l2_vals.append(float(np.linalg.norm(mu_p[:d] - mu_q[:d])))
-
+        mean_l2 = float(np.linalg.norm(mu_p[:d] - mu_q[:d]))
         std_p = np.sqrt(np.maximum(np.diag(cov_p)[:d], 0.0))
         std_q = np.sqrt(np.maximum(np.diag(cov_q)[:d], 0.0))
-        std_l2_vals.append(float(np.linalg.norm(std_p - std_q)))
+        std_l2 = float(np.linalg.norm(std_p - std_q))
+        step_kl = float(_gaussian_kl(mu_p[:d], cov_p[:d, :d], mu_q[:d], cov_q[:d, :d]))
+        step_logit_l1 = float(_trace_step_logit_l1(dp, dq))
 
-        kl_vals.append(float(_gaussian_kl(mu_p[:d], cov_p[:d, :d], mu_q[:d], cov_q[:d, :d])))
-        logit_l1_vals.append(_trace_step_logit_l1(dp, dq))
+        mean_l2_all_vals.append(mean_l2)
+        std_l2_all_vals.append(std_l2)
+        kl_all_vals.append(step_kl)
+        logit_l1_all_vals.append(step_logit_l1)
+
+        if _trace_step_is_fallback(dp) or _trace_step_is_fallback(dq):
+            continue
+
+        mean_l2_vals.append(mean_l2)
+        std_l2_vals.append(std_l2)
+        kl_vals.append(step_kl)
+        logit_l1_vals.append(step_logit_l1)
 
     pair_steps_non_fallback = int(len(kl_vals))
     if pair_steps_non_fallback == 0:
+        kl_all_arr = np.asarray(kl_all_vals, dtype=float)
+        mean_l2_all_arr = np.asarray(mean_l2_all_vals, dtype=float)
+        std_l2_all_arr = np.asarray(std_l2_all_vals, dtype=float)
+        logit_l1_all_arr = np.asarray(logit_l1_all_vals, dtype=float)
         return {
             'trace_pair_steps': 0.0,
             'trace_pair_ratio': 0.0,
@@ -1354,21 +1563,31 @@ def dist_trace_change_stats(
             'step_mean_l2_mean': np.nan,
             'step_mean_l2_p50': np.nan,
             'step_mean_l2_p95': np.nan,
+            'step_mean_l2_all_mean': float(np.mean(mean_l2_all_arr)) if mean_l2_all_arr.size > 0 else np.nan,
             'step_std_l2_mean': np.nan,
+            'step_std_l2_all_mean': float(np.mean(std_l2_all_arr)) if std_l2_all_arr.size > 0 else np.nan,
             'step_moment_kl_mean': np.nan,
             'step_moment_kl_p50': np.nan,
             'step_moment_kl_p95': np.nan,
             'step_moment_kl_nonzero_ratio': 0.0,
+            'step_moment_kl_all_mean': float(np.mean(kl_all_arr)) if kl_all_arr.size > 0 else np.nan,
+            'step_moment_kl_all_nonzero_ratio': float(np.mean(kl_all_arr > 1e-9)) if kl_all_arr.size > 0 else 0.0,
             'step_logit_l1_mean': np.nan,
             'step_logit_l1_p50': np.nan,
             'step_logit_l1_p95': np.nan,
             'step_logit_l1_nonzero_ratio': 0.0,
+            'step_logit_l1_all_mean': float(np.mean(logit_l1_all_arr)) if logit_l1_all_arr.size > 0 else np.nan,
+            'step_logit_l1_all_nonzero_ratio': float(np.mean(logit_l1_all_arr > 1e-9)) if logit_l1_all_arr.size > 0 else 0.0,
         }
 
     kl_arr = np.asarray(kl_vals, dtype=float)
     mean_l2_arr = np.asarray(mean_l2_vals, dtype=float)
     std_l2_arr = np.asarray(std_l2_vals, dtype=float)
     logit_l1_arr = np.asarray(logit_l1_vals, dtype=float)
+    kl_all_arr = np.asarray(kl_all_vals, dtype=float)
+    mean_l2_all_arr = np.asarray(mean_l2_all_vals, dtype=float)
+    std_l2_all_arr = np.asarray(std_l2_all_vals, dtype=float)
+    logit_l1_all_arr = np.asarray(logit_l1_all_vals, dtype=float)
 
     return {
         'trace_pair_steps': float(pair_steps_non_fallback),
@@ -1379,15 +1598,21 @@ def dist_trace_change_stats(
         'step_mean_l2_mean': float(np.mean(mean_l2_arr)),
         'step_mean_l2_p50': float(np.quantile(mean_l2_arr, 0.50)),
         'step_mean_l2_p95': float(np.quantile(mean_l2_arr, 0.95)),
+        'step_mean_l2_all_mean': float(np.mean(mean_l2_all_arr)),
         'step_std_l2_mean': float(np.mean(std_l2_arr)),
+        'step_std_l2_all_mean': float(np.mean(std_l2_all_arr)),
         'step_moment_kl_mean': float(np.mean(kl_arr)),
         'step_moment_kl_p50': float(np.quantile(kl_arr, 0.50)),
         'step_moment_kl_p95': float(np.quantile(kl_arr, 0.95)),
         'step_moment_kl_nonzero_ratio': float(np.mean(kl_arr > 1e-9)),
+        'step_moment_kl_all_mean': float(np.mean(kl_all_arr)),
+        'step_moment_kl_all_nonzero_ratio': float(np.mean(kl_all_arr > 1e-9)),
         'step_logit_l1_mean': float(np.mean(logit_l1_arr)),
         'step_logit_l1_p50': float(np.quantile(logit_l1_arr, 0.50)),
         'step_logit_l1_p95': float(np.quantile(logit_l1_arr, 0.95)),
         'step_logit_l1_nonzero_ratio': float(np.mean(logit_l1_arr > 1e-9)),
+        'step_logit_l1_all_mean': float(np.mean(logit_l1_all_arr)),
+        'step_logit_l1_all_nonzero_ratio': float(np.mean(logit_l1_all_arr > 1e-9)),
     }
 
 ENV_CLASS = resolve_env_class()

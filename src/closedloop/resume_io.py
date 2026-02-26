@@ -13,6 +13,7 @@ import numpy as np
 import pandas as pd
 
 from .config import SearchConfig, ClosedLoopConfig, build_run_artifact_paths
+from .calibration import diagnose_surprise_root_cause
 from .signal_analysis import (
     analyze_surprise_signal_usefulness,
     save_surprise_signal_usefulness_artifacts,
@@ -432,6 +433,8 @@ def export_closedloop_artifacts(
     sanity_path = f'{run_prefix}_sanity_checks.csv'
     fairness_path = f'{run_prefix}_fairness_checks.csv'
     trace_diag_path = f'{run_prefix}_trace_diagnostics.csv'
+    root_cause_summary_path = f'{run_prefix}_surprise_root_cause_summary.csv'
+    root_cause_findings_path = f'{run_prefix}_surprise_root_cause_findings.csv'
     runtime_manifest_path = f'{run_prefix}_runtime_manifest.json'
     schema_manifest_path = _artifact_schema_manifest_path(run_prefix)
 
@@ -451,6 +454,8 @@ def export_closedloop_artifacts(
         'sanity_checks': sanity_path,
         'fairness_checks': fairness_path,
         'trace_diagnostics': trace_diag_path,
+        'surprise_root_cause_summary': root_cause_summary_path,
+        'surprise_root_cause_findings': root_cause_findings_path,
         'runtime_manifest': runtime_manifest_path,
         'artifact_schema': schema_manifest_path,
     }
@@ -485,6 +490,15 @@ def export_closedloop_artifacts(
     preflight_df.to_csv(preflight_path, index=False)
     calib_diag_df.to_csv(calib_diag_path, index=False)
     calib_quant_df.to_csv(calib_quant_path, index=False)
+    try:
+        root_cause_summary_df, root_cause_findings_df = diagnose_surprise_root_cause(
+            preflight_df=preflight_df,
+            closedloop_calib_df=closedloop_calib_df,
+        )
+        root_cause_summary_df.to_csv(root_cause_summary_path, index=False)
+        root_cause_findings_df.to_csv(root_cause_findings_path, index=False)
+    except Exception as e:
+        print(f'[export] surprise root-cause diagnostics skipped: {e}')
     quick_summary_df.to_csv(quick_summary_path, index=False)
     sanity_df.to_csv(sanity_path, index=False)
     fairness_checks_df.to_csv(fairness_path, index=False)

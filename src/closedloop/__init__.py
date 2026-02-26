@@ -11,7 +11,7 @@ from .config import (
     restore_artifacts_via_upload,
     shard_run_prefix,
 )
-from .calibration import run_surprise_quality_gate
+from .calibration import diagnose_surprise_root_cause, run_surprise_quality_gate
 from .core import (
     build_closedloop_runner_and_splits,
     make_waymax_data_iter,
@@ -32,6 +32,7 @@ __all__ = [
     'build_run_artifact_paths',
     'build_closedloop_runner_and_splits',
     'configure_persistent_run_prefix',
+    'diagnose_surprise_root_cause',
     'export_closedloop_artifacts',
     'initialize_configs',
     'inspect_shard_progress',

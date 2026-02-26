@@ -57,17 +57,19 @@ def evaluate_delta_closed_loop(
         surprise_source = 'predictive_kl'
         if (not np.isfinite(surprise_pd)) or (float(surprise_pd) <= 1e-12):
             trace_change_diag = dist_trace_change_stats(dist_trace, base_metrics['base_dist_trace'])
-            if float(trace_change_diag.get('trace_pair_ratio', 0.0)) > 0.0:
-                action_surprise = planner_action_surprise_kl(
-                    actions,
-                    action_valid,
-                    base_metrics['base_actions'],
-                    base_metrics['base_action_valid'],
-                    sigma=0.25,
-                )
-                if np.isfinite(action_surprise) and float(action_surprise) > 1e-12:
-                    surprise_pd = float(action_surprise)
+            action_surprise = planner_action_surprise_kl(
+                actions,
+                action_valid,
+                base_metrics['base_actions'],
+                base_metrics['base_action_valid'],
+                sigma=0.25,
+            )
+            if np.isfinite(action_surprise) and float(action_surprise) > 1e-12:
+                surprise_pd = float(action_surprise)
+                if float(trace_change_diag.get('trace_pair_ratio', 0.0)) > 0.0:
                     surprise_source = 'action_kl_fallback'
+                else:
+                    surprise_source = 'action_kl_no_dist_pairs'
     else:
         surprise_pd = planner_action_surprise_kl(
             actions,
