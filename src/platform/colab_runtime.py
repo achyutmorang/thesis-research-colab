@@ -47,7 +47,7 @@ class RuntimeBootstrapResult:
 @dataclass
 class ColabRuntimeConfig:
     repo_url: str
-    repo_dir: str = "/content/thesis-research-colab"
+    repo_dir: str = "/content/waymax-simulation-experiments"
     repo_branch: str = "main"
     required_drive_folder: str = "/content/drive/MyDrive/waymax_experiments"
     verify_drive_access_every_run: bool = False
@@ -339,7 +339,7 @@ def run_cached_deterministic_setup(
     )
 
 
-def prepare_repo_imports(repo_dir: str = "/content/thesis-research-colab", force_module_hot_reload: bool = True) -> str:
+def prepare_repo_imports(repo_dir: str = "/content/waymax-simulation-experiments", force_module_hot_reload: bool = True) -> str:
     repo_path = Path(repo_dir)
     if not repo_path.exists():
         raise RuntimeError(f"Repo checkout missing at {repo_dir}. Run Step 1 first.")
@@ -359,7 +359,7 @@ def prepare_repo_imports(repo_dir: str = "/content/thesis-research-colab", force
 
 def bootstrap_colab_runtime(
     repo_url: str,
-    repo_dir: str = "/content/thesis-research-colab",
+    repo_dir: str = "/content/waymax-simulation-experiments",
     repo_branch: str = "main",
     required_drive_folder: str = "/content/drive/MyDrive/waymax_experiments",
     verify_drive_access_every_run: bool = False,

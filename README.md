@@ -3,10 +3,10 @@
 Research repository for closed-loop simulation experiments.
 
 ## Open In Colab
-- Notebook: [notebooks/closedloop_simulation_colab.ipynb](https://colab.research.google.com/github/achyutmorang/thesis-research-colab/blob/main/notebooks/closedloop_simulation_colab.ipynb)
-- Evaluation notebook: [notebooks/closedloop_evaluation_colab.ipynb](https://colab.research.google.com/github/achyutmorang/thesis-research-colab/blob/main/notebooks/closedloop_evaluation_colab.ipynb)
-- Compute-normalized blindspot notebook: [notebooks/compute_normalized_blindspot_discovery_colab.ipynb](https://colab.research.google.com/github/achyutmorang/thesis-research-colab/blob/main/notebooks/compute_normalized_blindspot_discovery_colab.ipynb)
-- Counterfactual sensitivity notebook: [notebooks/counterfactual_risk_sensitivity_atlas_colab.ipynb](https://colab.research.google.com/github/achyutmorang/thesis-research-colab/blob/main/notebooks/counterfactual_risk_sensitivity_atlas_colab.ipynb)
+- Notebook: [notebooks/closedloop_simulation_colab.ipynb](https://colab.research.google.com/github/achyutmorang/waymax-simulation-experiments/blob/main/notebooks/closedloop_simulation_colab.ipynb)
+- Evaluation notebook: [notebooks/closedloop_evaluation_colab.ipynb](https://colab.research.google.com/github/achyutmorang/waymax-simulation-experiments/blob/main/notebooks/closedloop_evaluation_colab.ipynb)
+- Compute-normalized blindspot notebook: [notebooks/compute_normalized_blindspot_discovery_colab.ipynb](https://colab.research.google.com/github/achyutmorang/waymax-simulation-experiments/blob/main/notebooks/compute_normalized_blindspot_discovery_colab.ipynb)
+- Counterfactual sensitivity notebook: [notebooks/counterfactual_risk_sensitivity_atlas_colab.ipynb](https://colab.research.google.com/github/achyutmorang/waymax-simulation-experiments/blob/main/notebooks/counterfactual_risk_sensitivity_atlas_colab.ipynb)
 - If the repo is private, open the link while signed in to GitHub in Colab.
 
 ## Notebook Overview

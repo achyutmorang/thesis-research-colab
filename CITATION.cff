@@ -4,5 +4,5 @@ message: "If you reference this work, cite the repository URL and exact commit h
 authors:
   - family-names: "Morang"
     given-names: "Achyut"
-repository-code: "https://github.com/achyutmorang/thesis-research-colab"
+repository-code: "https://github.com/achyutmorang/waymax-simulation-experiments"
 license: "NOASSERTION"
