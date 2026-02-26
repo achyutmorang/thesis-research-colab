@@ -20,6 +20,7 @@ class ClosedLoopConfig:
     n_total_scenarios: int = 2400
     n_eval_scenarios: int = 200
     strict_min_eval: int = 200
+    # Historical field name retained for compatibility; semantically this is reference_fraction.
     train_fraction: float = 0.75
 
     # Trajectory slicing
@@ -122,8 +123,8 @@ class SearchConfig:
 
 
 def required_total_scenarios(min_eval: int, train_fraction: float) -> int:
-    test_frac = max(1e-9, 1.0 - float(train_fraction))
-    return int(math.ceil(float(min_eval) / test_frac))
+    eval_fraction = max(1e-9, 1.0 - float(train_fraction))
+    return int(math.ceil(float(min_eval) / eval_fraction))
 
 
 def align_dataset_scale(cfg: ClosedLoopConfig) -> ClosedLoopConfig:
@@ -134,7 +135,7 @@ def align_dataset_scale(cfg: ClosedLoopConfig) -> ClosedLoopConfig:
         cfg.n_total_scenarios = required_total
         print(
             f"[config auto-fix] n_total_scenarios increased from {old} to {cfg.n_total_scenarios} "
-            f"to support eval target={required_eval} with train_fraction={cfg.train_fraction:.2f}."
+            f"to support eval target={required_eval} with reference_fraction(train_fraction)={cfg.train_fraction:.2f}."
         )
     return cfg
 

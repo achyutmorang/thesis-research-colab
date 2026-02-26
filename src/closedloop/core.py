@@ -215,9 +215,10 @@ class ClosedLoopRunner:
         self.loader = WaymaxScenarioLoader(config, data_iter=data_iter, dataset_config=dataset_config)
 
     def build_dataset(self):
-        n_train = int(self.cfg.n_total_scenarios * self.cfg.train_fraction)
+        # "train_fraction" acts as a reference/evaluation partition in this pipeline.
+        n_reference = int(self.cfg.n_total_scenarios * self.cfg.train_fraction)
         n_eval_target = int(max(self.cfg.n_eval_scenarios, self.cfg.strict_min_eval))
-        eval_start = n_train
+        eval_start = n_reference
         eval_end = min(self.cfg.n_total_scenarios, eval_start + n_eval_target)
         keep_state_ids = set(range(eval_start, eval_end))
 
@@ -238,16 +239,19 @@ class ClosedLoopRunner:
         X = np.asarray(X, dtype=float)
         meta_df = pd.DataFrame(meta)
 
-        n_train = int(len(X) * self.cfg.train_fraction)
-        train_idx = np.arange(n_train)
-        test_idx = np.arange(n_train, len(X))
+        n_reference = int(len(X) * self.cfg.train_fraction)
+        reference_idx = np.arange(n_reference)
+        candidate_eval_idx = np.arange(n_reference, len(X))
 
         self.data = {
             'X': X,
             'meta': meta_df,
             'scenarios': scenarios,
-            'train_idx': train_idx,
-            'test_idx': test_idx,
+            'reference_idx': reference_idx,
+            'candidate_eval_idx': candidate_eval_idx,
+            # Backward-compatible aliases for older notebooks/scripts.
+            'train_idx': reference_idx,
+            'test_idx': candidate_eval_idx,
         }
         return self.data
 
@@ -501,19 +505,19 @@ def build_closedloop_runner_and_splits(
     runner = ClosedLoopRunner(cfg, data_iter=data_iter, dataset_config=dataset_config)
     data = runner.build_dataset()
 
-    train_idx = data['train_idx']
-    test_idx = data['test_idx']
+    reference_idx = data.get('reference_idx', data['train_idx'])
+    candidate_eval_idx = data.get('candidate_eval_idx', data['test_idx'])
 
     required_eval = int(max(cfg.n_eval_scenarios, cfg.strict_min_eval))
-    if len(test_idx) < required_eval:
+    if len(candidate_eval_idx) < required_eval:
         required_total = required_total_scenarios(required_eval, cfg.train_fraction)
         raise ValueError(
-            f'Not enough test scenarios for strict evaluation: have {len(test_idx)}, need {required_eval}. '
-            f'Current n_total_scenarios={cfg.n_total_scenarios}, train_fraction={cfg.train_fraction}. '
+            f'Not enough evaluation candidates for strict evaluation: have {len(candidate_eval_idx)}, need {required_eval}. '
+            f'Current n_total_scenarios={cfg.n_total_scenarios}, reference_fraction(train_fraction)={cfg.train_fraction}. '
             f'Set n_total_scenarios >= {required_total} (or reduce strict_min_eval / n_eval_scenarios).'
         )
 
-    eval_idx_all = test_idx[:cfg.n_eval_scenarios]
+    eval_idx_all = candidate_eval_idx[:cfg.n_eval_scenarios]
     if int(max(1, n_shards)) > 1:
         eval_idx = eval_idx_all[int(shard_id)::int(n_shards)]
     else:
@@ -522,10 +526,10 @@ def build_closedloop_runner_and_splits(
     if len(eval_idx) == 0:
         raise ValueError(f'Empty shard eval set for shard_id={shard_id}, n_shards={n_shards}.')
 
-    reference_df = runner.score_indices_openloop(train_idx, label='reference_openloop', show_progress=True)
+    reference_df = runner.score_indices_openloop(reference_idx, label='reference_openloop', show_progress=True)
     base_eval_openloop_df = runner.score_indices_openloop(eval_idx, label='base_eval_openloop', show_progress=True)
 
-    return runner, data, train_idx, test_idx, eval_idx_all, eval_idx, reference_df, base_eval_openloop_df
+    return runner, data, reference_idx, candidate_eval_idx, eval_idx_all, eval_idx, reference_df, base_eval_openloop_df
 
 def run_preflight_and_calibration(
     runner: ClosedLoopRunner,

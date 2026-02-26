@@ -542,6 +542,7 @@ def export_closedloop_artifacts(
         'data_split': {
             'n_total_scenarios': int(cfg.n_total_scenarios),
             'n_eval_scenarios': int(len(eval_idx)),
+            'reference_fraction': float(cfg.train_fraction),
             'train_fraction': float(cfg.train_fraction),
             'eval_scenario_ids': [int(x) for x in eval_idx],
         },
