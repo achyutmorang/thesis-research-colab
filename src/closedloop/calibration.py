@@ -121,8 +121,8 @@ def make_calibration_delta_proposal(rng: np.random.Generator, k: int, search_cfg
     direction = dirs[int(k) % int(len(dirs))]
     direction = direction / max(1e-12, float(np.linalg.norm(direction)))
 
-    base_scale = float(max(search_cfg.random_scale, 0.35))
-    scales = np.asarray([base_scale, 1.5 * base_scale, 2.0 * base_scale], dtype=float)
+    base_scale = float(max(search_cfg.random_scale, 0.55))
+    scales = np.asarray([base_scale, 0.95, 1.35], dtype=float)
     scale = float(scales[(int(k) // int(len(dirs))) % int(len(scales))])
 
     jitter = rng.normal(loc=0.0, scale=0.15 * base_scale, size=(2,))
@@ -206,11 +206,23 @@ def calibrate_closed_loop_thresholds(
                     )
                     p_dist_diag = dist_trace_diagnostics(p_dist_trace)
                     trace_change_diag = dist_trace_change_stats(p_dist_trace, base_dist_trace)
+                    surprise_source = 'predictive_kl'
 
                     trace_pair_ratio = float(trace_change_diag.get('trace_pair_ratio', 0.0))
                     if trace_pair_ratio <= 0.0:
                         # No valid non-fallback trace pairs -> treat surprise as unusable for calibration.
                         p_surprise = np.nan
+                    elif (not np.isfinite(p_surprise)) or (float(p_surprise) <= 1e-12):
+                        action_surprise = planner_action_surprise_kl(
+                            p_actions,
+                            p_action_valid,
+                            base_actions,
+                            base_action_valid,
+                            sigma=0.25,
+                        )
+                        if np.isfinite(action_surprise) and float(action_surprise) > 1e-12:
+                            p_surprise = float(action_surprise)
+                            surprise_source = 'action_kl_fallback'
                 else:
                     p_surprise = planner_action_surprise_kl(
                         p_actions,
@@ -247,6 +259,7 @@ def calibrate_closed_loop_thresholds(
                         'step_moment_kl_p95': np.nan,
                         'step_moment_kl_nonzero_ratio': np.nan,
                     }
+                    surprise_source = 'action_kl'
 
                 rows.append({
                     'scenario_id': int(sid),
@@ -255,6 +268,7 @@ def calibrate_closed_loop_thresholds(
                     'base_risk_sks': float(base_risk['risk_sks']),
                     'proposal_risk_sks': float(p_risk['risk_sks']),
                     'surprise_pd': float(p_surprise),
+                    'surprise_source': str(surprise_source),
                     'base_failure_proxy': float(base_risk['failure_extended_proxy']),
                     'proposal_failure_proxy': float(p_risk['failure_extended_proxy']),
                     'base_rollout_feasible': int(base_feasible),
@@ -292,6 +306,7 @@ def calibrate_closed_loop_thresholds(
                 'base_risk_sks': np.nan,
                 'proposal_risk_sks': np.nan,
                 'surprise_pd': np.nan,
+                'surprise_source': 'error',
                 'base_failure_proxy': np.nan,
                 'proposal_failure_proxy': np.nan,
                 'base_rollout_feasible': 0,

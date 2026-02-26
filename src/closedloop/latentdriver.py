@@ -158,7 +158,21 @@ def _choose_target_non_ego(base_state: Any, selected_idx: np.ndarray) -> int:
     candidates = [int(i) for i in selected_idx.tolist() if (not is_sdc_all[i]) and valid_t0_all[i]]
     if len(candidates) == 0:
         raise ValueError('No valid non-ego object found for perturbation.')
-    return int(candidates[0])
+    try:
+        sdc_idx = int(np.argmax(is_sdc_all))
+        xy0_all = np.asarray(base_state.log_trajectory.xy)
+        sdc_xy = np.asarray(_xy_for_object(xy0_all, sdc_idx), dtype=float)
+        best_idx = int(candidates[0])
+        best_d2 = np.inf
+        for c in candidates:
+            c_xy = np.asarray(_xy_for_object(xy0_all, int(c)), dtype=float)
+            d2 = float(np.sum((c_xy - sdc_xy) ** 2))
+            if np.isfinite(d2) and d2 < best_d2:
+                best_d2 = d2
+                best_idx = int(c)
+        return int(best_idx)
+    except Exception:
+        return int(candidates[0])
 
 def _replace_obj(obj: Any, **kwargs: Any) -> Any:
     try:

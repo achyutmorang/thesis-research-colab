@@ -7,6 +7,7 @@ import numpy as np
 from .config import SearchConfig, ClosedLoopConfig
 from .latentdriver import (
     closed_loop_rollout_selected,
+    dist_trace_change_stats,
     dist_trace_diagnostics,
     predictive_kl_from_dist_traces,
     project_delta_vec,
@@ -53,6 +54,20 @@ def evaluate_delta_closed_loop(
             skip_fallback_steps=bool(cfg.predictive_kl_skip_fallback_steps),
         )
         dist_diag = dist_trace_diagnostics(dist_trace)
+        surprise_source = 'predictive_kl'
+        if (not np.isfinite(surprise_pd)) or (float(surprise_pd) <= 1e-12):
+            trace_change_diag = dist_trace_change_stats(dist_trace, base_metrics['base_dist_trace'])
+            if float(trace_change_diag.get('trace_pair_ratio', 0.0)) > 0.0:
+                action_surprise = planner_action_surprise_kl(
+                    actions,
+                    action_valid,
+                    base_metrics['base_actions'],
+                    base_metrics['base_action_valid'],
+                    sigma=0.25,
+                )
+                if np.isfinite(action_surprise) and float(action_surprise) > 1e-12:
+                    surprise_pd = float(action_surprise)
+                    surprise_source = 'action_kl_fallback'
     else:
         surprise_pd = planner_action_surprise_kl(
             actions,
@@ -70,6 +85,7 @@ def evaluate_delta_closed_loop(
             'dist_max_std': np.nan,
             'dist_finite_ratio': np.nan,
         }
+        surprise_source = 'action_kl'
 
     delta_risk = float(risk['risk_sks'] - base_metrics['base_risk'])
     delta_surprise = float(surprise_pd - base_metrics['base_surprise'])
@@ -96,6 +112,7 @@ def evaluate_delta_closed_loop(
         'risk_sks': float(risk['risk_sks']),
         'surprise_pd': float(surprise_pd),
         'surprise_kl': float(surprise_pd),
+        'surprise_source': str(surprise_source),
         'surprise_metric': cfg.planner_surprise_name,
         'delta_risk': float(delta_risk),
         'delta_surprise': float(delta_surprise),
