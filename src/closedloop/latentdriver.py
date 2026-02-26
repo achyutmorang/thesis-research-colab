@@ -222,15 +222,47 @@ def _shift_traj_t0_xy(traj: Any, target_obj_idx: int, delta_xy_j: jnp.ndarray) -
     # In many versions, xy is a derived property while canonical fields are x/y.
     if hasattr(traj, 'x') and hasattr(traj, 'y'):
         try:
-            x_new = traj.x.at[target_obj_idx, 0].add(delta_xy_j[0])
-            y_new = traj.y.at[target_obj_idx, 0].add(delta_xy_j[1])
+            x_arr = jnp.asarray(traj.x)
+            y_arr = jnp.asarray(traj.y)
+            if x_arr.ndim >= 2 and y_arr.ndim >= 2:
+                obj_axis = int(x_arr.ndim - 2)
+                time_axis = int(x_arr.ndim - 1)
+                obj_count = int(x_arr.shape[obj_axis])
+                if 0 <= int(target_obj_idx) < obj_count:
+                    ix = [slice(None)] * x_arr.ndim
+                    iy = [slice(None)] * y_arr.ndim
+                    ix[obj_axis] = int(target_obj_idx)
+                    iy[obj_axis] = int(target_obj_idx)
+                    ix[time_axis] = 0
+                    iy[time_axis] = 0
+                    x_new = x_arr.at[tuple(ix)].add(delta_xy_j[0])
+                    y_new = y_arr.at[tuple(iy)].add(delta_xy_j[1])
+                else:
+                    raise RuntimeError(f'target_obj_idx out of range for x/y arrays: idx={target_obj_idx}, n_obj={obj_count}')
+            else:
+                raise RuntimeError(f'unexpected x/y tensor ranks: x.ndim={x_arr.ndim}, y.ndim={y_arr.ndim}')
             return _replace_obj(traj, x=x_new, y=y_new)
         except Exception:
             pass
 
     if hasattr(traj, 'xy'):
         try:
-            xy_new = traj.xy.at[target_obj_idx, 0, :].add(delta_xy_j)
+            xy_arr = jnp.asarray(traj.xy)
+            if xy_arr.ndim >= 3:
+                obj_axis = int(xy_arr.ndim - 3)
+                time_axis = int(xy_arr.ndim - 2)
+                coord_axis = int(xy_arr.ndim - 1)
+                obj_count = int(xy_arr.shape[obj_axis])
+                if 0 <= int(target_obj_idx) < obj_count:
+                    idx = [slice(None)] * xy_arr.ndim
+                    idx[obj_axis] = int(target_obj_idx)
+                    idx[time_axis] = 0
+                    idx[coord_axis] = slice(0, 2)
+                    xy_new = xy_arr.at[tuple(idx)].add(delta_xy_j[:2])
+                else:
+                    raise RuntimeError(f'target_obj_idx out of range for xy array: idx={target_obj_idx}, n_obj={obj_count}')
+            else:
+                raise RuntimeError(f'unexpected xy tensor rank: xy.ndim={xy_arr.ndim}')
             return _replace_obj(traj, xy=xy_new)
         except Exception:
             pass
