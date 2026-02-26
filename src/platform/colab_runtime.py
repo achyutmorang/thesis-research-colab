@@ -44,6 +44,38 @@ class RuntimeBootstrapResult:
     prepared_repo_dir: str
 
 
+@dataclass
+class ColabRuntimeConfig:
+    repo_url: str
+    repo_dir: str = "/content/thesis-research-colab"
+    repo_branch: str = "main"
+    required_drive_folder: str = "/content/drive/MyDrive/waymax_experiments"
+    verify_drive_access_every_run: bool = False
+    force_reinstall: bool = False
+    auto_restart_after_setup: bool = True
+    strict_lockfile_check: bool = True
+    setup_cache_enabled: bool = True
+    revalidate_core_imports_on_cache_hit: bool = True
+    setup_cache_path: str = "/content/.closedloop_setup_cache.json"
+    force_module_hot_reload: bool = True
+
+    def to_bootstrap_kwargs(self) -> Dict[str, Any]:
+        return {
+            "repo_url": self.repo_url,
+            "repo_dir": self.repo_dir,
+            "repo_branch": self.repo_branch,
+            "required_drive_folder": self.required_drive_folder,
+            "verify_drive_access_every_run": bool(self.verify_drive_access_every_run),
+            "force_reinstall": bool(self.force_reinstall),
+            "auto_restart_after_setup": bool(self.auto_restart_after_setup),
+            "strict_lockfile_check": bool(self.strict_lockfile_check),
+            "setup_cache_enabled": bool(self.setup_cache_enabled),
+            "revalidate_core_imports_on_cache_hit": bool(self.revalidate_core_imports_on_cache_hit),
+            "setup_cache_path": self.setup_cache_path,
+            "force_module_hot_reload": bool(self.force_module_hot_reload),
+        }
+
+
 _DRIVE_READY_CACHE = False
 
 
@@ -364,3 +396,7 @@ def bootstrap_colab_runtime(
         setup=setup,
         prepared_repo_dir=prepared_repo_dir,
     )
+
+
+def bootstrap_colab_runtime_with_config(config: ColabRuntimeConfig) -> RuntimeBootstrapResult:
+    return bootstrap_colab_runtime(**config.to_bootstrap_kwargs())
