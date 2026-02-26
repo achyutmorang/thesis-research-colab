@@ -152,6 +152,18 @@ def method_weights(method: str, cfg_opt: SearchConfig) -> Tuple[float, float]:
         return cfg_opt.w_joint
     raise ValueError(f'Unknown method: {method}')
 
+
+def proposal_scale_for_eval(search_cfg: SearchConfig, eval_index: int) -> float:
+    ladder = np.asarray(
+        getattr(search_cfg, 'proposal_scale_ladder', (0.45, 0.75, 1.05, 1.35)),
+        dtype=float,
+    ).reshape(-1)
+    ladder = ladder[np.isfinite(ladder) & (ladder > 0.0)]
+    if ladder.size == 0:
+        ladder = np.asarray([max(float(search_cfg.random_scale), 0.55)], dtype=float)
+    idx = int(max(0, eval_index - 1)) % int(ladder.size)
+    return float(ladder[idx])
+
 def optimize_method_closed_loop(
     method: str,
     rec: Dict[str, Any],
@@ -262,7 +274,8 @@ def optimize_method_closed_loop(
     if method == 'random':
         while evals_used < search_cfg.budget_evals:
             proposal_vec = np.asarray(proposal_bank[evals_used - 1], dtype=float)
-            prop = project_delta_vec(search_cfg.random_scale * proposal_vec, search_cfg.delta_clip, search_cfg.delta_l2_budget)
+            proposal_scale = proposal_scale_for_eval(search_cfg, evals_used)
+            prop = project_delta_vec(proposal_scale * proposal_vec, search_cfg.delta_clip, search_cfg.delta_l2_budget)
 
             trial = evaluate_delta_closed_loop(
                 rec=rec,
@@ -294,7 +307,7 @@ def optimize_method_closed_loop(
                 stats=trial,
                 accepted=int(improved),
                 is_best=int(improved),
-                step_scale=0.0,
+                step_scale=float(proposal_scale),
             )
 
     else:

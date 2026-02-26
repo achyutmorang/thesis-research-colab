@@ -126,7 +126,8 @@ def run_closedloop_preflight_checks(runner: Any, cfg: ClosedLoopConfig, eval_idx
     return pd.DataFrame(checks)
 
 def make_calibration_delta_proposal(rng: np.random.Generator, k: int, search_cfg: SearchConfig) -> np.ndarray:
-    # Deterministic directional proposals + jitter improve calibration coverage.
+    # Realization-aware proposal bank:
+    # richer direction families + laddered scales to avoid tiny perturbations.
     dirs = np.asarray([
         [1.0, 0.0],
         [-1.0, 0.0],
@@ -136,15 +137,30 @@ def make_calibration_delta_proposal(rng: np.random.Generator, k: int, search_cfg
         [1.0, -1.0],
         [-1.0, 1.0],
         [-1.0, -1.0],
+        [2.0, 1.0],
+        [2.0, -1.0],
+        [-2.0, 1.0],
+        [-2.0, -1.0],
+        [1.0, 2.0],
+        [1.0, -2.0],
+        [-1.0, 2.0],
+        [-1.0, -2.0],
     ], dtype=float)
     direction = dirs[int(k) % int(len(dirs))]
     direction = direction / max(1e-12, float(np.linalg.norm(direction)))
 
-    base_scale = float(max(search_cfg.random_scale, 0.55))
-    scales = np.asarray([base_scale, 0.95, 1.35], dtype=float)
+    scales = np.asarray(
+        getattr(search_cfg, 'proposal_scale_ladder', (0.45, 0.75, 1.05, 1.35)),
+        dtype=float,
+    ).reshape(-1)
+    scales = scales[np.isfinite(scales) & (scales > 0.0)]
+    if scales.size == 0:
+        base_scale = float(max(search_cfg.random_scale, 0.55))
+        scales = np.asarray([base_scale, 0.95, 1.35], dtype=float)
     scale = float(scales[(int(k) // int(len(dirs))) % int(len(scales))])
 
-    jitter = rng.normal(loc=0.0, scale=0.15 * base_scale, size=(2,))
+    jitter_sigma = float(max(0.0, getattr(search_cfg, 'proposal_jitter_sigma', 0.12)))
+    jitter = rng.normal(loc=0.0, scale=jitter_sigma * max(0.25, scale), size=(2,))
     prop = scale * direction + jitter
     return project_delta_vec(prop, search_cfg.delta_clip, search_cfg.delta_l2_budget)
 
@@ -198,6 +214,35 @@ def trajectory_effect_l2_mean(
         return float(np.nanmean(diff_l2[mask]))
     return float(np.nanmean(diff_l2))
 
+
+def proposal_realization_ok(
+    cfg: ClosedLoopConfig,
+    effect_l2_mean: float,
+    trace_change_diag: Dict[str, float],
+) -> Tuple[bool, str]:
+    min_effect_l2 = float(max(0.0, getattr(cfg, 'surprise_min_effect_l2_mean', 0.05)))
+    min_logit = float(max(0.0, getattr(cfg, 'surprise_realization_min_logit_l1_all_mean', 1e-3)))
+    min_mean_l2 = float(max(0.0, getattr(cfg, 'surprise_realization_min_mean_l2_all_mean', 1e-2)))
+    min_moment_kl = float(max(0.0, getattr(cfg, 'surprise_realization_min_moment_kl_all_mean', 1e-4)))
+
+    if (not np.isfinite(effect_l2_mean)) or (float(effect_l2_mean) < min_effect_l2):
+        return False, f'effect_l2<{min_effect_l2:.3g}'
+
+    step_logit_l1_all = float(trace_change_diag.get('step_logit_l1_all_mean', np.nan))
+    step_mean_l2_all = float(trace_change_diag.get('step_mean_l2_all_mean', np.nan))
+    step_moment_kl_all = float(trace_change_diag.get('step_moment_kl_all_mean', np.nan))
+
+    has_logit = np.isfinite(step_logit_l1_all) and (step_logit_l1_all >= min_logit)
+    has_mean_l2 = np.isfinite(step_mean_l2_all) and (step_mean_l2_all >= min_mean_l2)
+    has_moment = np.isfinite(step_moment_kl_all) and (step_moment_kl_all >= min_moment_kl)
+    if bool(has_logit or has_mean_l2 or has_moment):
+        return True, 'ok'
+
+    return False, (
+        f'flat_dist_change(logit<{min_logit:.3g},'
+        f'mean_l2<{min_mean_l2:.3g},moment_kl<{min_moment_kl:.3g})'
+    )
+
 def calibrate_closed_loop_thresholds(
     runner: ClosedLoopRunner,
     eval_idx: np.ndarray,
@@ -208,7 +253,7 @@ def calibrate_closed_loop_thresholds(
     calib_ids = np.asarray(eval_idx[: min(len(eval_idx), cfg.n_closedloop_calib)], dtype=int)
     rows: List[Dict[str, Any]] = []
     sensitivity_rows: List[Dict[str, Any]] = []
-    min_effect_l2 = float(max(0.0, getattr(cfg, 'surprise_min_effect_l2_mean', 0.05)))
+    max_resample_attempts = int(max(1, getattr(cfg, 'surprise_proposal_max_resample_attempts', 4)))
     max_scan_scenarios = int(max(0, getattr(cfg, 'sensitivity_scan_max_scenarios', 20)))
     scan_sid_set = set(int(x) for x in calib_ids[:max_scan_scenarios].tolist())
     sensitivity_grid = make_sensitivity_grid_proposals(
@@ -375,8 +420,12 @@ def calibrate_closed_loop_thresholds(
                         seed_offset=50000 + int(g),
                     )
                     s_effect_l2 = trajectory_effect_l2_mean(base_xy, base_valid, s_xy, s_valid)
-                    s_effect_ok = bool(np.isfinite(s_effect_l2) and (s_effect_l2 >= min_effect_l2))
-                    if not s_effect_ok:
+                    s_realized, s_realize_reason = proposal_realization_ok(
+                        cfg=cfg,
+                        effect_l2_mean=float(s_effect_l2),
+                        trace_change_diag=s_trace_change_diag,
+                    )
+                    if not s_realized:
                         s_surprise = np.nan
                     sensitivity_rows.append({
                         'scenario_id': int(sid),
@@ -385,7 +434,8 @@ def calibrate_closed_loop_thresholds(
                         'surprise_pd': float(s_surprise),
                         'surprise_source': str(s_source),
                         'effect_l2_mean': float(s_effect_l2),
-                        'effect_ok': int(s_effect_ok),
+                        'effect_ok': int(s_realized),
+                        'realization_reason': str(s_realize_reason),
                         'rollout_feasible': int(s_feasible),
                         'step_mean_l2_mean': float(s_trace_change_diag.get('step_mean_l2_mean', np.nan)),
                         'step_std_l2_mean': float(s_trace_change_diag.get('step_std_l2_mean', np.nan)),
@@ -394,29 +444,70 @@ def calibrate_closed_loop_thresholds(
                     })
 
             for k in range(int(max(1, cfg.n_surprise_calib_proposals))):
-                prop = make_calibration_delta_proposal(rng, k, search_cfg)
+                best_row = None
+                for attempt in range(max_resample_attempts):
+                    proposal_id = int(k + attempt * int(max(1, cfg.n_surprise_calib_proposals)))
+                    prop = make_calibration_delta_proposal(rng, proposal_id, search_cfg)
+                    seed_offset = int(1000 + int(k) * 100 + attempt)
 
-                p_xy, p_valid, p_actions, p_action_valid, p_dist_trace, p_feasible, p_note = closed_loop_rollout_selected(
-                    base_state=base_state,
-                    selected_idx=selected_idx,
-                    target_obj_idx=target_idx,
-                    delta_xy=prop,
-                    cfg=cfg,
-                    planner_bundle=planner_bundle,
-                    seed=cfg.global_seed + int(sid) + 1000 + k,
-                )
-                p_risk = compute_risk_metrics(p_xy, p_valid, **risk_kwargs_from_cfg(cfg))
-                p_surprise, p_dist_diag, trace_change_diag, surprise_source = _compute_surprise_and_diags(
-                    prop_actions=p_actions,
-                    prop_action_valid=p_action_valid,
-                    prop_dist_trace=p_dist_trace,
-                    seed_offset=1000 + int(k),
-                )
+                    p_xy, p_valid, p_actions, p_action_valid, p_dist_trace, p_feasible, p_note = closed_loop_rollout_selected(
+                        base_state=base_state,
+                        selected_idx=selected_idx,
+                        target_obj_idx=target_idx,
+                        delta_xy=prop,
+                        cfg=cfg,
+                        planner_bundle=planner_bundle,
+                        seed=cfg.global_seed + int(sid) + seed_offset,
+                    )
+                    p_risk = compute_risk_metrics(p_xy, p_valid, **risk_kwargs_from_cfg(cfg))
+                    p_surprise, p_dist_diag, trace_change_diag, surprise_source = _compute_surprise_and_diags(
+                        prop_actions=p_actions,
+                        prop_action_valid=p_action_valid,
+                        prop_dist_trace=p_dist_trace,
+                        seed_offset=seed_offset,
+                    )
 
-                effect_l2_mean = trajectory_effect_l2_mean(base_xy, base_valid, p_xy, p_valid)
-                effect_ok = bool(np.isfinite(effect_l2_mean) and (effect_l2_mean >= min_effect_l2))
-                if not effect_ok:
-                    p_surprise = np.nan
+                    effect_l2_mean = trajectory_effect_l2_mean(base_xy, base_valid, p_xy, p_valid)
+                    realized_ok, realize_reason = proposal_realization_ok(
+                        cfg=cfg,
+                        effect_l2_mean=float(effect_l2_mean),
+                        trace_change_diag=trace_change_diag,
+                    )
+                    if not realized_ok:
+                        p_surprise = np.nan
+
+                    candidate_row = {
+                        'prop': prop,
+                        'p_risk': p_risk,
+                        'p_surprise': p_surprise,
+                        'p_dist_diag': p_dist_diag,
+                        'trace_change_diag': trace_change_diag,
+                        'surprise_source': surprise_source,
+                        'effect_l2_mean': effect_l2_mean,
+                        'realized_ok': realized_ok,
+                        'realize_reason': realize_reason,
+                        'p_feasible': p_feasible,
+                        'p_note': p_note,
+                        'attempt': int(attempt + 1),
+                    }
+                    best_row = candidate_row
+                    if realized_ok:
+                        break
+
+                if best_row is None:
+                    continue
+                prop = np.asarray(best_row['prop'], dtype=float)
+                p_risk = best_row['p_risk']
+                p_surprise = float(best_row['p_surprise'])
+                p_dist_diag = best_row['p_dist_diag']
+                trace_change_diag = best_row['trace_change_diag']
+                surprise_source = str(best_row['surprise_source'])
+                effect_l2_mean = float(best_row['effect_l2_mean'])
+                effect_ok = bool(best_row['realized_ok'])
+                realize_reason = str(best_row['realize_reason'])
+                p_feasible = int(best_row['p_feasible'])
+                p_note = str(best_row['p_note'])
+                proposal_attempts = int(best_row['attempt'])
 
                 rows.append({
                     'scenario_id': int(sid),
@@ -428,6 +519,9 @@ def calibrate_closed_loop_thresholds(
                     'surprise_source': str(surprise_source),
                     'proposal_effect_l2_mean': float(effect_l2_mean),
                     'proposal_effect_valid': int(effect_ok),
+                    'proposal_realized': int(effect_ok),
+                    'proposal_attempts': int(proposal_attempts),
+                    'proposal_realization_reason': str(realize_reason),
                     'base_failure_proxy': float(base_risk['failure_extended_proxy']),
                     'proposal_failure_proxy': float(p_risk['failure_extended_proxy']),
                     'base_rollout_feasible': int(base_feasible),

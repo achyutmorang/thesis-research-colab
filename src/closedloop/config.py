@@ -82,9 +82,15 @@ class ClosedLoopConfig:
     n_closedloop_calib: int = 120
     n_surprise_calib_proposals: int = 6
     surprise_min_effect_l2_mean: float = 0.05
+    surprise_realization_min_logit_l1_all_mean: float = 1e-3
+    surprise_realization_min_mean_l2_all_mean: float = 1e-2
+    surprise_realization_min_moment_kl_all_mean: float = 1e-4
+    surprise_proposal_max_resample_attempts: int = 4
     sensitivity_scan_max_scenarios: int = 20
     sensitivity_scan_num_angles: int = 8
     sensitivity_scan_scales: Tuple[float, float, float] = (0.45, 0.9, 1.2)
+    quick_probe_repeat_seeds: int = 3
+    quick_probe_stability_topk: int = 3
     high_quantile: float = 0.80
 
     # Run controls: fairness, chunking, resume
@@ -118,6 +124,8 @@ class SearchConfig:
 
     # Random baseline proposal scale
     random_scale: float = 0.35
+    proposal_scale_ladder: Tuple[float, float, float, float] = (0.45, 0.75, 1.05, 1.35)
+    proposal_jitter_sigma: float = 0.12
 
     # Objective scales floor
     min_scale: float = 1e-6

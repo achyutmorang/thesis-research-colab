@@ -16,6 +16,7 @@ from .calibration import (
     build_calibration_diagnostics,
     calibrate_closed_loop_thresholds,
     make_calibration_delta_proposal,
+    proposal_realization_ok,
     run_closedloop_preflight_checks,
 )
 from .config import (
@@ -322,6 +323,132 @@ def _trajectory_effect_l2_mean(
     return float(np.nanmean(vals))
 
 
+def _rankdata_average(x: np.ndarray) -> np.ndarray:
+    arr = np.asarray(x, dtype=float).reshape(-1)
+    n = int(arr.size)
+    if n == 0:
+        return np.asarray([], dtype=float)
+    order = np.argsort(arr, kind='mergesort')
+    ranks = np.zeros(n, dtype=float)
+    i = 0
+    while i < n:
+        j = i + 1
+        while j < n and arr[order[j]] == arr[order[i]]:
+            j += 1
+        avg_rank = 0.5 * (i + j - 1) + 1.0
+        ranks[order[i:j]] = avg_rank
+        i = j
+    return ranks
+
+
+def _spearman_corr(x: np.ndarray, y: np.ndarray) -> float:
+    xx = np.asarray(x, dtype=float).reshape(-1)
+    yy = np.asarray(y, dtype=float).reshape(-1)
+    n = int(min(xx.size, yy.size))
+    if n < 2:
+        return float('nan')
+    xx = xx[:n]
+    yy = yy[:n]
+    m = np.isfinite(xx) & np.isfinite(yy)
+    if int(np.sum(m)) < 2:
+        return float('nan')
+    rx = _rankdata_average(xx[m])
+    ry = _rankdata_average(yy[m])
+    if rx.size < 2:
+        return float('nan')
+    sx = float(np.std(rx))
+    sy = float(np.std(ry))
+    if (sx <= 1e-12) or (sy <= 1e-12):
+        return float('nan')
+    return float(np.corrcoef(rx, ry)[0, 1])
+
+
+def _topk_jaccard(proposal_ids: np.ndarray, x: np.ndarray, y: np.ndarray, k: int) -> float:
+    ids = np.asarray(proposal_ids).reshape(-1)
+    xx = np.asarray(x, dtype=float).reshape(-1)
+    yy = np.asarray(y, dtype=float).reshape(-1)
+    n = int(min(ids.size, xx.size, yy.size))
+    if n <= 0:
+        return float('nan')
+    ids = ids[:n]
+    xx = xx[:n]
+    yy = yy[:n]
+    m = np.isfinite(xx) & np.isfinite(yy)
+    if int(np.sum(m)) <= 0:
+        return float('nan')
+    ids = ids[m]
+    xx = xx[m]
+    yy = yy[m]
+    kk = int(max(1, min(int(k), ids.size)))
+    top_x = set(ids[np.argsort(xx)[-kk:]].tolist())
+    top_y = set(ids[np.argsort(yy)[-kk:]].tolist())
+    union = top_x.union(top_y)
+    if len(union) == 0:
+        return float('nan')
+    return float(len(top_x.intersection(top_y)) / len(union))
+
+
+def _probe_ranking_stability(probe_df: pd.DataFrame, topk: int) -> Dict[str, float]:
+    if probe_df.empty:
+        return {
+            'ranking_scenarios_count': 0.0,
+            'rank_spearman_mean': np.nan,
+            'rank_spearman_min': np.nan,
+            'topk_jaccard_mean': np.nan,
+            'topk_jaccard_min': np.nan,
+        }
+    required = {'scenario_id', 'proposal_id', 'repeat_id', 'surprise_pd'}
+    if not required.issubset(set(probe_df.columns)):
+        return {
+            'ranking_scenarios_count': 0.0,
+            'rank_spearman_mean': np.nan,
+            'rank_spearman_min': np.nan,
+            'topk_jaccard_mean': np.nan,
+            'topk_jaccard_min': np.nan,
+        }
+
+    spearman_vals: List[float] = []
+    jaccard_vals: List[float] = []
+    scenario_count = 0
+
+    base = probe_df[np.isfinite(probe_df['surprise_pd'].to_numpy(dtype=float))].copy()
+    base = base[base['proposal_id'].astype(int) >= 0]
+    for sid, grp in base.groupby('scenario_id'):
+        piv = grp.pivot_table(
+            index='proposal_id',
+            columns='repeat_id',
+            values='surprise_pd',
+            aggfunc='mean',
+        )
+        if (0 not in piv.columns) or (piv.shape[0] < 2) or (piv.shape[1] < 2):
+            continue
+        proposal_ids = np.asarray(piv.index.to_numpy(), dtype=int)
+        x0 = piv[0].to_numpy(dtype=float)
+        scenario_has_metric = False
+        for rid in piv.columns:
+            if int(rid) == 0:
+                continue
+            xr = piv[rid].to_numpy(dtype=float)
+            rho = _spearman_corr(x0, xr)
+            if np.isfinite(rho):
+                spearman_vals.append(float(rho))
+                scenario_has_metric = True
+            jac = _topk_jaccard(proposal_ids, x0, xr, k=topk)
+            if np.isfinite(jac):
+                jaccard_vals.append(float(jac))
+                scenario_has_metric = True
+        if scenario_has_metric:
+            scenario_count += 1
+
+    return {
+        'ranking_scenarios_count': float(scenario_count),
+        'rank_spearman_mean': float(np.mean(spearman_vals)) if len(spearman_vals) > 0 else np.nan,
+        'rank_spearman_min': float(np.min(spearman_vals)) if len(spearman_vals) > 0 else np.nan,
+        'topk_jaccard_mean': float(np.mean(jaccard_vals)) if len(jaccard_vals) > 0 else np.nan,
+        'topk_jaccard_min': float(np.min(jaccard_vals)) if len(jaccard_vals) > 0 else np.nan,
+    }
+
+
 def run_quick_surprise_probe(
     cfg: ClosedLoopConfig,
     search_cfg: SearchConfig,
@@ -329,9 +456,14 @@ def run_quick_surprise_probe(
     proposals_per_scenario: int = 4,
     data_iter: Optional[Iterable[Any]] = None,
     dataset_config: Optional[Any] = None,
+    repeat_seeds: Optional[int] = None,
+    max_resample_attempts: Optional[int] = None,
 ) -> Tuple[pd.DataFrame, pd.DataFrame]:
     n_probe_scenarios = int(max(1, n_probe_scenarios))
     proposals_per_scenario = int(max(1, proposals_per_scenario))
+    repeat_seeds = int(max(1, repeat_seeds if repeat_seeds is not None else getattr(cfg, 'quick_probe_repeat_seeds', 3)))
+    max_resample_attempts = int(max(1, max_resample_attempts if max_resample_attempts is not None else getattr(cfg, 'surprise_proposal_max_resample_attempts', 4)))
+    topk = int(max(1, getattr(cfg, 'quick_probe_stability_topk', 3)))
 
     loader = WaymaxScenarioLoader(cfg, data_iter=data_iter, dataset_config=dataset_config)
     keep_state_ids = set(range(n_probe_scenarios))
@@ -349,9 +481,13 @@ def run_quick_surprise_probe(
             rows.append({
                 'scenario_id': sid,
                 'proposal_id': -1,
+                'repeat_id': 0,
                 'surprise_pd': np.nan,
                 'surprise_source': 'no_state',
                 'proposal_effect_l2_mean': np.nan,
+                'proposal_realized': 0,
+                'proposal_attempts': 0,
+                'proposal_realization_reason': 'state_missing',
                 'proposal_dist_fallback_ratio': np.nan,
                 'proposal_dist_actor_fallback_ratio': np.nan,
                 'proposal_dist_source_model_ratio': np.nan,
@@ -372,60 +508,66 @@ def run_quick_surprise_probe(
             target_idx = _choose_target_non_ego(rec['state'], selected_idx)
             planner_bundle = make_closed_loop_components(rec['state'], cfg.planner_kind, cfg.planner_name, cfg)
 
-            base_xy, base_valid, base_actions, base_action_valid, base_dist_trace, base_feasible, _ = closed_loop_rollout_selected(
-                base_state=rec['state'],
-                selected_idx=selected_idx,
-                target_obj_idx=target_idx,
-                delta_xy=np.zeros((2,), dtype=float),
-                cfg=cfg,
-                planner_bundle=planner_bundle,
-                seed=int(cfg.global_seed + sid),
-            )
-
-            if planner_bundle['planner_type'] == 'latentdriver':
-                base_dist_diag = dist_trace_diagnostics(base_dist_trace)
-            else:
-                base_dist_diag = {
-                    'dist_fallback_ratio': np.nan,
-                    'dist_actor_fallback_ratio': np.nan,
-                    'dist_source_model_ratio': np.nan,
-                    'dist_source_proxy_ratio': np.nan,
-                }
-
-            rng = np.random.default_rng(int(cfg.global_seed + sid * 10007 + 77))
-            for k in range(proposals_per_scenario):
-                prop = make_calibration_delta_proposal(rng, k, search_cfg)
-                p_xy, p_valid, p_actions, p_action_valid, p_dist_trace, p_feasible, _ = closed_loop_rollout_selected(
+            base_rollouts: List[Dict[str, Any]] = []
+            for r in range(repeat_seeds):
+                base_seed = int(cfg.global_seed + sid + r * 100003)
+                base_xy, base_valid, base_actions, base_action_valid, base_dist_trace, base_feasible, _ = closed_loop_rollout_selected(
                     base_state=rec['state'],
                     selected_idx=selected_idx,
                     target_obj_idx=target_idx,
-                    delta_xy=prop,
+                    delta_xy=np.zeros((2,), dtype=float),
                     cfg=cfg,
                     planner_bundle=planner_bundle,
-                    seed=int(cfg.global_seed + sid + 1000 + k),
+                    seed=base_seed,
                 )
+                if planner_bundle['planner_type'] == 'latentdriver':
+                    base_dist_diag = dist_trace_diagnostics(base_dist_trace)
+                else:
+                    base_dist_diag = {
+                        'dist_fallback_ratio': np.nan,
+                        'dist_actor_fallback_ratio': np.nan,
+                        'dist_source_model_ratio': np.nan,
+                        'dist_source_proxy_ratio': np.nan,
+                    }
+                base_rollouts.append({
+                    'base_xy': base_xy,
+                    'base_valid': base_valid,
+                    'base_actions': base_actions,
+                    'base_action_valid': base_action_valid,
+                    'base_dist_trace': base_dist_trace,
+                    'base_feasible': base_feasible,
+                    'base_dist_diag': base_dist_diag,
+                })
 
+            def _compute_surprise_for_repeat(
+                p_actions: np.ndarray,
+                p_action_valid: np.ndarray,
+                p_dist_trace: List[Optional[Dict[str, np.ndarray]]],
+                repeat_id: int,
+                seed_offset: int,
+            ) -> Tuple[float, Dict[str, float], Dict[str, float], str]:
+                base_info = base_rollouts[int(repeat_id)]
                 if planner_bundle['planner_type'] == 'latentdriver':
                     p_surprise = predictive_kl_from_dist_traces(
                         p_dist_trace,
-                        base_dist_trace,
+                        base_info['base_dist_trace'],
                         estimator=cfg.predictive_kl_estimator,
                         n_mc_samples=cfg.predictive_kl_mc_samples,
-                        seed=int(cfg.predictive_kl_mc_seed + sid * 1000 + k),
+                        seed=int(cfg.predictive_kl_mc_seed + sid * 1000 + seed_offset),
                         eps=float(cfg.predictive_kl_eps),
                         symmetric=bool(cfg.predictive_kl_symmetric),
                         skip_fallback_steps=bool(cfg.predictive_kl_skip_fallback_steps),
                     )
                     p_dist_diag = dist_trace_diagnostics(p_dist_trace)
-                    trace_diag = dist_trace_change_stats(p_dist_trace, base_dist_trace)
+                    trace_diag = dist_trace_change_stats(p_dist_trace, base_info['base_dist_trace'])
                     surprise_source = 'predictive_kl'
 
                     if (not np.isfinite(p_surprise)) or (float(p_surprise) <= 1e-12):
                         action_surprise = planner_action_surprise_kl(
                             p_actions,
                             p_action_valid,
-                            base_actions,
-                            base_action_valid,
+                            base_info['base_actions'],
+                            base_info['base_action_valid'],
                             sigma=0.25,
                         )
                         if np.isfinite(action_surprise) and float(action_surprise) > 1e-12:
@@ -440,8 +582,8 @@ def run_quick_surprise_probe(
                     p_surprise = planner_action_surprise_kl(
                         p_actions,
                         p_action_valid,
-                        base_actions,
-                        base_action_valid,
+                        base_info['base_actions'],
+                        base_info['base_action_valid'],
                         sigma=0.25,
                     )
                     p_dist_diag = {
@@ -459,41 +601,127 @@ def run_quick_surprise_probe(
                         'step_logit_l1_all_mean': np.nan,
                     }
                     surprise_source = 'action_kl'
+                return float(p_surprise), p_dist_diag, trace_diag, str(surprise_source)
 
-                rows.append({
-                    'scenario_id': int(sid),
-                    'proposal_id': int(k),
-                    'base_rollout_feasible': int(base_feasible),
-                    'proposal_rollout_feasible': int(p_feasible),
-                    'delta_x': float(prop[0]),
-                    'delta_y': float(prop[1]),
-                    'delta_l2': float(np.linalg.norm(prop)),
-                    'surprise_pd': float(p_surprise),
-                    'surprise_source': str(surprise_source),
-                    'proposal_effect_l2_mean': float(_trajectory_effect_l2_mean(base_xy, base_valid, p_xy, p_valid)),
-                    'base_dist_fallback_ratio': float(base_dist_diag.get('dist_fallback_ratio', np.nan)),
-                    'base_dist_actor_fallback_ratio': float(base_dist_diag.get('dist_actor_fallback_ratio', np.nan)),
-                    'base_dist_source_model_ratio': float(base_dist_diag.get('dist_source_model_ratio', np.nan)),
-                    'base_dist_source_proxy_ratio': float(base_dist_diag.get('dist_source_proxy_ratio', np.nan)),
-                    'proposal_dist_fallback_ratio': float(p_dist_diag.get('dist_fallback_ratio', np.nan)),
-                    'proposal_dist_actor_fallback_ratio': float(p_dist_diag.get('dist_actor_fallback_ratio', np.nan)),
-                    'proposal_dist_source_model_ratio': float(p_dist_diag.get('dist_source_model_ratio', np.nan)),
-                    'proposal_dist_source_proxy_ratio': float(p_dist_diag.get('dist_source_proxy_ratio', np.nan)),
-                    'trace_pair_ratio': float(trace_diag.get('trace_pair_ratio', np.nan)),
-                    'trace_pair_ratio_all': float(trace_diag.get('trace_pair_ratio_all', np.nan)),
-                    'step_mean_l2_mean': float(trace_diag.get('step_mean_l2_mean', np.nan)),
-                    'step_mean_l2_all_mean': float(trace_diag.get('step_mean_l2_all_mean', np.nan)),
-                    'step_logit_l1_mean': float(trace_diag.get('step_logit_l1_mean', np.nan)),
-                    'step_logit_l1_all_mean': float(trace_diag.get('step_logit_l1_all_mean', np.nan)),
-                    'probe_error': '',
-                })
+            rng = np.random.default_rng(int(cfg.global_seed + sid * 10007 + 77))
+            for k in range(proposals_per_scenario):
+                chosen_prop = None
+                chosen_attempts = 0
+                for attempt in range(max_resample_attempts):
+                    proposal_key = int(k + attempt * proposals_per_scenario)
+                    prop_try = make_calibration_delta_proposal(rng, proposal_key, search_cfg)
+                    seed_try = int(cfg.global_seed + sid + 1000 + k * 101 + attempt)
+                    p_xy_try, p_valid_try, p_actions_try, p_action_valid_try, p_dist_trace_try, _, _ = closed_loop_rollout_selected(
+                        base_state=rec['state'],
+                        selected_idx=selected_idx,
+                        target_obj_idx=target_idx,
+                        delta_xy=prop_try,
+                        cfg=cfg,
+                        planner_bundle=planner_bundle,
+                        seed=seed_try,
+                    )
+                    _, _, trace_diag_try, _ = _compute_surprise_for_repeat(
+                        p_actions=p_actions_try,
+                        p_action_valid=p_action_valid_try,
+                        p_dist_trace=p_dist_trace_try,
+                        repeat_id=0,
+                        seed_offset=1000 + k * 101 + attempt,
+                    )
+                    effect_try = float(_trajectory_effect_l2_mean(
+                        base_rollouts[0]['base_xy'],
+                        base_rollouts[0]['base_valid'],
+                        p_xy_try,
+                        p_valid_try,
+                    ))
+                    realized_ok, realize_reason = proposal_realization_ok(
+                        cfg=cfg,
+                        effect_l2_mean=effect_try,
+                        trace_change_diag=trace_diag_try,
+                    )
+                    chosen_prop = np.asarray(prop_try, dtype=float)
+                    chosen_attempts = int(attempt + 1)
+                    if realized_ok:
+                        break
+
+                if chosen_prop is None:
+                    chosen_prop = np.zeros((2,), dtype=float)
+                    chosen_attempts = 0
+
+                for repeat_id in range(repeat_seeds):
+                    seed_offset = int(1000 + k * 101 + repeat_id * 10007)
+                    p_xy, p_valid, p_actions, p_action_valid, p_dist_trace, p_feasible, _ = closed_loop_rollout_selected(
+                        base_state=rec['state'],
+                        selected_idx=selected_idx,
+                        target_obj_idx=target_idx,
+                        delta_xy=chosen_prop,
+                        cfg=cfg,
+                        planner_bundle=planner_bundle,
+                        seed=int(cfg.global_seed + sid + seed_offset),
+                    )
+                    p_surprise, p_dist_diag, trace_diag, surprise_source = _compute_surprise_for_repeat(
+                        p_actions=p_actions,
+                        p_action_valid=p_action_valid,
+                        p_dist_trace=p_dist_trace,
+                        repeat_id=repeat_id,
+                        seed_offset=seed_offset,
+                    )
+                    effect_l2_mean = float(_trajectory_effect_l2_mean(
+                        base_rollouts[repeat_id]['base_xy'],
+                        base_rollouts[repeat_id]['base_valid'],
+                        p_xy,
+                        p_valid,
+                    ))
+                    realized_ok, realize_reason = proposal_realization_ok(
+                        cfg=cfg,
+                        effect_l2_mean=effect_l2_mean,
+                        trace_change_diag=trace_diag,
+                    )
+                    if not realized_ok:
+                        p_surprise = np.nan
+
+                    base_dist_diag = base_rollouts[repeat_id]['base_dist_diag']
+                    rows.append({
+                        'scenario_id': int(sid),
+                        'proposal_id': int(k),
+                        'repeat_id': int(repeat_id),
+                        'base_rollout_feasible': int(base_rollouts[repeat_id]['base_feasible']),
+                        'proposal_rollout_feasible': int(p_feasible),
+                        'delta_x': float(chosen_prop[0]),
+                        'delta_y': float(chosen_prop[1]),
+                        'delta_l2': float(np.linalg.norm(chosen_prop)),
+                        'surprise_pd': float(p_surprise),
+                        'surprise_source': str(surprise_source),
+                        'proposal_effect_l2_mean': float(effect_l2_mean),
+                        'proposal_realized': int(realized_ok),
+                        'proposal_attempts': int(chosen_attempts),
+                        'proposal_realization_reason': str(realize_reason),
+                        'base_dist_fallback_ratio': float(base_dist_diag.get('dist_fallback_ratio', np.nan)),
+                        'base_dist_actor_fallback_ratio': float(base_dist_diag.get('dist_actor_fallback_ratio', np.nan)),
+                        'base_dist_source_model_ratio': float(base_dist_diag.get('dist_source_model_ratio', np.nan)),
+                        'base_dist_source_proxy_ratio': float(base_dist_diag.get('dist_source_proxy_ratio', np.nan)),
+                        'proposal_dist_fallback_ratio': float(p_dist_diag.get('dist_fallback_ratio', np.nan)),
+                        'proposal_dist_actor_fallback_ratio': float(p_dist_diag.get('dist_actor_fallback_ratio', np.nan)),
+                        'proposal_dist_source_model_ratio': float(p_dist_diag.get('dist_source_model_ratio', np.nan)),
+                        'proposal_dist_source_proxy_ratio': float(p_dist_diag.get('dist_source_proxy_ratio', np.nan)),
+                        'trace_pair_ratio': float(trace_diag.get('trace_pair_ratio', np.nan)),
+                        'trace_pair_ratio_all': float(trace_diag.get('trace_pair_ratio_all', np.nan)),
+                        'step_mean_l2_mean': float(trace_diag.get('step_mean_l2_mean', np.nan)),
+                        'step_mean_l2_all_mean': float(trace_diag.get('step_mean_l2_all_mean', np.nan)),
+                        'step_logit_l1_mean': float(trace_diag.get('step_logit_l1_mean', np.nan)),
+                        'step_logit_l1_all_mean': float(trace_diag.get('step_logit_l1_all_mean', np.nan)),
+                        'probe_error': '',
+                    })
         except Exception as e:
             rows.append({
                 'scenario_id': int(sid),
                 'proposal_id': -1,
+                'repeat_id': 0,
                 'surprise_pd': np.nan,
                 'surprise_source': 'probe_exception',
                 'proposal_effect_l2_mean': np.nan,
+                'proposal_realized': 0,
+                'proposal_attempts': 0,
+                'proposal_realization_reason': 'probe_exception',
                 'proposal_dist_fallback_ratio': np.nan,
                 'proposal_dist_actor_fallback_ratio': np.nan,
                 'proposal_dist_source_model_ratio': np.nan,
@@ -526,6 +754,13 @@ def run_quick_surprise_probe(
             'trace_pair_ratio_all_mean': np.nan,
             'step_mean_l2_all_mean': np.nan,
             'step_logit_l1_all_mean': np.nan,
+            'proposal_realized_fraction': np.nan,
+            'proposal_attempts_mean': np.nan,
+            'ranking_scenarios_count': 0.0,
+            'rank_spearman_mean': np.nan,
+            'rank_spearman_min': np.nan,
+            'topk_jaccard_mean': np.nan,
+            'topk_jaccard_min': np.nan,
             'n_probe_errors': 0,
             'surprise_source_counts': '{}',
         }])
@@ -538,6 +773,7 @@ def run_quick_surprise_probe(
         if 'surprise_source' in probe_df.columns
         else {}
     )
+    stability = _probe_ranking_stability(probe_df=probe_df, topk=topk)
     summary_df = pd.DataFrame([{
         'n_rows': int(len(probe_df)),
         'n_scenarios': int(probe_df['scenario_id'].nunique()) if 'scenario_id' in probe_df else 0,
@@ -554,6 +790,13 @@ def run_quick_surprise_probe(
         'trace_pair_ratio_all_mean': float(np.nanmean(probe_df['trace_pair_ratio_all'].to_numpy(dtype=float))) if 'trace_pair_ratio_all' in probe_df else np.nan,
         'step_mean_l2_all_mean': float(np.nanmean(probe_df['step_mean_l2_all_mean'].to_numpy(dtype=float))) if 'step_mean_l2_all_mean' in probe_df else np.nan,
         'step_logit_l1_all_mean': float(np.nanmean(probe_df['step_logit_l1_all_mean'].to_numpy(dtype=float))) if 'step_logit_l1_all_mean' in probe_df else np.nan,
+        'proposal_realized_fraction': float(np.nanmean(probe_df['proposal_realized'].to_numpy(dtype=float))) if 'proposal_realized' in probe_df else np.nan,
+        'proposal_attempts_mean': float(np.nanmean(probe_df['proposal_attempts'].to_numpy(dtype=float))) if 'proposal_attempts' in probe_df else np.nan,
+        'ranking_scenarios_count': float(stability.get('ranking_scenarios_count', 0.0)),
+        'rank_spearman_mean': float(stability.get('rank_spearman_mean', np.nan)),
+        'rank_spearman_min': float(stability.get('rank_spearman_min', np.nan)),
+        'topk_jaccard_mean': float(stability.get('topk_jaccard_mean', np.nan)),
+        'topk_jaccard_min': float(stability.get('topk_jaccard_min', np.nan)),
         'n_probe_errors': int(np.sum(probe_df.get('probe_error', '').astype(str).str.len() > 0)),
         'surprise_source_counts': json.dumps(source_counts),
     }])
@@ -627,7 +870,21 @@ def run_closed_loop(
                 scenario_seed = int(cfg.global_seed + sid * 7919)
                 scenario_rng = np.random.default_rng(scenario_seed)
                 n_props = int(max(0, search_cfg.budget_evals - 1))
-                proposal_bank = scenario_rng.normal(size=(n_props, 2)).astype(np.float32) if n_props > 0 else np.zeros((0, 2), dtype=np.float32)
+                if n_props > 0:
+                    proposal_dirs: List[np.ndarray] = []
+                    for k in range(n_props):
+                        prop = np.asarray(make_calibration_delta_proposal(scenario_rng, k, search_cfg), dtype=float).reshape(-1)
+                        if prop.size < 2:
+                            prop = np.asarray([1.0, 0.0], dtype=float)
+                        norm = float(np.linalg.norm(prop[:2]))
+                        if norm < 1e-12:
+                            direction = np.asarray([1.0, 0.0], dtype=np.float32)
+                        else:
+                            direction = (prop[:2] / norm).astype(np.float32)
+                        proposal_dirs.append(direction)
+                    proposal_bank = np.asarray(proposal_dirs, dtype=np.float32)
+                else:
+                    proposal_bank = np.zeros((0, 2), dtype=np.float32)
                 rollout_seed_schedule = [
                     int(cfg.global_seed + sid * cfg.rollout_seed_stride + k)
                     for k in range(int(search_cfg.budget_evals) + 1)
