@@ -6,9 +6,13 @@ import pandas as pd
 from src.eval.analysis import (
     budget_normalized_efficiency,
     conditional_lift_by_risk_bins,
+    deterministic_scenario_split,
     discovery_auc,
     discovery_curve_from_trace,
     method_summary,
+    paired_effect_significance_table,
+    paired_permutation_pvalue,
+    paired_shuffle_control,
 )
 
 
@@ -100,3 +104,43 @@ def test_discovery_curve_monotonic_and_auc():
     auc_df = discovery_auc(curve_df)
     assert not auc_df.empty
     assert np.isfinite(auc_df["normalized_auc"]).all()
+
+
+def test_paired_permutation_and_shuffle_control_detect_positive_effect():
+    df = _mock_results()
+    paired = (
+        df[df["method"].isin(["joint", "risk_only"])]
+        .pivot_table(index="scenario_id", columns="method", values="blind_spot_proxy_hit", aggfunc="mean")
+        .dropna()
+        .reset_index()
+    )
+    paired["delta"] = paired["joint"] - paired["risk_only"]
+
+    perm = paired_permutation_pvalue(paired, delta_col="delta", n_perm=1000, seed=11, alternative="greater")
+    shuf = paired_shuffle_control(paired, treatment_col="joint", control_col="risk_only", n_shuffle=1000, seed=11)
+
+    assert perm["n_pairs"] > 0
+    assert 0.0 <= perm["p_value"] <= 1.0
+    assert shuf["n_pairs"] > 0
+    assert 0.0 <= shuf["shuffle_p_ge_observed"] <= 1.0
+
+
+def test_deterministic_split_and_significance_table_has_expected_rows():
+    df = _mock_results()
+    split_df = deterministic_scenario_split(df, holdout_fraction=0.34, seed=7)
+    assert set(split_df["eval_split"].unique().tolist()) == {"explore", "holdout"}
+
+    merged = df.merge(split_df, on="scenario_id", how="left")
+    out = paired_effect_significance_table(
+        merged,
+        treatment="joint",
+        control="risk_only",
+        outcome_col="blind_spot_proxy_hit",
+        split_col="eval_split",
+        bootstrap_samples=200,
+        permutation_samples=500,
+        shuffle_samples=500,
+        seed=9,
+    )
+    assert {"all", "explore", "holdout"}.issubset(set(out["split"].tolist()))
+    assert np.isfinite(out["n_pairs"]).all()

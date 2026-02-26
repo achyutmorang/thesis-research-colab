@@ -217,24 +217,51 @@ def _replace_obj(obj: Any, **kwargs: Any) -> Any:
             pass
     raise RuntimeError(f'Unable to replace object fields: {list(kwargs.keys())}')
 
-def _shift_traj_t0_xy(traj: Any, target_obj_idx: int, delta_xy_j: jnp.ndarray) -> Any:
+def _safe_state_timestep(base_state: Any) -> int:
+    try:
+        raw = np.asarray(getattr(base_state, 'timestep', 0)).reshape(-1)
+        if raw.size <= 0:
+            return 0
+        val = float(raw[0])
+        if not np.isfinite(val):
+            return 0
+        return int(max(0, val))
+    except Exception:
+        return 0
+
+
+def _shift_traj_xy_at_time(
+    traj: Any,
+    target_obj_idx: int,
+    delta_xy_j: jnp.ndarray,
+    time_index: int,
+) -> Any:
     # Waymax trajectory schemas vary across versions.
     # In many versions, xy is a derived property while canonical fields are x/y.
     if hasattr(traj, 'x') and hasattr(traj, 'y'):
         try:
             x_arr = jnp.asarray(traj.x)
             y_arr = jnp.asarray(traj.y)
+            if x_arr.ndim == 1 and y_arr.ndim == 1:
+                obj_count = int(x_arr.shape[0])
+                if 0 <= int(target_obj_idx) < obj_count:
+                    x_new = x_arr.at[int(target_obj_idx)].add(delta_xy_j[0])
+                    y_new = y_arr.at[int(target_obj_idx)].add(delta_xy_j[1])
+                    return _replace_obj(traj, x=x_new, y=y_new)
+                raise RuntimeError(f'target_obj_idx out of range for x/y vectors: idx={target_obj_idx}, n_obj={obj_count}')
             if x_arr.ndim >= 2 and y_arr.ndim >= 2:
                 obj_axis = int(x_arr.ndim - 2)
                 time_axis = int(x_arr.ndim - 1)
                 obj_count = int(x_arr.shape[obj_axis])
+                time_count = int(x_arr.shape[time_axis])
                 if 0 <= int(target_obj_idx) < obj_count:
                     ix = [slice(None)] * x_arr.ndim
                     iy = [slice(None)] * y_arr.ndim
                     ix[obj_axis] = int(target_obj_idx)
                     iy[obj_axis] = int(target_obj_idx)
-                    ix[time_axis] = 0
-                    iy[time_axis] = 0
+                    t_idx = int(np.clip(int(time_index), 0, max(0, time_count - 1)))
+                    ix[time_axis] = t_idx
+                    iy[time_axis] = t_idx
                     x_new = x_arr.at[tuple(ix)].add(delta_xy_j[0])
                     y_new = y_arr.at[tuple(iy)].add(delta_xy_j[1])
                 else:
@@ -248,15 +275,26 @@ def _shift_traj_t0_xy(traj: Any, target_obj_idx: int, delta_xy_j: jnp.ndarray) -
     if hasattr(traj, 'xy'):
         try:
             xy_arr = jnp.asarray(traj.xy)
+            if xy_arr.ndim == 2 and xy_arr.shape[1] >= 2:
+                obj_count = int(xy_arr.shape[0])
+                if 0 <= int(target_obj_idx) < obj_count:
+                    idx = [slice(None)] * xy_arr.ndim
+                    idx[0] = int(target_obj_idx)
+                    idx[1] = slice(0, 2)
+                    xy_new = xy_arr.at[tuple(idx)].add(delta_xy_j[:2])
+                    return _replace_obj(traj, xy=xy_new)
+                raise RuntimeError(f'target_obj_idx out of range for xy matrix: idx={target_obj_idx}, n_obj={obj_count}')
             if xy_arr.ndim >= 3:
                 obj_axis = int(xy_arr.ndim - 3)
                 time_axis = int(xy_arr.ndim - 2)
                 coord_axis = int(xy_arr.ndim - 1)
                 obj_count = int(xy_arr.shape[obj_axis])
+                time_count = int(xy_arr.shape[time_axis])
                 if 0 <= int(target_obj_idx) < obj_count:
                     idx = [slice(None)] * xy_arr.ndim
                     idx[obj_axis] = int(target_obj_idx)
-                    idx[time_axis] = 0
+                    t_idx = int(np.clip(int(time_index), 0, max(0, time_count - 1)))
+                    idx[time_axis] = t_idx
                     idx[coord_axis] = slice(0, 2)
                     xy_new = xy_arr.at[tuple(idx)].add(delta_xy_j[:2])
                 else:
@@ -271,11 +309,43 @@ def _shift_traj_t0_xy(traj: Any, target_obj_idx: int, delta_xy_j: jnp.ndarray) -
         'Unable to apply perturbation: trajectory replacement with (x,y) and xy both failed.'
     )
 
-def perturb_initial_state(base_state: Any, target_obj_idx: int, delta_xy: np.ndarray) -> Any:
+def perturb_initial_state(
+    base_state: Any,
+    target_obj_idx: int,
+    delta_xy: np.ndarray,
+    cfg: Optional[ClosedLoopConfig] = None,
+) -> Any:
     delta_xy_j = jnp.asarray(delta_xy, dtype=jnp.float32)
-    log_traj_new = _shift_traj_t0_xy(base_state.log_trajectory, target_obj_idx, delta_xy_j)
-    sim_traj_new = _shift_traj_t0_xy(base_state.sim_trajectory, target_obj_idx, delta_xy_j)
-    return _replace_obj(base_state, log_trajectory=log_traj_new, sim_trajectory=sim_traj_new)
+    apply_from_current = bool(getattr(cfg, 'perturb_from_current_timestep', True)) if cfg is not None else True
+    persist_steps = int(max(1, getattr(cfg, 'perturb_persist_steps', 1))) if cfg is not None else 1
+    start_time = _safe_state_timestep(base_state) if apply_from_current else 0
+
+    log_traj_new = base_state.log_trajectory
+    sim_traj_new = base_state.sim_trajectory
+    for offset in range(persist_steps):
+        t_idx = int(start_time + offset)
+        log_traj_new = _shift_traj_xy_at_time(log_traj_new, target_obj_idx, delta_xy_j, t_idx)
+        sim_traj_new = _shift_traj_xy_at_time(sim_traj_new, target_obj_idx, delta_xy_j, t_idx)
+
+    kwargs = {
+        'log_trajectory': log_traj_new,
+        'sim_trajectory': sim_traj_new,
+    }
+
+    if hasattr(base_state, 'current_sim_trajectory'):
+        try:
+            cur_time = _safe_state_timestep(base_state) if apply_from_current else 0
+            cur_traj_new = _shift_traj_xy_at_time(
+                base_state.current_sim_trajectory,
+                target_obj_idx,
+                delta_xy_j,
+                cur_time,
+            )
+            kwargs['current_sim_trajectory'] = cur_traj_new
+        except Exception:
+            pass
+
+    return _replace_obj(base_state, **kwargs)
 
 def _softmax_np(x: np.ndarray) -> np.ndarray:
     z = np.asarray(x, dtype=float)
@@ -1290,7 +1360,7 @@ def closed_loop_rollout_selected(
     sdc_idx = int(planner_bundle['sdc_idx'])
 
     try:
-        perturbed = perturb_initial_state(base_state, target_obj_idx, delta_xy)
+        perturbed = perturb_initial_state(base_state, target_obj_idx, delta_xy, cfg=cfg)
         state = env.reset(perturbed)
 
         rng = jax.random.PRNGKey(int(seed))

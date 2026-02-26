@@ -77,6 +77,10 @@ class ClosedLoopConfig:
     latentdriver_auto_align_token_count: bool = True
     latentdriver_expected_token_count: int = 0
     latentdriver_preflight_max_fallback_ratio: float = 0.95
+    # Perturbation injection controls:
+    # apply at current simulator timestep and optionally persist for a short window.
+    perturb_from_current_timestep: bool = True
+    perturb_persist_steps: int = 3
 
     # Calibration from closed-loop base rollouts
     n_closedloop_calib: int = 120

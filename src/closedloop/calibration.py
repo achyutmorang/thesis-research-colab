@@ -66,6 +66,26 @@ def run_closedloop_preflight_checks(runner: Any, cfg: ClosedLoopConfig, eval_idx
         add('smoke_rollout_finite', bool(np.isfinite(xy).all() and np.isfinite(actions).all()), f'xy={xy.shape}, action={actions.shape}')
         add('smoke_action_valid_rate_positive', bool(np.mean(action_valid.astype(float)) > 0.0), f'action_valid_rate={float(np.mean(action_valid.astype(float))):.3f}')
 
+        # Early guardrail: verify that a nontrivial perturbation is actually realized
+        # in rollout geometry for this runtime/version combination.
+        test_delta = project_delta_vec(np.asarray([0.8, 0.0], dtype=float), clip=1.2, l2_budget=1.5)
+        pxy, pvalid, _, _, _, pfeasible, pnote = closed_loop_rollout_selected(
+            base_state=rec['state'],
+            selected_idx=selected_idx,
+            target_obj_idx=target_idx,
+            delta_xy=test_delta,
+            cfg=cfg,
+            planner_bundle=planner_bundle,
+            seed=int(cfg.global_seed + sid + 991),
+        )
+        effect_l2 = float(trajectory_effect_l2_mean(xy, valid, pxy, pvalid))
+        effect_ok = bool(np.isfinite(effect_l2) and effect_l2 >= 1e-3 and bool(pfeasible))
+        add(
+            'perturbation_realization_effect_positive',
+            effect_ok,
+            f'effect_l2_mean={effect_l2:.6f}, proposal_rollout_feasible={int(bool(pfeasible))}, note={pnote}',
+        )
+
         if planner_bundle.get('planner_type') == 'latentdriver':
             non_null = int(sum(d is not None for d in dist_trace))
             add('latentdriver_distribution_trace_nonempty', non_null > 0, f'non_null_steps={non_null}/{len(dist_trace)}')
