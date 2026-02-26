@@ -201,21 +201,42 @@ def _choose_target_non_ego(base_state: Any, selected_idx: np.ndarray) -> int:
         return int(candidates[0])
 
 def _replace_obj(obj: Any, **kwargs: Any) -> Any:
+    errors = []
     try:
         return dataclasses.replace(obj, **kwargs)
-    except Exception:
-        pass
+    except Exception as e:
+        errors.append(f"dataclasses.replace: {type(e).__name__}: {e}")
     if hasattr(obj, 'replace'):
         try:
             return obj.replace(**kwargs)
-        except Exception:
-            pass
+        except Exception as e:
+            errors.append(f"obj.replace: {type(e).__name__}: {e}")
     if hasattr(obj, '_replace'):
         try:
             return obj._replace(**kwargs)
-        except Exception:
-            pass
-    raise RuntimeError(f'Unable to replace object fields: {list(kwargs.keys())}')
+        except Exception as e:
+            errors.append(f"obj._replace: {type(e).__name__}: {e}")
+
+    # Compatibility fallback: some runtime versions expose attributes that are
+    # not accepted by replace() (for example, derived fields such as
+    # current_sim_trajectory). Apply updates field-by-field and keep only
+    # replaceable keys instead of failing the entire state update.
+    if len(kwargs) > 1:
+        cur = obj
+        applied = []
+        for key, value in kwargs.items():
+            try:
+                cur = _replace_obj(cur, **{key: value})
+                applied.append(str(key))
+            except Exception:
+                continue
+        if len(applied) > 0:
+            return cur
+
+    raise RuntimeError(
+        f"Unable to replace object fields: {list(kwargs.keys())}. "
+        + " | ".join(errors[:3])
+    )
 
 def _safe_state_timestep(base_state: Any) -> int:
     try:
