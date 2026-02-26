@@ -160,15 +160,41 @@ def _choose_target_non_ego(base_state: Any, selected_idx: np.ndarray) -> int:
         raise ValueError('No valid non-ego object found for perturbation.')
     try:
         sdc_idx = int(np.argmax(is_sdc_all))
-        xy0_all = np.asarray(base_state.log_trajectory.xy)
+        traj = getattr(base_state, 'current_sim_trajectory', getattr(base_state, 'log_trajectory', None))
+        xy0_all = np.asarray(getattr(traj, 'xy', base_state.log_trajectory.xy))
         sdc_xy = np.asarray(_xy_for_object(xy0_all, sdc_idx), dtype=float)
+        speed = _squeeze_feature(getattr(traj, 'speed', np.zeros((xy0_all.shape[0],), dtype=float)))
+        yaw = _squeeze_feature(getattr(traj, 'yaw', np.zeros((xy0_all.shape[0],), dtype=float)))
+        sdc_speed = _feature_value_for_object(speed, sdc_idx, 0.0)
+        sdc_yaw = _feature_value_for_object(yaw, sdc_idx, 0.0)
+        sdc_vel = np.asarray([np.cos(sdc_yaw), np.sin(sdc_yaw)], dtype=float) * float(sdc_speed)
+
         best_idx = int(candidates[0])
-        best_d2 = np.inf
+        best_score = -np.inf
         for c in candidates:
             c_xy = np.asarray(_xy_for_object(xy0_all, int(c)), dtype=float)
-            d2 = float(np.sum((c_xy - sdc_xy) ** 2))
-            if np.isfinite(d2) and d2 < best_d2:
-                best_d2 = d2
+            rel_pos = c_xy - sdc_xy
+            dist = float(np.linalg.norm(rel_pos))
+            if not np.isfinite(dist):
+                continue
+
+            c_speed = _feature_value_for_object(speed, int(c), 0.0)
+            c_yaw = _feature_value_for_object(yaw, int(c), 0.0)
+            c_vel = np.asarray([np.cos(c_yaw), np.sin(c_yaw)], dtype=float) * float(c_speed)
+            rel_vel = c_vel - sdc_vel
+
+            if dist > 1e-6:
+                closing_speed = float(-np.dot(rel_pos / dist, rel_vel))
+            else:
+                closing_speed = 0.0
+            ttc = dist / max(closing_speed, 1e-6) if closing_speed > 0.0 else float('inf')
+
+            proximity_term = 1.0 / max(dist, 1e-3)
+            ttc_term = 0.0 if (not np.isfinite(ttc)) else 1.0 / max(ttc, 1e-3)
+            score = proximity_term + ttc_term
+
+            if score > best_score:
+                best_score = float(score)
                 best_idx = int(c)
         return int(best_idx)
     except Exception:
@@ -434,6 +460,17 @@ def _trace_step_is_fallback(dist: Optional[Dict[str, np.ndarray]]) -> bool:
     except Exception:
         f1 = 0.0
     return bool((f0 > 0.5) or (f1 > 0.5))
+
+
+def _trace_step_logit_l1(dist_p: Dict[str, np.ndarray], dist_q: Dict[str, np.ndarray], eps: float = 1e-8) -> float:
+    wp, _, _ = _sanitize_diag_gmm(dist_p, eps=eps)
+    wq, _, _ = _sanitize_diag_gmm(dist_q, eps=eps)
+    k = int(min(wp.shape[0], wq.shape[0]))
+    if k <= 0:
+        return 0.0
+    logit_p = np.log(np.maximum(wp[:k], eps))
+    logit_q = np.log(np.maximum(wq[:k], eps))
+    return float(np.linalg.norm(logit_p - logit_q, ord=1))
 
 def predictive_kl_from_dist_traces(
     trace_p: List[Optional[Dict[str, np.ndarray]]],
@@ -1269,11 +1306,16 @@ def dist_trace_change_stats(
             'step_moment_kl_p50': np.nan,
             'step_moment_kl_p95': np.nan,
             'step_moment_kl_nonzero_ratio': 0.0,
+            'step_logit_l1_mean': np.nan,
+            'step_logit_l1_p50': np.nan,
+            'step_logit_l1_p95': np.nan,
+            'step_logit_l1_nonzero_ratio': 0.0,
         }
 
     mean_l2_vals: List[float] = []
     std_l2_vals: List[float] = []
     kl_vals: List[float] = []
+    logit_l1_vals: List[float] = []
     pair_steps_all = 0
 
     for i in range(n):
@@ -1299,6 +1341,7 @@ def dist_trace_change_stats(
         std_l2_vals.append(float(np.linalg.norm(std_p - std_q)))
 
         kl_vals.append(float(_gaussian_kl(mu_p[:d], cov_p[:d, :d], mu_q[:d], cov_q[:d, :d])))
+        logit_l1_vals.append(_trace_step_logit_l1(dp, dq))
 
     pair_steps_non_fallback = int(len(kl_vals))
     if pair_steps_non_fallback == 0:
@@ -1316,11 +1359,16 @@ def dist_trace_change_stats(
             'step_moment_kl_p50': np.nan,
             'step_moment_kl_p95': np.nan,
             'step_moment_kl_nonzero_ratio': 0.0,
+            'step_logit_l1_mean': np.nan,
+            'step_logit_l1_p50': np.nan,
+            'step_logit_l1_p95': np.nan,
+            'step_logit_l1_nonzero_ratio': 0.0,
         }
 
     kl_arr = np.asarray(kl_vals, dtype=float)
     mean_l2_arr = np.asarray(mean_l2_vals, dtype=float)
     std_l2_arr = np.asarray(std_l2_vals, dtype=float)
+    logit_l1_arr = np.asarray(logit_l1_vals, dtype=float)
 
     return {
         'trace_pair_steps': float(pair_steps_non_fallback),
@@ -1336,6 +1384,10 @@ def dist_trace_change_stats(
         'step_moment_kl_p50': float(np.quantile(kl_arr, 0.50)),
         'step_moment_kl_p95': float(np.quantile(kl_arr, 0.95)),
         'step_moment_kl_nonzero_ratio': float(np.mean(kl_arr > 1e-9)),
+        'step_logit_l1_mean': float(np.mean(logit_l1_arr)),
+        'step_logit_l1_p50': float(np.quantile(logit_l1_arr, 0.50)),
+        'step_logit_l1_p95': float(np.quantile(logit_l1_arr, 0.95)),
+        'step_logit_l1_nonzero_ratio': float(np.mean(logit_l1_arr > 1e-9)),
     }
 
 ENV_CLASS = resolve_env_class()

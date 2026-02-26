@@ -129,6 +129,56 @@ def make_calibration_delta_proposal(rng: np.random.Generator, k: int, search_cfg
     prop = scale * direction + jitter
     return project_delta_vec(prop, search_cfg.delta_clip, search_cfg.delta_l2_budget)
 
+
+def make_sensitivity_grid_proposals(
+    search_cfg: SearchConfig,
+    n_angles: int = 8,
+    scales: Tuple[float, ...] = (0.45, 0.9, 1.2),
+) -> np.ndarray:
+    n_angles = int(max(4, n_angles))
+    raw_scales = np.asarray(scales, dtype=float).reshape(-1)
+    raw_scales = raw_scales[np.isfinite(raw_scales) & (raw_scales > 0.0)]
+    if raw_scales.size == 0:
+        raw_scales = np.asarray([0.45, 0.9, 1.2], dtype=float)
+
+    angles = np.linspace(0.0, 2.0 * np.pi, num=n_angles, endpoint=False)
+    proposals: List[np.ndarray] = []
+    for scale in raw_scales:
+        for ang in angles:
+            vec = np.asarray([np.cos(float(ang)), np.sin(float(ang))], dtype=float) * float(scale)
+            proposals.append(project_delta_vec(vec, search_cfg.delta_clip, search_cfg.delta_l2_budget))
+    return np.asarray(proposals, dtype=float)
+
+
+def trajectory_effect_l2_mean(
+    base_xy: np.ndarray,
+    base_valid: np.ndarray,
+    prop_xy: np.ndarray,
+    prop_valid: np.ndarray,
+) -> float:
+    xb = np.asarray(base_xy, dtype=float)
+    xp = np.asarray(prop_xy, dtype=float)
+    vb = np.asarray(base_valid, dtype=bool)
+    vp = np.asarray(prop_valid, dtype=bool)
+
+    if xb.ndim != 3 or xp.ndim != 3:
+        return float('nan')
+
+    n_obj = int(min(xb.shape[0], xp.shape[0], vb.shape[0], vp.shape[0]))
+    n_t = int(min(xb.shape[1], xp.shape[1], vb.shape[1], vp.shape[1]))
+    if n_obj <= 0 or n_t <= 0:
+        return float('nan')
+
+    xb = xb[:n_obj, :n_t, :]
+    xp = xp[:n_obj, :n_t, :]
+    vb = vb[:n_obj, :n_t]
+    vp = vp[:n_obj, :n_t]
+    diff_l2 = np.linalg.norm(xp - xb, axis=-1)
+    mask = vb & vp
+    if np.any(mask):
+        return float(np.nanmean(diff_l2[mask]))
+    return float(np.nanmean(diff_l2))
+
 def calibrate_closed_loop_thresholds(
     runner: ClosedLoopRunner,
     eval_idx: np.ndarray,
@@ -138,6 +188,15 @@ def calibrate_closed_loop_thresholds(
 ) -> Tuple[pd.DataFrame, Dict[str, float]]:
     calib_ids = np.asarray(eval_idx[: min(len(eval_idx), cfg.n_closedloop_calib)], dtype=int)
     rows: List[Dict[str, Any]] = []
+    sensitivity_rows: List[Dict[str, Any]] = []
+    min_effect_l2 = float(max(0.0, getattr(cfg, 'surprise_min_effect_l2_mean', 0.05)))
+    max_scan_scenarios = int(max(0, getattr(cfg, 'sensitivity_scan_max_scenarios', 20)))
+    scan_sid_set = set(int(x) for x in calib_ids[:max_scan_scenarios].tolist())
+    sensitivity_grid = make_sensitivity_grid_proposals(
+        search_cfg=search_cfg,
+        n_angles=int(max(4, getattr(cfg, 'sensitivity_scan_num_angles', 8))),
+        scales=tuple(getattr(cfg, 'sensitivity_scan_scales', (0.45, 0.9, 1.2))),
+    )
 
     for sid in tqdm(calib_ids, desc='Closed-loop calibration (base + random proposals)', total=len(calib_ids)):
         rec = runner.data['scenarios'][int(sid)]
@@ -179,59 +238,49 @@ def calibrate_closed_loop_thresholds(
                     'dist_actor_fallback_ratio': np.nan,
                 }
 
-            for k in range(int(max(1, cfg.n_surprise_calib_proposals))):
-                prop = make_calibration_delta_proposal(rng, k, search_cfg)
-
-                p_xy, p_valid, p_actions, p_action_valid, p_dist_trace, p_feasible, p_note = closed_loop_rollout_selected(
-                    base_state=base_state,
-                    selected_idx=selected_idx,
-                    target_obj_idx=target_idx,
-                    delta_xy=prop,
-                    cfg=cfg,
-                    planner_bundle=planner_bundle,
-                    seed=cfg.global_seed + int(sid) + 1000 + k,
-                )
-                p_risk = compute_risk_metrics(p_xy, p_valid, **risk_kwargs_from_cfg(cfg))
-
+            def _compute_surprise_and_diags(
+                prop_actions: np.ndarray,
+                prop_action_valid: np.ndarray,
+                prop_dist_trace: List[Optional[Dict[str, np.ndarray]]],
+                seed_offset: int,
+            ) -> Tuple[float, Dict[str, float], Dict[str, float], str]:
                 if planner_bundle['planner_type'] == 'latentdriver':
-                    p_surprise = predictive_kl_from_dist_traces(
-                        p_dist_trace,
+                    surprise_val = predictive_kl_from_dist_traces(
+                        prop_dist_trace,
                         base_dist_trace,
                         estimator=cfg.predictive_kl_estimator,
                         n_mc_samples=cfg.predictive_kl_mc_samples,
-                        seed=int(cfg.predictive_kl_mc_seed + int(sid) * 1000 + k),
+                        seed=int(cfg.predictive_kl_mc_seed + int(sid) * 1000 + int(seed_offset)),
                         eps=float(cfg.predictive_kl_eps),
                         symmetric=bool(cfg.predictive_kl_symmetric),
                         skip_fallback_steps=bool(cfg.predictive_kl_skip_fallback_steps),
                     )
-                    p_dist_diag = dist_trace_diagnostics(p_dist_trace)
-                    trace_change_diag = dist_trace_change_stats(p_dist_trace, base_dist_trace)
-                    surprise_source = 'predictive_kl'
-
-                    trace_pair_ratio = float(trace_change_diag.get('trace_pair_ratio', 0.0))
+                    prop_dist_diag = dist_trace_diagnostics(prop_dist_trace)
+                    trace_diag = dist_trace_change_stats(prop_dist_trace, base_dist_trace)
+                    source = 'predictive_kl'
+                    trace_pair_ratio = float(trace_diag.get('trace_pair_ratio', 0.0))
                     if trace_pair_ratio <= 0.0:
-                        # No valid non-fallback trace pairs -> treat surprise as unusable for calibration.
-                        p_surprise = np.nan
-                    elif (not np.isfinite(p_surprise)) or (float(p_surprise) <= 1e-12):
+                        surprise_val = np.nan
+                    elif (not np.isfinite(surprise_val)) or (float(surprise_val) <= 1e-12):
                         action_surprise = planner_action_surprise_kl(
-                            p_actions,
-                            p_action_valid,
+                            prop_actions,
+                            prop_action_valid,
                             base_actions,
                             base_action_valid,
                             sigma=0.25,
                         )
                         if np.isfinite(action_surprise) and float(action_surprise) > 1e-12:
-                            p_surprise = float(action_surprise)
-                            surprise_source = 'action_kl_fallback'
+                            surprise_val = float(action_surprise)
+                            source = 'action_kl_fallback'
                 else:
-                    p_surprise = planner_action_surprise_kl(
-                        p_actions,
-                        p_action_valid,
+                    surprise_val = planner_action_surprise_kl(
+                        prop_actions,
+                        prop_action_valid,
                         base_actions,
                         base_action_valid,
                         sigma=0.25,
                     )
-                    p_dist_diag = {
+                    prop_dist_diag = {
                         'dist_non_null_steps': np.nan,
                         'dist_non_null_ratio': np.nan,
                         'dist_mean_components': np.nan,
@@ -244,7 +293,7 @@ def calibrate_closed_loop_thresholds(
                         'dist_actor_fallback_steps': np.nan,
                         'dist_actor_fallback_ratio': np.nan,
                     }
-                    trace_change_diag = {
+                    trace_diag = {
                         'trace_pair_steps': np.nan,
                         'trace_pair_ratio': np.nan,
                         'trace_pair_steps_all': np.nan,
@@ -258,8 +307,74 @@ def calibrate_closed_loop_thresholds(
                         'step_moment_kl_p50': np.nan,
                         'step_moment_kl_p95': np.nan,
                         'step_moment_kl_nonzero_ratio': np.nan,
+                        'step_logit_l1_mean': np.nan,
+                        'step_logit_l1_p50': np.nan,
+                        'step_logit_l1_p95': np.nan,
+                        'step_logit_l1_nonzero_ratio': np.nan,
                     }
-                    surprise_source = 'action_kl'
+                    source = 'action_kl'
+                return float(surprise_val), prop_dist_diag, trace_diag, source
+
+            if (int(sid) in scan_sid_set) and (len(sensitivity_grid) > 0):
+                for g, grid_prop in enumerate(sensitivity_grid):
+                    s_xy, s_valid, s_actions, s_action_valid, s_dist_trace, s_feasible, _ = closed_loop_rollout_selected(
+                        base_state=base_state,
+                        selected_idx=selected_idx,
+                        target_obj_idx=target_idx,
+                        delta_xy=grid_prop,
+                        cfg=cfg,
+                        planner_bundle=planner_bundle,
+                        seed=cfg.global_seed + int(sid) + 50000 + int(g),
+                    )
+                    s_surprise, _, s_trace_change_diag, s_source = _compute_surprise_and_diags(
+                        prop_actions=s_actions,
+                        prop_action_valid=s_action_valid,
+                        prop_dist_trace=s_dist_trace,
+                        seed_offset=50000 + int(g),
+                    )
+                    s_effect_l2 = trajectory_effect_l2_mean(base_xy, base_valid, s_xy, s_valid)
+                    s_effect_ok = bool(np.isfinite(s_effect_l2) and (s_effect_l2 >= min_effect_l2))
+                    if not s_effect_ok:
+                        s_surprise = np.nan
+                    sensitivity_rows.append({
+                        'scenario_id': int(sid),
+                        'grid_id': int(g),
+                        'delta_l2': float(np.linalg.norm(grid_prop)),
+                        'surprise_pd': float(s_surprise),
+                        'surprise_source': str(s_source),
+                        'effect_l2_mean': float(s_effect_l2),
+                        'effect_ok': int(s_effect_ok),
+                        'rollout_feasible': int(s_feasible),
+                        'step_mean_l2_mean': float(s_trace_change_diag.get('step_mean_l2_mean', np.nan)),
+                        'step_std_l2_mean': float(s_trace_change_diag.get('step_std_l2_mean', np.nan)),
+                        'step_moment_kl_mean': float(s_trace_change_diag.get('step_moment_kl_mean', np.nan)),
+                        'step_logit_l1_mean': float(s_trace_change_diag.get('step_logit_l1_mean', np.nan)),
+                    })
+
+            for k in range(int(max(1, cfg.n_surprise_calib_proposals))):
+                prop = make_calibration_delta_proposal(rng, k, search_cfg)
+
+                p_xy, p_valid, p_actions, p_action_valid, p_dist_trace, p_feasible, p_note = closed_loop_rollout_selected(
+                    base_state=base_state,
+                    selected_idx=selected_idx,
+                    target_obj_idx=target_idx,
+                    delta_xy=prop,
+                    cfg=cfg,
+                    planner_bundle=planner_bundle,
+                    seed=cfg.global_seed + int(sid) + 1000 + k,
+                )
+                p_risk = compute_risk_metrics(p_xy, p_valid, **risk_kwargs_from_cfg(cfg))
+                p_surprise, p_dist_diag, trace_change_diag, surprise_source = _compute_surprise_and_diags(
+                    prop_actions=p_actions,
+                    prop_action_valid=p_action_valid,
+                    prop_dist_trace=p_dist_trace,
+                    seed_offset=1000 + int(k),
+                )
+
+                effect_l2_mean = trajectory_effect_l2_mean(base_xy, base_valid, p_xy, p_valid)
+                effect_ok = bool(np.isfinite(effect_l2_mean) and (effect_l2_mean >= min_effect_l2))
+                if not effect_ok:
+                    p_surprise = np.nan
 
                 rows.append({
                     'scenario_id': int(sid),
@@ -269,6 +384,8 @@ def calibrate_closed_loop_thresholds(
                     'proposal_risk_sks': float(p_risk['risk_sks']),
                     'surprise_pd': float(p_surprise),
                     'surprise_source': str(surprise_source),
+                    'proposal_effect_l2_mean': float(effect_l2_mean),
+                    'proposal_effect_valid': int(effect_ok),
                     'base_failure_proxy': float(base_risk['failure_extended_proxy']),
                     'proposal_failure_proxy': float(p_risk['failure_extended_proxy']),
                     'base_rollout_feasible': int(base_feasible),
@@ -292,6 +409,10 @@ def calibrate_closed_loop_thresholds(
                     'step_moment_kl_p50': float(trace_change_diag.get('step_moment_kl_p50', np.nan)),
                     'step_moment_kl_p95': float(trace_change_diag.get('step_moment_kl_p95', np.nan)),
                     'step_moment_kl_nonzero_ratio': float(trace_change_diag.get('step_moment_kl_nonzero_ratio', np.nan)),
+                    'step_logit_l1_mean': float(trace_change_diag.get('step_logit_l1_mean', np.nan)),
+                    'step_logit_l1_p50': float(trace_change_diag.get('step_logit_l1_p50', np.nan)),
+                    'step_logit_l1_p95': float(trace_change_diag.get('step_logit_l1_p95', np.nan)),
+                    'step_logit_l1_nonzero_ratio': float(trace_change_diag.get('step_logit_l1_nonzero_ratio', np.nan)),
                     'trace_pair_steps': float(trace_change_diag.get('trace_pair_steps', np.nan)),
                     'trace_pair_ratio': float(trace_change_diag.get('trace_pair_ratio', np.nan)),
                     'trace_pair_steps_all': float(trace_change_diag.get('trace_pair_steps_all', np.nan)),
@@ -307,6 +428,8 @@ def calibrate_closed_loop_thresholds(
                 'proposal_risk_sks': np.nan,
                 'surprise_pd': np.nan,
                 'surprise_source': 'error',
+                'proposal_effect_l2_mean': np.nan,
+                'proposal_effect_valid': 0,
                 'base_failure_proxy': np.nan,
                 'proposal_failure_proxy': np.nan,
                 'base_rollout_feasible': 0,
@@ -330,6 +453,10 @@ def calibrate_closed_loop_thresholds(
                 'step_moment_kl_p50': np.nan,
                 'step_moment_kl_p95': np.nan,
                 'step_moment_kl_nonzero_ratio': np.nan,
+                'step_logit_l1_mean': np.nan,
+                'step_logit_l1_p50': np.nan,
+                'step_logit_l1_p95': np.nan,
+                'step_logit_l1_nonzero_ratio': np.nan,
                 'trace_pair_steps': np.nan,
                 'trace_pair_ratio': np.nan,
                 'trace_pair_steps_all': np.nan,
@@ -339,10 +466,47 @@ def calibrate_closed_loop_thresholds(
 
     calib_df = pd.DataFrame(rows)
 
-    usable = calib_df[
-        np.isfinite(calib_df['base_risk_sks'])
-        & np.isfinite(calib_df['surprise_pd'])
-    ].copy()
+    if len(sensitivity_rows) > 0:
+        sensitivity_df = pd.DataFrame(sensitivity_rows)
+        sid_summary = (
+            sensitivity_df.groupby('scenario_id')
+            .agg(
+                sensitivity_surprise_std=('surprise_pd', lambda x: float(np.nanstd(np.asarray(x, dtype=float)))),
+                sensitivity_nonzero_fraction=('surprise_pd', lambda x: float(np.nanmean(np.asarray(x, dtype=float) > 1e-9))),
+                sensitivity_effect_l2_mean=('effect_l2_mean', lambda x: float(np.nanmean(np.asarray(x, dtype=float)))),
+                sensitivity_logit_l1_mean=('step_logit_l1_mean', lambda x: float(np.nanmean(np.asarray(x, dtype=float)))),
+                sensitivity_rows=('surprise_pd', 'size'),
+            )
+            .reset_index()
+        )
+        sid_summary['sensitivity_flat'] = (
+            np.asarray(sid_summary['sensitivity_surprise_std'], dtype=float) <= 1e-8
+        ).astype(float)
+        if len(calib_df) > 0:
+            calib_df = calib_df.merge(sid_summary, on='scenario_id', how='left')
+
+            calib_df['sensitivity_scan_rows'] = float(len(sensitivity_df))
+            calib_df['sensitivity_scan_scenarios'] = float(sid_summary['scenario_id'].nunique())
+            calib_df['sensitivity_scan_surprise_std'] = float(
+                np.nanstd(np.asarray(sensitivity_df['surprise_pd'], dtype=float))
+            )
+            calib_df['sensitivity_scan_nonzero_fraction'] = float(
+                np.nanmean(np.asarray(sensitivity_df['surprise_pd'], dtype=float) > 1e-9)
+            )
+            calib_df['sensitivity_scan_flat_scenario_fraction'] = float(
+                np.nanmean(np.asarray(sid_summary['sensitivity_flat'], dtype=float))
+            )
+    elif len(calib_df) > 0:
+        calib_df['sensitivity_scan_rows'] = np.nan
+        calib_df['sensitivity_scan_scenarios'] = np.nan
+        calib_df['sensitivity_scan_surprise_std'] = np.nan
+        calib_df['sensitivity_scan_nonzero_fraction'] = np.nan
+        calib_df['sensitivity_scan_flat_scenario_fraction'] = np.nan
+
+    usable_mask = np.isfinite(calib_df['base_risk_sks']) & np.isfinite(calib_df['surprise_pd'])
+    if 'proposal_effect_valid' in calib_df.columns:
+        usable_mask = usable_mask & (np.asarray(calib_df['proposal_effect_valid'], dtype=float) > 0.5)
+    usable = calib_df[usable_mask].copy()
 
     if len(usable) >= 20:
         thresholds = {
@@ -391,6 +555,8 @@ def build_calibration_diagnostics(calib_df: pd.DataFrame, thresholds: Dict[str, 
         return summary, pd.DataFrame()
 
     usable_mask = np.isfinite(calib_df['base_risk_sks']) & np.isfinite(calib_df['surprise_pd'])
+    if 'proposal_effect_valid' in calib_df.columns:
+        usable_mask = usable_mask & (np.asarray(calib_df['proposal_effect_valid'], dtype=float) > 0.5)
     usable = calib_df[usable_mask].copy()
 
     summary = pd.DataFrame([{
@@ -404,12 +570,19 @@ def build_calibration_diagnostics(calib_df: pd.DataFrame, thresholds: Dict[str, 
         'risk_std': float(np.std(usable['base_risk_sks'])) if len(usable) > 1 else np.nan,
         'proposal_dist_fallback_ratio_mean': float(np.nanmean(usable['proposal_dist_fallback_ratio'])) if ('proposal_dist_fallback_ratio' in usable and len(usable) > 0) else np.nan,
         'proposal_dist_actor_fallback_ratio_mean': float(np.nanmean(usable['proposal_dist_actor_fallback_ratio'])) if ('proposal_dist_actor_fallback_ratio' in usable and len(usable) > 0) else np.nan,
+        'proposal_effect_l2_mean': float(np.nanmean(usable['proposal_effect_l2_mean'])) if ('proposal_effect_l2_mean' in usable and len(usable) > 0) else np.nan,
+        'proposal_effect_valid_fraction': float(np.nanmean(usable['proposal_effect_valid'])) if ('proposal_effect_valid' in usable and len(usable) > 0) else np.nan,
         'step_mean_l2_mean': float(np.nanmean(usable['step_mean_l2_mean'])) if ('step_mean_l2_mean' in usable and len(usable) > 0) else np.nan,
         'step_moment_kl_mean': float(np.nanmean(usable['step_moment_kl_mean'])) if ('step_moment_kl_mean' in usable and len(usable) > 0) else np.nan,
         'step_moment_kl_nonzero_ratio_mean': float(np.nanmean(usable['step_moment_kl_nonzero_ratio'])) if ('step_moment_kl_nonzero_ratio' in usable and len(usable) > 0) else np.nan,
+        'step_logit_l1_mean': float(np.nanmean(usable['step_logit_l1_mean'])) if ('step_logit_l1_mean' in usable and len(usable) > 0) else np.nan,
+        'step_logit_l1_nonzero_ratio_mean': float(np.nanmean(usable['step_logit_l1_nonzero_ratio'])) if ('step_logit_l1_nonzero_ratio' in usable and len(usable) > 0) else np.nan,
         'trace_pair_ratio_mean': float(np.nanmean(usable['trace_pair_ratio'])) if ('trace_pair_ratio' in usable and len(usable) > 0) else np.nan,
         'trace_pair_ratio_all_mean': float(np.nanmean(usable['trace_pair_ratio_all'])) if ('trace_pair_ratio_all' in usable and len(usable) > 0) else np.nan,
         'trace_fallback_pair_ratio_mean': float(np.nanmean(usable['trace_fallback_pair_ratio'])) if ('trace_fallback_pair_ratio' in usable and len(usable) > 0) else np.nan,
+        'sensitivity_scan_surprise_std': float(np.nanmean(usable['sensitivity_scan_surprise_std'])) if ('sensitivity_scan_surprise_std' in usable and len(usable) > 0) else np.nan,
+        'sensitivity_scan_nonzero_fraction': float(np.nanmean(usable['sensitivity_scan_nonzero_fraction'])) if ('sensitivity_scan_nonzero_fraction' in usable and len(usable) > 0) else np.nan,
+        'sensitivity_scan_flat_scenario_fraction': float(np.nanmean(usable['sensitivity_scan_flat_scenario_fraction'])) if ('sensitivity_scan_flat_scenario_fraction' in usable and len(usable) > 0) else np.nan,
         'threshold_source': thresholds.get('source', 'unknown'),
         'risk_high_threshold': float(thresholds.get('risk_high_threshold', np.nan)),
         'risk_low_threshold': float(thresholds.get('risk_low_threshold', np.nan)),
@@ -433,14 +606,20 @@ def build_calibration_diagnostics(calib_df: pd.DataFrame, thresholds: Dict[str, 
 def run_surprise_quality_gate(
     closedloop_calib_df: pd.DataFrame,
     surprise_gate_enabled: bool = True,
-    surprise_min_std: float = 1e-8,
-    surprise_min_nonzero_fraction: float = 0.01,
+    surprise_min_std: float = 1e-4,
+    surprise_min_nonzero_fraction: float = 0.10,
     surprise_fallback_hard_stop_ratio: float = 0.95,
-    surprise_min_trace_pair_ratio: float = 0.05,
+    surprise_min_trace_pair_ratio: float = 0.10,
+    surprise_min_effect_l2_mean: float = 0.05,
+    surprise_min_logit_l1_mean: float = 1e-3,
+    surprise_max_flat_sensitivity_fraction: float = 0.80,
 ):
-    usable_calib = closedloop_calib_df[
+    usable_mask = (
         np.isfinite(closedloop_calib_df['base_risk_sks']) & np.isfinite(closedloop_calib_df['surprise_pd'])
-    ].copy() if isinstance(closedloop_calib_df, pd.DataFrame) and len(closedloop_calib_df) > 0 else pd.DataFrame()
+    ) if isinstance(closedloop_calib_df, pd.DataFrame) and len(closedloop_calib_df) > 0 else np.asarray([], dtype=bool)
+    if isinstance(closedloop_calib_df, pd.DataFrame) and ('proposal_effect_valid' in closedloop_calib_df.columns):
+        usable_mask = usable_mask & (np.asarray(closedloop_calib_df['proposal_effect_valid'], dtype=float) > 0.5)
+    usable_calib = closedloop_calib_df[usable_mask].copy() if isinstance(closedloop_calib_df, pd.DataFrame) and len(closedloop_calib_df) > 0 else pd.DataFrame()
 
     if len(usable_calib) == 0:
         raise RuntimeError('No usable closed-loop calibration rows. Cannot validate surprise signal.')
@@ -463,21 +642,30 @@ def run_surprise_quality_gate(
     nonzero_surprise_fraction = float(np.mean(usable_calib['surprise_pd'].to_numpy(dtype=float) > 1e-9))
     fallback_usage_rate = _col_mean(usable_calib, 'proposal_dist_fallback_ratio')
     actor_fallback_usage_rate = _col_mean(usable_calib, 'proposal_dist_actor_fallback_ratio')
+    proposal_effect_l2_mean = _col_mean(usable_calib, 'proposal_effect_l2_mean')
+    proposal_effect_valid_fraction = _col_mean(usable_calib, 'proposal_effect_valid')
     trace_pair_ratio_mean = _col_mean(usable_calib, 'trace_pair_ratio')
     trace_pair_ratio_all_mean = _col_mean(usable_calib, 'trace_pair_ratio_all')
     trace_fallback_pair_ratio_mean = _col_mean(usable_calib, 'trace_fallback_pair_ratio')
+    step_logit_l1_mean = _col_mean(usable_calib, 'step_logit_l1_mean')
+    sensitivity_flat_scenario_fraction = _col_mean(usable_calib, 'sensitivity_scan_flat_scenario_fraction')
 
     dist_change_summary = pd.DataFrame([{
         'trace_pair_ratio_mean': _col_mean(usable_calib, 'trace_pair_ratio'),
         'trace_pair_ratio_all_mean': _col_mean(usable_calib, 'trace_pair_ratio_all'),
         'trace_fallback_pair_ratio_mean': _col_mean(usable_calib, 'trace_fallback_pair_ratio'),
         'step_mean_l2_mean': _col_mean(usable_calib, 'step_mean_l2_mean'),
+        'step_std_l2_mean': _col_mean(usable_calib, 'step_std_l2_mean'),
         'step_mean_l2_p50': _col_q(usable_calib, 'step_mean_l2_mean', 0.50),
         'step_mean_l2_p95': _col_q(usable_calib, 'step_mean_l2_mean', 0.95),
         'step_moment_kl_mean': _col_mean(usable_calib, 'step_moment_kl_mean'),
         'step_moment_kl_p50': _col_q(usable_calib, 'step_moment_kl_mean', 0.50),
         'step_moment_kl_p95': _col_q(usable_calib, 'step_moment_kl_mean', 0.95),
         'step_moment_kl_nonzero_ratio_mean': _col_mean(usable_calib, 'step_moment_kl_nonzero_ratio'),
+        'step_logit_l1_mean': _col_mean(usable_calib, 'step_logit_l1_mean'),
+        'step_logit_l1_p50': _col_q(usable_calib, 'step_logit_l1_mean', 0.50),
+        'step_logit_l1_p95': _col_q(usable_calib, 'step_logit_l1_mean', 0.95),
+        'step_logit_l1_nonzero_ratio_mean': _col_mean(usable_calib, 'step_logit_l1_nonzero_ratio'),
     }])
 
     gate_summary = pd.DataFrame([{
@@ -486,9 +674,13 @@ def run_surprise_quality_gate(
         'nonzero_surprise_fraction': nonzero_surprise_fraction,
         'fallback_usage_rate': fallback_usage_rate,
         'actor_fallback_usage_rate': actor_fallback_usage_rate,
+        'proposal_effect_l2_mean': proposal_effect_l2_mean,
+        'proposal_effect_valid_fraction': proposal_effect_valid_fraction,
         'trace_pair_ratio_mean': trace_pair_ratio_mean,
         'trace_pair_ratio_all_mean': trace_pair_ratio_all_mean,
         'trace_fallback_pair_ratio_mean': trace_fallback_pair_ratio_mean,
+        'step_logit_l1_mean': step_logit_l1_mean,
+        'sensitivity_flat_scenario_fraction': sensitivity_flat_scenario_fraction,
     }])
 
     reasons = []
@@ -505,6 +697,33 @@ def run_surprise_quality_gate(
     if np.isfinite(trace_pair_ratio_mean) and trace_pair_ratio_mean < float(surprise_min_trace_pair_ratio):
         reasons.append(
             f'trace_pair_ratio_mean too low: {trace_pair_ratio_mean:.4f} < {surprise_min_trace_pair_ratio:.4f}'
+        )
+    if np.isfinite(proposal_effect_l2_mean) and proposal_effect_l2_mean < float(surprise_min_effect_l2_mean):
+        reasons.append(
+            f'proposal_effect_l2_mean too low: {proposal_effect_l2_mean:.4f} < {surprise_min_effect_l2_mean:.4f}'
+        )
+    if np.isfinite(step_logit_l1_mean) and step_logit_l1_mean < float(surprise_min_logit_l1_mean):
+        reasons.append(
+            f'step_logit_l1_mean too low: {step_logit_l1_mean:.4e} < {surprise_min_logit_l1_mean:.4e}'
+        )
+    if (
+        np.isfinite(sensitivity_flat_scenario_fraction)
+        and sensitivity_flat_scenario_fraction > float(surprise_max_flat_sensitivity_fraction)
+    ):
+        reasons.append(
+            f'sensitivity_flat_scenario_fraction too high: {sensitivity_flat_scenario_fraction:.4f} > {surprise_max_flat_sensitivity_fraction:.4f}'
+        )
+
+    divergence_channels = np.asarray([
+        _col_mean(usable_calib, 'step_mean_l2_mean'),
+        _col_mean(usable_calib, 'step_std_l2_mean'),
+        _col_mean(usable_calib, 'step_moment_kl_mean'),
+        _col_mean(usable_calib, 'step_logit_l1_mean'),
+    ], dtype=float)
+    divergence_channels = np.abs(divergence_channels[np.isfinite(divergence_channels)])
+    if divergence_channels.size > 0 and float(np.max(divergence_channels)) <= 1e-10:
+        reasons.append(
+            'all divergence channels collapsed to ~0 (mean_l2/std_l2/moment_kl/logit_l1); surprise signal is not informative.'
         )
 
     if surprise_gate_enabled and len(reasons) > 0:

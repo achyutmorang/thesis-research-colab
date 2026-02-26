@@ -79,6 +79,10 @@ class ClosedLoopConfig:
     # Calibration from closed-loop base rollouts
     n_closedloop_calib: int = 120
     n_surprise_calib_proposals: int = 6
+    surprise_min_effect_l2_mean: float = 0.05
+    sensitivity_scan_max_scenarios: int = 20
+    sensitivity_scan_num_angles: int = 8
+    sensitivity_scan_scales: Tuple[float, float, float] = (0.45, 0.9, 1.2)
     high_quantile: float = 0.80
 
     # Run controls: fairness, chunking, resume
