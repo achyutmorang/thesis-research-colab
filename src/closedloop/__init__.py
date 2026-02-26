@@ -26,12 +26,26 @@ from .signal_analysis import (
 )
 from .notebook_flow import (
     analyze_signal_if_available,
+    initialize_run_context,
+    report_export_bundle,
+    report_main_loop_bundle,
+    report_preflight_bundle,
+    report_quick_probe_bundle,
+    report_run_context,
+    report_signal_bundle,
+    report_surprise_gate_bundle,
     resolve_main_loop_policy,
     run_main_loop_with_policy,
     run_preflight_bundle,
     run_quick_probe_with_auto_escalation,
     run_surprise_gate_with_policy,
     summarize_and_export_if_available,
+)
+from .colab_runtime import (
+    ensure_drive_ready,
+    ensure_repo_checkout,
+    prepare_repo_imports,
+    run_cached_deterministic_setup,
 )
 
 __all__ = [
@@ -58,10 +72,22 @@ __all__ = [
     'summarize_method_outputs',
     'analyze_surprise_signal_usefulness',
     'analyze_signal_if_available',
+    'initialize_run_context',
+    'report_export_bundle',
+    'report_main_loop_bundle',
+    'report_preflight_bundle',
+    'report_quick_probe_bundle',
+    'report_run_context',
+    'report_signal_bundle',
+    'report_surprise_gate_bundle',
     'resolve_main_loop_policy',
     'run_main_loop_with_policy',
     'run_preflight_bundle',
     'run_quick_probe_with_auto_escalation',
     'run_surprise_gate_with_policy',
     'summarize_and_export_if_available',
+    'ensure_drive_ready',
+    'ensure_repo_checkout',
+    'prepare_repo_imports',
+    'run_cached_deterministic_setup',
 ]
