@@ -15,6 +15,12 @@ Research repository for closed-loop simulation experiments.
 - `notebooks/compute_normalized_blindspot_discovery_colab.ipynb`: evaluates compute-normalized blindspot discovery efficiency under multiple definitions/thresholds.
 - `notebooks/counterfactual_risk_sensitivity_atlas_colab.ipynb`: builds a counterfactual factor-response atlas to measure risk sensitivity and ranking stability.
 
+## Source Layout
+- `src/closedloop/`: closed-loop domain logic (planner integration, calibration, search, metrics, artifact IO).
+- `src/workflows/`: reusable notebook orchestration flows (`closedloop_flow.py`) for thin Colab notebooks.
+- `src/platform/`: Colab/runtime lifecycle helpers (repo sync, Drive mount checks, deterministic setup, hot-reload prep).
+- Backward-compatible shims are kept in `src/closedloop/notebook_flow.py` and `src/closedloop/colab_runtime.py`.
+
 ## Research Notice
 Everything in this repository is experimental and part of ongoing Master's research work at IIT Hyderabad. Results, methods, and interfaces may change as the thesis evolves.
 
