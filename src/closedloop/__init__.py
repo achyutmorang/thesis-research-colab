@@ -24,6 +24,15 @@ from .signal_analysis import (
     analyze_surprise_signal_usefulness,
     save_surprise_signal_usefulness_artifacts,
 )
+from .notebook_flow import (
+    analyze_signal_if_available,
+    resolve_main_loop_policy,
+    run_main_loop_with_policy,
+    run_preflight_bundle,
+    run_quick_probe_with_auto_escalation,
+    run_surprise_gate_with_policy,
+    summarize_and_export_if_available,
+)
 
 __all__ = [
     'SearchConfig',
@@ -48,4 +57,11 @@ __all__ = [
     'shard_run_prefix',
     'summarize_method_outputs',
     'analyze_surprise_signal_usefulness',
+    'analyze_signal_if_available',
+    'resolve_main_loop_policy',
+    'run_main_loop_with_policy',
+    'run_preflight_bundle',
+    'run_quick_probe_with_auto_escalation',
+    'run_surprise_gate_with_policy',
+    'summarize_and_export_if_available',
 ]
