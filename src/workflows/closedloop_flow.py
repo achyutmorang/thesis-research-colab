@@ -78,6 +78,20 @@ class RunContextBundle:
 
 
 @dataclass
+class SimulationContextBundle:
+    dataset_config: Any = None
+    data_iter: Optional[Iterable[Any]] = None
+    runner: Any = None
+    data: Any = None
+    reference_idx: np.ndarray = field(default_factory=lambda: np.array([], dtype=np.int32))
+    candidate_eval_idx: np.ndarray = field(default_factory=lambda: np.array([], dtype=np.int32))
+    eval_idx_all: np.ndarray = field(default_factory=lambda: np.array([], dtype=np.int32))
+    eval_idx: np.ndarray = field(default_factory=lambda: np.array([], dtype=np.int32))
+    reference_df: pd.DataFrame = field(default_factory=pd.DataFrame)
+    base_eval_openloop_df: pd.DataFrame = field(default_factory=pd.DataFrame)
+
+
+@dataclass
 class PreflightBundle:
     ready_for_main_loop: bool = False
     preflight_df: pd.DataFrame = field(default_factory=pd.DataFrame)
@@ -203,6 +217,42 @@ def _probe_collapse_stats(probe_summary_df: pd.DataFrame) -> Tuple[bool, int, fl
     return collapsed, n_finite, nonzero, realized, effect_l2
 
 
+def build_full_simulation_context(
+    cfg: ClosedLoopConfig,
+    n_shards: int,
+    shard_id: int,
+) -> SimulationContextBundle:
+    dataset_config, data_iter = make_waymax_data_iter(cfg)
+    (
+        runner,
+        data,
+        reference_idx,
+        candidate_eval_idx,
+        eval_idx_all,
+        eval_idx,
+        reference_df,
+        base_eval_openloop_df,
+    ) = build_closedloop_runner_and_splits(
+        cfg=cfg,
+        data_iter=data_iter,
+        dataset_config=dataset_config,
+        n_shards=int(n_shards),
+        shard_id=int(shard_id),
+    )
+    return SimulationContextBundle(
+        dataset_config=dataset_config,
+        data_iter=data_iter,
+        runner=runner,
+        data=data,
+        reference_idx=np.asarray(reference_idx),
+        candidate_eval_idx=np.asarray(candidate_eval_idx),
+        eval_idx_all=np.asarray(eval_idx_all),
+        eval_idx=np.asarray(eval_idx),
+        reference_df=reference_df,
+        base_eval_openloop_df=base_eval_openloop_df,
+    )
+
+
 def run_quick_probe_with_auto_escalation(
     cfg: ClosedLoopConfig,
     search_cfg: SearchConfig,
@@ -219,6 +269,7 @@ def run_quick_probe_with_auto_escalation(
     probe_delta_clip_multipliers: Sequence[float] = (1.0, 1.1, 1.2),
     probe_budget_bump_per_escalation: int = 2,
     apply_successful_probe_tuning: bool = True,
+    build_simulation_context: bool = True,
 ) -> QuickProbeBundle:
     scale_mults = tuple(float(x) for x in probe_scale_multipliers) or (1.0,)
     l2_mults = tuple(float(x) for x in probe_delta_l2_multipliers) or (1.0,)
@@ -301,23 +352,13 @@ def run_quick_probe_with_auto_escalation(
     if selected_search_cfg is None:
         selected_search_cfg = search_cfg
 
-    dataset_config, data_iter = make_waymax_data_iter(selected_cfg)
-    (
-        runner,
-        data,
-        reference_idx,
-        candidate_eval_idx,
-        eval_idx_all,
-        eval_idx,
-        reference_df,
-        base_eval_openloop_df,
-    ) = build_closedloop_runner_and_splits(
-        cfg=selected_cfg,
-        data_iter=data_iter,
-        dataset_config=dataset_config,
-        n_shards=int(n_shards),
-        shard_id=int(shard_id),
-    )
+    context_bundle = SimulationContextBundle()
+    if bool(build_simulation_context):
+        context_bundle = build_full_simulation_context(
+            cfg=selected_cfg,
+            n_shards=int(n_shards),
+            shard_id=int(shard_id),
+        )
 
     return QuickProbeBundle(
         cfg=selected_cfg,
@@ -327,16 +368,16 @@ def run_quick_probe_with_auto_escalation(
         quick_probe_attempts_df=quick_probe_attempts_df,
         final_collapsed=bool(final_collapsed),
         applied_tuning=bool(applied_tuning),
-        dataset_config=dataset_config,
-        data_iter=data_iter,
-        runner=runner,
-        data=data,
-        reference_idx=np.asarray(reference_idx),
-        candidate_eval_idx=np.asarray(candidate_eval_idx),
-        eval_idx_all=np.asarray(eval_idx_all),
-        eval_idx=np.asarray(eval_idx),
-        reference_df=reference_df,
-        base_eval_openloop_df=base_eval_openloop_df,
+        dataset_config=context_bundle.dataset_config,
+        data_iter=context_bundle.data_iter,
+        runner=context_bundle.runner,
+        data=context_bundle.data,
+        reference_idx=context_bundle.reference_idx,
+        candidate_eval_idx=context_bundle.candidate_eval_idx,
+        eval_idx_all=context_bundle.eval_idx_all,
+        eval_idx=context_bundle.eval_idx,
+        reference_df=context_bundle.reference_df,
+        base_eval_openloop_df=context_bundle.base_eval_openloop_df,
     )
 
 

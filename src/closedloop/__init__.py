@@ -25,7 +25,9 @@ from .signal_analysis import (
     save_surprise_signal_usefulness_artifacts,
 )
 from .notebook_flow import (
+    SimulationContextBundle,
     analyze_signal_if_available,
+    build_full_simulation_context,
     initialize_run_context,
     report_export_bundle,
     report_main_loop_bundle,
@@ -71,7 +73,9 @@ __all__ = [
     'shard_run_prefix',
     'summarize_method_outputs',
     'analyze_surprise_signal_usefulness',
+    'SimulationContextBundle',
     'analyze_signal_if_available',
+    'build_full_simulation_context',
     'initialize_run_context',
     'report_export_bundle',
     'report_main_loop_bundle',
