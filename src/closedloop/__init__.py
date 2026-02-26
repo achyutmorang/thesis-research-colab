@@ -19,6 +19,10 @@ from .core import (
     run_closed_loop,
 )
 from .resume_io import export_closedloop_artifacts, summarize_method_outputs
+from .signal_analysis import (
+    analyze_surprise_signal_usefulness,
+    save_surprise_signal_usefulness_artifacts,
+)
 
 __all__ = [
     'SearchConfig',
@@ -37,6 +41,8 @@ __all__ = [
     'run_preflight_and_calibration',
     'run_surprise_quality_gate',
     'run_closed_loop',
+    'save_surprise_signal_usefulness_artifacts',
     'shard_run_prefix',
     'summarize_method_outputs',
+    'analyze_surprise_signal_usefulness',
 ]

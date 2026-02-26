@@ -13,6 +13,10 @@ import numpy as np
 import pandas as pd
 
 from .config import SearchConfig, ClosedLoopConfig, build_run_artifact_paths
+from .signal_analysis import (
+    analyze_surprise_signal_usefulness,
+    save_surprise_signal_usefulness_artifacts,
+)
 
 ARTIFACT_SCHEMA_VERSION = '1.0.0'
 RESULTS_REQUIRED_COLUMNS = ['scenario_id', 'method']
@@ -486,6 +490,23 @@ def export_closedloop_artifacts(
     fairness_checks_df.to_csv(fairness_path, index=False)
     if isinstance(trace_diag_df, pd.DataFrame):
         trace_diag_df.to_csv(trace_diag_path, index=False)
+
+    signal_paths: Dict[str, str] = {}
+    try:
+        signal_summary_df, signal_method_corr_df, signal_bins_df, signal_topk_df, signal_within_scenario_df = (
+            analyze_surprise_signal_usefulness(closedloop_results_df=closedloop_results_df)
+        )
+        signal_paths = save_surprise_signal_usefulness_artifacts(
+            run_prefix=run_prefix,
+            summary_df=signal_summary_df,
+            method_corr_df=signal_method_corr_df,
+            bin_df=signal_bins_df,
+            topk_df=signal_topk_df,
+            within_scenario_df=signal_within_scenario_df,
+        )
+        all_paths.update(signal_paths)
+    except Exception as e:
+        print(f'[export] surprise signal usefulness diagnostics skipped: {e}')
 
     seed_map_df = closedloop_results_df[
         closedloop_results_df['method'].isin(['random', 'risk_only', 'surprise_only', 'joint'])
