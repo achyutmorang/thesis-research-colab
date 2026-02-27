@@ -26,7 +26,7 @@ from .config import (
     required_total_scenarios,
     restore_artifacts_via_upload,
 )
-from .latentdriver import (
+from .planner_backends import (
     _choose_target_non_ego,
     closed_loop_rollout_selected,
     perturb_initial_state,

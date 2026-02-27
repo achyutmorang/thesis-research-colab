@@ -5,7 +5,7 @@ from typing import Any, Dict, List, Tuple
 import numpy as np
 
 from .config import SearchConfig, ClosedLoopConfig
-from .latentdriver import (
+from .planner_backends import (
     closed_loop_rollout_selected,
     predictive_divergence_from_dist_traces,
     dist_trace_change_stats,

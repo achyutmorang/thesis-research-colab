@@ -8,7 +8,7 @@ import pandas as pd
 from tqdm.auto import tqdm
 
 from .config import SearchConfig, ClosedLoopConfig
-from .latentdriver import (
+from .planner_backends import (
     _choose_target_non_ego,
     closed_loop_rollout_selected,
     predictive_divergence_from_dist_traces,
