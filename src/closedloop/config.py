@@ -68,6 +68,11 @@ class ClosedLoopConfig:
     latentdriver_method_name: str = 'latentdriver'
     latentdriver_ckpt_path: str = '/content/checkpoints/lantentdriver_t2_J3.ckpt'
     latentdriver_context_len: int = 2
+    # Enforce a context window at least as large as history_steps so rollout
+    # surprise is conditioned on the configured history slice.
+    latentdriver_force_context_from_history: bool = True
+    # Prefill latentdriver token/action history from pre-rollout history steps.
+    latentdriver_use_history_warm_start: bool = True
     latentdriver_action_type: str = 'waypoint'  # waypoint (dx,dy,dyaw) or bicycle
     latentdriver_action_clip: Tuple[float, float, float] = (6.0, 0.35, 0.35)
     latentdriver_yaw_sigma: float = 0.15
@@ -93,6 +98,10 @@ class ClosedLoopConfig:
     perturb_interaction_w_ttc: float = 1.25
     perturb_interaction_w_closing_speed: float = 0.35
     perturb_interaction_w_heading_conflict: float = 0.35
+    # Paper-style counterfactual family tag used by workflow orchestration.
+    # Supported labels:
+    # fut_none | fut_gt | hist_rmv | fut_cvm | fut_cvm_l | fut_pred | hist_prim | fut_prim
+    counterfactual_family: str = 'hist_prim'
     # Proposal generation policy.
     perturb_use_behavioral_proposals: bool = True
     perturb_behavioral_primitive_cycle: Tuple[str, ...] = (
@@ -105,6 +114,9 @@ class ClosedLoopConfig:
         'diag_toward_left',
         'diag_toward_right',
     )
+    # Dedicated hook for Hist-prim primitive selection.
+    perturb_hist_prim_selector_mode: str = 'cyclic'  # cyclic | interaction_band
+    perturb_hist_prim_interaction_distance_m: float = 12.0
     perturb_behavioral_longitudinal_gain: float = 1.05
     perturb_behavioral_lateral_gain: float = 1.20
     perturb_behavioral_interaction_gain: float = 1.25
@@ -282,6 +294,15 @@ def initialize_configs(planner_kind_override: Optional[str] = None) -> Tuple[Clo
         cfg.planner_name = 'latentdriver_waypoint_sdc'
 
     search_cfg = SearchConfig()
+    if bool(cfg.latentdriver_force_context_from_history):
+        min_ctx = int(max(1, cfg.history_steps))
+        if int(cfg.latentdriver_context_len) < min_ctx:
+            old = int(cfg.latentdriver_context_len)
+            cfg.latentdriver_context_len = int(min_ctx)
+            print(
+                f'[config auto-fix] latentdriver_context_len increased from {old} '
+                f'to {cfg.latentdriver_context_len} to match history_steps.'
+            )
     cfg, scan_df = resolve_latentdriver_checkpoint(cfg)
 
     np.random.seed(cfg.global_seed)

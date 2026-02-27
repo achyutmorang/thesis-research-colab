@@ -170,6 +170,89 @@ def _unit_2d(vec: Any, fallback: Tuple[float, float] = (1.0, 0.0)) -> np.ndarray
     return out / n
 
 
+_CFAMILY_ALIAS = {
+    'fut_none': 'fut_none',
+    'fut-none': 'fut_none',
+    'fut_gt': 'fut_gt',
+    'fut-gt': 'fut_gt',
+    'hist_rmv': 'hist_rmv',
+    'hist-rmv': 'hist_rmv',
+    'fut_cvm': 'fut_cvm',
+    'fut-cvm': 'fut_cvm',
+    'fut_cvm_l': 'fut_cvm_l',
+    'fut-cvm-l': 'fut_cvm_l',
+    'fut_pred': 'fut_pred',
+    'fut-pred': 'fut_pred',
+    'hist_prim': 'hist_prim',
+    'hist-prim': 'hist_prim',
+    'fut_prim': 'fut_prim',
+    'fut-prim': 'fut_prim',
+}
+
+_HIST_PRIM_INTERACTION_PRIMS = {
+    'toward_ego',
+    'away_from_ego',
+    'diag_toward_left',
+    'diag_toward_right',
+}
+_HIST_PRIM_LANE_PRIMS = {
+    'target_brake',
+    'target_accel',
+    'lateral_left',
+    'lateral_right',
+}
+
+
+def normalize_counterfactual_family_name(value: Any) -> str:
+    key = str(value if value is not None else 'hist_prim').strip().lower()
+    return _CFAMILY_ALIAS.get(key, _CFAMILY_ALIAS.get(key.replace('-', '_'), 'hist_prim'))
+
+
+def resolve_counterfactual_primitive_cycle(cfg: Optional[ClosedLoopConfig]) -> Tuple[str, ...]:
+    cycle = tuple(getattr(cfg, 'perturb_behavioral_primitive_cycle', ())) if cfg is not None else ()
+    if len(cycle) > 0:
+        return tuple(str(x).strip().lower() for x in cycle if str(x).strip())
+    return (
+        'toward_ego',
+        'away_from_ego',
+        'target_brake',
+        'target_accel',
+        'lateral_left',
+        'lateral_right',
+        'diag_toward_left',
+        'diag_toward_right',
+    )
+
+
+def select_hist_prim_primitive(
+    primitive_cycle: Tuple[str, ...],
+    k: int,
+    selector_mode: str,
+    target_dist_to_ego: float,
+    interaction_distance_m: float,
+) -> str:
+    if len(primitive_cycle) <= 0:
+        return 'toward_ego'
+
+    mode = str(selector_mode).strip().lower()
+    if mode != 'interaction_band':
+        return str(primitive_cycle[int(k) % int(len(primitive_cycle))]).strip().lower()
+
+    cycle = tuple(str(x).strip().lower() for x in primitive_cycle)
+    interaction_pool = [p for p in cycle if p in _HIST_PRIM_INTERACTION_PRIMS]
+    lane_pool = [p for p in cycle if p in _HIST_PRIM_LANE_PRIMS]
+
+    near_target = bool(np.isfinite(target_dist_to_ego) and (float(target_dist_to_ego) <= float(max(1.0, interaction_distance_m))))
+    if near_target and len(interaction_pool) > 0:
+        pool = interaction_pool
+    elif (not near_target) and len(lane_pool) > 0:
+        pool = lane_pool
+    else:
+        pool = list(cycle)
+
+    return str(pool[int(k) % int(len(pool))]).strip().lower()
+
+
 def _interaction_candidates(
     base_state: Any,
     selected_idx: np.ndarray,
@@ -275,18 +358,10 @@ def make_behavioral_delta_proposal(
     search_cfg: Any,
     cfg: Optional[ClosedLoopConfig] = None,
 ) -> Tuple[np.ndarray, Dict[str, Any]]:
-    primitive_cycle = tuple(getattr(cfg, 'perturb_behavioral_primitive_cycle', ())) if cfg is not None else ()
-    if len(primitive_cycle) == 0:
-        primitive_cycle = (
-            'toward_ego',
-            'away_from_ego',
-            'target_brake',
-            'target_accel',
-            'lateral_left',
-            'lateral_right',
-            'diag_toward_left',
-            'diag_toward_right',
-        )
+    counterfactual_family = normalize_counterfactual_family_name(
+        getattr(cfg, 'counterfactual_family', 'hist_prim') if cfg is not None else 'hist_prim'
+    )
+    primitive_cycle = resolve_counterfactual_primitive_cycle(cfg)
     primitive = str(primitive_cycle[int(k) % int(len(primitive_cycle))]).strip().lower()
 
     scales = np.asarray(
@@ -327,6 +402,18 @@ def make_behavioral_delta_proposal(
         tgt_left = np.asarray([-tgt_fwd[1], tgt_fwd[0]], dtype=float)
         rel = tgt_xy - sdc_xy
         toward_ego = _unit_2d(-rel, fallback=tuple((-ego_fwd).tolist()))
+        target_dist_to_ego = float(np.linalg.norm(rel))
+
+        if counterfactual_family == 'hist_prim':
+            primitive = select_hist_prim_primitive(
+                primitive_cycle=primitive_cycle,
+                k=int(k),
+                selector_mode=str(getattr(cfg, 'perturb_hist_prim_selector_mode', 'cyclic') if cfg is not None else 'cyclic'),
+                target_dist_to_ego=target_dist_to_ego,
+                interaction_distance_m=float(
+                    getattr(cfg, 'perturb_hist_prim_interaction_distance_m', 12.0) if cfg is not None else 12.0
+                ),
+            )
 
         gain = 1.0
         if primitive == 'toward_ego':
@@ -365,7 +452,11 @@ def make_behavioral_delta_proposal(
             'primitive': primitive,
             'primitive_scale': float(scale),
             'primitive_gain': float(gain),
-            'target_dist_to_ego': float(np.linalg.norm(rel)),
+            'target_dist_to_ego': float(target_dist_to_ego),
+            'counterfactual_family': str(counterfactual_family),
+            'hist_prim_selector_mode': str(
+                getattr(cfg, 'perturb_hist_prim_selector_mode', 'cyclic') if cfg is not None else 'cyclic'
+            ),
         }
     except Exception:
         base_dir = fallback_dirs[int(k) % int(fallback_dirs.shape[0])]
@@ -377,6 +468,10 @@ def make_behavioral_delta_proposal(
             'primitive_scale': float(scale),
             'primitive_gain': 1.0,
             'target_dist_to_ego': np.nan,
+            'counterfactual_family': str(counterfactual_family),
+            'hist_prim_selector_mode': str(
+                getattr(cfg, 'perturb_hist_prim_selector_mode', 'cyclic') if cfg is not None else 'cyclic'
+            ),
         }
 
 def _replace_obj(obj: Any, **kwargs: Any) -> Any:
@@ -428,6 +523,146 @@ def _safe_state_timestep(base_state: Any) -> int:
         return int(max(0, val))
     except Exception:
         return 0
+
+
+def _state_time_count(state: Any) -> int:
+    traj = getattr(state, 'sim_trajectory', getattr(state, 'log_trajectory', None))
+    if traj is None:
+        return 0
+
+    for attr_name, time_axis in (('valid', -1), ('x', -1), ('y', -1), ('yaw', -1), ('xy', -2)):
+        if not hasattr(traj, attr_name):
+            continue
+        try:
+            arr = np.asarray(getattr(traj, attr_name))
+            if arr.size <= 0 or arr.ndim <= 0:
+                continue
+            while arr.ndim > 2 and arr.shape[0] == 1:
+                arr = np.squeeze(arr, axis=0)
+            axis = int(time_axis)
+            if axis < 0:
+                axis = int(arr.ndim + axis)
+            if 0 <= axis < arr.ndim:
+                return int(max(0, arr.shape[axis]))
+        except Exception:
+            continue
+    return 0
+
+
+def _state_with_current_timestep(state: Any, timestep: int) -> Optional[Any]:
+    traj = getattr(state, 'sim_trajectory', getattr(state, 'log_trajectory', None))
+    if traj is None:
+        return None
+    t_idx = int(max(0, timestep))
+    try:
+        cur_traj = waymax_datatypes.dynamic_slice(
+            inputs=traj,
+            start_index=t_idx,
+            slice_size=1,
+            axis=-1,
+        )
+    except Exception:
+        return None
+
+    kwargs: Dict[str, Any] = {'current_sim_trajectory': cur_traj}
+    if hasattr(state, 'timestep'):
+        try:
+            ts = np.asarray(getattr(state, 'timestep'))
+            ts_shape = ts.shape if ts.size > 0 else (1,)
+            ts_dtype = ts.dtype if ts.size > 0 else np.int32
+            kwargs['timestep'] = jnp.asarray(np.full(ts_shape, t_idx, dtype=ts_dtype))
+        except Exception:
+            pass
+
+    try:
+        return _replace_obj(state, **kwargs)
+    except Exception:
+        return None
+
+
+def _sdc_xy_yaw_from_state(state: Any) -> Tuple[Optional[np.ndarray], Optional[float]]:
+    try:
+        cur = getattr(state, 'current_sim_trajectory', None)
+        if cur is None:
+            return None, None
+        is_sdc = np.asarray(state.object_metadata.is_sdc).astype(bool).reshape(-1)
+        if is_sdc.size <= 0 or (not np.any(is_sdc)):
+            return None, None
+        sdc_idx = int(np.argmax(is_sdc))
+        x, y = _xy_for_object(getattr(cur, 'xy'), sdc_idx)
+        xy = np.asarray([x, y], dtype=float)
+        if not np.isfinite(xy).all():
+            return None, None
+
+        yaw_vec = _squeeze_feature(np.asarray(getattr(cur, 'yaw', 0.0)))
+        yaw = float(yaw_vec[sdc_idx]) if sdc_idx < yaw_vec.shape[0] else 0.0
+        if not np.isfinite(yaw):
+            yaw = 0.0
+        return xy, yaw
+    except Exception:
+        return None, None
+
+
+def _estimate_sdc_action_from_state_pair(prev_state: Any, cur_state: Any, cfg: ClosedLoopConfig) -> np.ndarray:
+    prev_xy, prev_yaw = _sdc_xy_yaw_from_state(prev_state)
+    cur_xy, cur_yaw = _sdc_xy_yaw_from_state(cur_state)
+    if (prev_xy is None) or (cur_xy is None):
+        return np.zeros((3,), dtype=np.float32)
+
+    dxy = np.asarray(cur_xy, dtype=float) - np.asarray(prev_xy, dtype=float)
+    if (prev_yaw is None) or (cur_yaw is None):
+        dyaw = 0.0
+    else:
+        dyaw = float(np.arctan2(np.sin(float(cur_yaw) - float(prev_yaw)), np.cos(float(cur_yaw) - float(prev_yaw))))
+    vec = np.asarray([dxy[0], dxy[1], dyaw], dtype=np.float32)
+
+    clip = np.asarray(getattr(cfg, 'latentdriver_action_clip', (6.0, 0.35, 0.35)), dtype=np.float32).reshape(-1)
+    if clip.size > 0:
+        d = int(min(vec.shape[0], clip.shape[0]))
+        vec[:d] = np.clip(vec[:d], -clip[:d], clip[:d])
+    return vec
+
+
+def _warm_start_latentdriver_histories(
+    state: Any,
+    selected_idx: np.ndarray,
+    ld_adapter: Any,
+    cfg: ClosedLoopConfig,
+) -> Tuple[List[np.ndarray], List[np.ndarray]]:
+    if not bool(getattr(cfg, 'latentdriver_use_history_warm_start', True)):
+        return [], []
+
+    hist_steps = int(max(0, getattr(cfg, 'history_steps', 0)))
+    if hist_steps <= 0:
+        return [], []
+
+    cur_t = int(max(0, _safe_state_timestep(state)))
+    total_t = int(max(0, _state_time_count(state)))
+    if total_t > 0:
+        cur_t = int(min(cur_t, total_t - 1))
+    if cur_t <= 0:
+        return [], []
+
+    start_t = int(max(0, cur_t - hist_steps))
+    end_t = int(cur_t)  # exclude current step; rollout loop appends current tokens.
+
+    state_hist: List[np.ndarray] = []
+    action_hist: List[np.ndarray] = []
+    prev_state: Optional[Any] = None
+    for t_idx in range(start_t, end_t):
+        hist_state = _state_with_current_timestep(state, int(t_idx))
+        if hist_state is None:
+            continue
+        try:
+            tokens = ld_adapter.encode_tokens(hist_state, selected_idx)
+        except Exception:
+            continue
+        state_hist.append(np.asarray(tokens, dtype=np.float32))
+        if prev_state is not None:
+            action_hist.append(_estimate_sdc_action_from_state_pair(prev_state, hist_state, cfg=cfg))
+        prev_state = hist_state
+
+    return state_hist, action_hist
 
 
 def _state_xy_at_time(state: Any, target_obj_idx: int, time_index: int) -> Optional[np.ndarray]:
@@ -1295,7 +1530,10 @@ class LatentDriverPredictiveKLAdapter:
     def __init__(self, cfg: ClosedLoopConfig):
         self.cfg = cfg
         self.repo_path = Path(cfg.latentdriver_repo_path)
-        self.context_len = int(max(1, cfg.latentdriver_context_len))
+        base_context = int(max(1, cfg.latentdriver_context_len))
+        if bool(getattr(cfg, 'latentdriver_force_context_from_history', True)):
+            base_context = int(max(base_context, int(max(1, getattr(cfg, 'history_steps', base_context)))))
+        self.context_len = int(base_context)
         self.device = None
         self.model = None
         self.act_dim = 3 if cfg.latentdriver_action_type == 'waypoint' else 2
@@ -2161,9 +2399,6 @@ def closed_loop_rollout_selected(
         selected_idx_j = jnp.asarray(selected_idx, dtype=jnp.int32)
         action_dim = None
 
-        ld_state_hist: List[np.ndarray] = []
-        ld_action_hist: List[np.ndarray] = []
-
         if planner_type != 'latentdriver':
             raise ValueError(f'Unsupported planner_type={planner_type!r}. Only latentdriver is supported.')
 
@@ -2171,6 +2406,12 @@ def closed_loop_rollout_selected(
         sdc_fallback_actor = planner_bundle['sdc_fallback_actor']
         control_dynamics_model = planner_bundle['control_dynamics_model']
         ld_adapter = planner_bundle['ld_adapter']
+        ld_state_hist, ld_action_hist = _warm_start_latentdriver_histories(
+            state=state,
+            selected_idx=selected_idx,
+            ld_adapter=ld_adapter,
+            cfg=cfg,
+        )
         actor_state_planner = None
         kfb, step_key = jax.random.split(step_key)
         actor_state_sdc_fallback = sdc_fallback_actor.init(kfb, state)
