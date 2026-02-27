@@ -17,6 +17,7 @@ from waymax import dynamics as waymax_dynamics
 from waymax import env as waymax_env
 
 from .config import ClosedLoopConfig
+from .smart import get_smart_adapter
 
 # JAX compatibility shim for libraries still calling removed top-level tree APIs.
 if not hasattr(jax, 'tree_map'):
@@ -1753,6 +1754,48 @@ def make_closed_loop_components(base_state: Any, planner_kind: str, planner_name
             'planner_used': 'LatentDriverPredictiveKL',
         })
 
+    elif planner_kind == 'smart':
+        smart_adapter = get_smart_adapter(cfg)
+        planner_actor = None
+        errors = []
+
+        control_kind = str(getattr(cfg, 'smart_control_actor', 'idm_route')).strip().lower()
+        if control_kind == 'idm_route':
+            try:
+                planner_actor = waymax_agents.IDMRoutePolicy(is_controlled_func=planner_mask_fn)
+                planner_used = 'SMARTPredictiveProxy+IDMRoutePolicy'
+            except Exception as e:
+                errors.append(f'IDMRoutePolicy failed: {e}')
+        elif control_kind == 'expert':
+            try:
+                planner_actor = waymax_agents.create_expert_actor(
+                    dynamics_model=env_dynamics,
+                    is_controlled_func=planner_mask_fn,
+                )
+                planner_used = 'SMARTPredictiveProxy+ExpertActor'
+            except Exception as e:
+                errors.append(f'Expert actor failed: {e}')
+        else:
+            errors.append(f'Unknown smart_control_actor: {control_kind}')
+
+        if planner_actor is None:
+            try:
+                planner_actor = waymax_agents.create_expert_actor(
+                    dynamics_model=env_dynamics,
+                    is_controlled_func=planner_mask_fn,
+                )
+                planner_used = 'SMARTPredictiveProxy+ExpertActorFallback'
+            except Exception as e:
+                errors.append(f'Expert fallback failed: {e}')
+                raise RuntimeError('SMART planner actor construction failed. ' + ' | '.join(errors))
+
+        planner_bundle.update({
+            'planner_type': 'smart',
+            'planner_actor': planner_actor,
+            'smart_adapter': smart_adapter,
+            'planner_used': planner_used,
+        })
+
     elif planner_kind == 'idm_route':
         planner_actor = None
         errors = []
@@ -1858,6 +1901,11 @@ def closed_loop_rollout_selected(
             planner_actor = planner_bundle['planner_actor']
             k0, step_key = jax.random.split(step_key)
             actor_state_planner = planner_actor.init(k0, state)
+        elif planner_type == 'smart':
+            planner_actor = planner_bundle['planner_actor']
+            smart_adapter = planner_bundle['smart_adapter']
+            k0, step_key = jax.random.split(step_key)
+            actor_state_planner = planner_actor.init(k0, state)
         else:
             planner_actor = planner_bundle['planner_actor']
             sdc_fallback_actor = planner_bundle['sdc_fallback_actor']
@@ -1884,6 +1932,27 @@ def closed_loop_rollout_selected(
                 action_vec, action_ok = _extract_sdc_action_vector(out_p, sdc_idx=sdc_idx, fallback_dim=3)
                 dist_trace.append(None)
                 actor_state_planner = out_p.actor_state
+            elif planner_type == 'smart':
+                out_p = planner_actor.select_action({}, state, actor_state_planner, subkeys[0])
+                action_vec, action_ok = _extract_sdc_action_vector(out_p, sdc_idx=sdc_idx, fallback_dim=3)
+                actor_state_planner = out_p.actor_state
+                try:
+                    dist_step = smart_adapter.predict_distribution(
+                        state=state,
+                        sdc_idx=sdc_idx,
+                        action_hint=action_vec,
+                    )
+                except Exception:
+                    dist_step = _latentdriver_fallback_dist(
+                        action_dim=np.asarray(action_vec).size,
+                        mean_hint=action_vec,
+                        source='fallback:smart_predict_exception',
+                    )
+                if isinstance(dist_step, dict):
+                    dist_step.setdefault('fallback', np.asarray(0, dtype=np.int32))
+                    dist_step.setdefault('source', 'model:smart_proxy')
+                    dist_step.setdefault('actor_fallback', np.asarray(0, dtype=np.int32))
+                dist_trace.append(dist_step)
 
             else:
                 tokens = ld_adapter.encode_tokens(state, selected_idx)

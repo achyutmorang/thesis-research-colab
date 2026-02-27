@@ -24,6 +24,7 @@ from .signal_analysis import (
     analyze_surprise_signal_usefulness,
     save_surprise_signal_usefulness_artifacts,
 )
+from .smart import smart_observation_contract
 from .colab_runtime import (
     ensure_drive_ready,
     ensure_repo_checkout,
@@ -35,6 +36,7 @@ _WORKFLOW_EXPORTS = [
     'SimulationContextBundle',
     'analyze_signal_if_available',
     'build_full_simulation_context',
+    'configure_experiment_profile',
     'initialize_run_context',
     'report_export_bundle',
     'report_main_loop_bundle',
@@ -71,6 +73,7 @@ __all__ = [
     'run_surprise_quality_gate',
     'run_closed_loop',
     'save_surprise_signal_usefulness_artifacts',
+    'smart_observation_contract',
     'shard_run_prefix',
     'summarize_method_outputs',
     'analyze_surprise_signal_usefulness',

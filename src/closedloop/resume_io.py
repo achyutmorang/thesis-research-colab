@@ -545,7 +545,7 @@ def export_closedloop_artifacts(
     if surprise_name in {'predictive_w2', 'wasserstein', 'wasserstein2', 'w2'}:
         surprise_type = 'planner_dependent_predictive_w2'
         surprise_formula = (
-            'Wasserstein-2 distance between proposal/base LatentDriver action distributions, '
+            'Wasserstein-2 distance between proposal/base planner predictive action distributions, '
             'averaged across valid paired closed-loop steps'
         )
     elif surprise_name == 'action_kl':
@@ -555,7 +555,7 @@ def export_closedloop_artifacts(
         surprise_type = 'planner_dependent_predictive_kl'
         surprise_formula = (
             'KL( p_pi(a|state_delta) || p_pi(a|state_base) ) estimated by Monte Carlo '
-            'on LatentDriver diagonal-GMM action distributions'
+            'on planner diagonal-GMM action distributions'
         )
 
     carry_forward_config = {
@@ -578,6 +578,10 @@ def export_closedloop_artifacts(
             'latentdriver_action_type': cfg.latentdriver_action_type,
             'latentdriver_context_len': int(cfg.latentdriver_context_len),
             'latentdriver_yaw_sigma': float(cfg.latentdriver_yaw_sigma),
+            'smart_mode': str(getattr(cfg, 'smart_mode', 'proxy')),
+            'smart_repo_path': str(getattr(cfg, 'smart_repo_path', '')),
+            'smart_ckpt_path': str(getattr(cfg, 'smart_ckpt_path', '')),
+            'smart_control_actor': str(getattr(cfg, 'smart_control_actor', 'idm_route')),
         },
         'run_controls': {
             'run_chunk_size': int(cfg.run_chunk_size),
@@ -660,6 +664,11 @@ def export_closedloop_artifacts(
             'latentdriver_repo': cfg.latentdriver_repo_path,
             'latentdriver_ckpt': cfg.latentdriver_ckpt_path,
             'latentdriver_ckpt_meta': _file_meta(cfg.latentdriver_ckpt_path),
+            'smart_mode': str(getattr(cfg, 'smart_mode', 'proxy')),
+            'smart_repo': str(getattr(cfg, 'smart_repo_path', '')),
+            'smart_ckpt': str(getattr(cfg, 'smart_ckpt_path', '')),
+            'smart_ckpt_meta': _file_meta(str(getattr(cfg, 'smart_ckpt_path', ''))),
+            'smart_control_actor': str(getattr(cfg, 'smart_control_actor', 'idm_route')),
         },
     }
 

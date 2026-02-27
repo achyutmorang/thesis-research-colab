@@ -508,7 +508,7 @@ def run_quick_surprise_probe(
                     planner_bundle=planner_bundle,
                     seed=base_seed,
                 )
-                if planner_bundle['planner_type'] == 'latentdriver':
+                if planner_bundle['planner_type'] in {'latentdriver', 'smart'}:
                     base_dist_diag = dist_trace_diagnostics(base_dist_trace)
                 else:
                     base_dist_diag = {
@@ -547,7 +547,7 @@ def run_quick_surprise_probe(
                 seed_offset: int,
             ) -> Tuple[float, Dict[str, float], Dict[str, float], str]:
                 base_info = base_rollouts[int(repeat_id)]
-                if planner_bundle['planner_type'] == 'latentdriver':
+                if planner_bundle['planner_type'] in {'latentdriver', 'smart'}:
                     p_surprise, predictive_source = predictive_divergence_from_dist_traces(
                         trace_p=p_dist_trace,
                         trace_q=base_info['base_dist_trace'],
@@ -665,7 +665,7 @@ def run_quick_surprise_probe(
                     chosen_meta = {}
 
                 token_shift_l2 = np.nan
-                if planner_bundle['planner_type'] == 'latentdriver':
+                if planner_bundle['planner_type'] in {'latentdriver', 'smart'}:
                     try:
                         ld_adapter = planner_bundle['ld_adapter']
                         base_tok = np.asarray(ld_adapter.encode_tokens(rec['state'], selected_idx), dtype=float)
@@ -920,8 +920,8 @@ def run_quick_surprise_probe(
         if np.isfinite(token_shift_nonzero) and token_shift_nonzero > 0.0:
             if (not np.isfinite(step_w2_mean)) or (step_w2_mean <= 1e-8):
                 print(
-                    '[probe] warning: planner input tokens changed, but predictive divergence remained ~0. '
-                    'This suggests LatentDriver invariance under current perturbation family.'
+                    '[probe] warning: planner input changed, but predictive divergence remained ~0. '
+                    'This suggests planner invariance under current perturbation family.'
                 )
     except Exception:
         pass

@@ -31,9 +31,23 @@ This codebase is intentionally experimental.
 ## Recommended Workflow
 1. Open `notebooks/closedloop_simulation_colab.ipynb` in Colab.
 2. Run Step 1 bootstrap cell.
-3. In Step 2, set user knobs (`RUN_TAG`, `RUN_MODE`, `PERSIST_ROOT`, sharding).
+3. In Step 2, set user knobs (`PLANNER_BACKEND`, `RUN_TAG`, `RUN_MODE`, `PERSIST_ROOT`, sharding).
 4. Run quick probe (Step 3) before full dataset build.
 5. Continue preflight, calibration, gate, main loop, and export cells top-to-bottom.
+
+## SMART Deployment Modes
+Use `PLANNER_BACKEND='smart'` in the closed-loop simulation notebook.
+
+- `smart`:
+  - Uses SMART-style predictive distributions with runtime-safe proxy backend (`cfg.smart_mode='proxy'`).
+  - Uses a closed-loop control actor (`cfg.smart_control_actor`: `idm_route` or `expert`) for action rollout.
+  - Enables predictive surprise metrics (`predictive_w2` or `predictive_kl`) without requiring full SMART training stack in Colab.
+- `latentdriver`:
+  - Uses LatentDriver planner-in-loop predictive distributions.
+- `idm_route`:
+  - Classical baseline with no planner predictive distribution channel.
+
+Planner-specific defaults are applied centrally in `src/workflows/closedloop_flow.py::configure_experiment_profile`, keeping notebooks orchestration-only.
 
 ## Run Management Semantics
 Step 2 is auto-aware and produces an explicit run plan.

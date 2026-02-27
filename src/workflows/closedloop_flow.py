@@ -45,6 +45,91 @@ def _float_or_default(value: Any, default: float = 0.0) -> float:
     return float(out)
 
 
+def _normalize_planner_backend(value: Any) -> str:
+    backend = str(value).strip().lower()
+    if backend not in {"smart", "latentdriver", "idm_route"}:
+        raise ValueError(f"Unsupported planner backend={value!r}. Expected: smart | latentdriver | idm_route.")
+    return backend
+
+
+def configure_experiment_profile(
+    cfg: ClosedLoopConfig,
+    planner_backend: str = "smart",
+    planner_surprise_name: str = "predictive_w2",
+) -> pd.DataFrame:
+    backend = _normalize_planner_backend(planner_backend)
+
+    if backend == "smart":
+        cfg.planner_kind = "smart"
+        cfg.planner_name = "smart_predictive_proxy_sdc"
+        cfg.smart_mode = "proxy"
+        cfg.smart_control_actor = "idm_route"
+        cfg.smart_repo_path = "/content/SMART"
+        cfg.smart_ckpt_path = ""
+        cfg.smart_action_dt_seconds = 0.1
+        cfg.smart_base_std_xy = 0.35
+        cfg.smart_base_std_yaw = 0.12
+        cfg.smart_interaction_dist_scale_m = 8.0
+        cfg.smart_interaction_closing_speed_scale_mps = 6.0
+    elif backend == "latentdriver":
+        cfg.planner_kind = "latentdriver"
+        cfg.planner_name = "latentdriver_waypoint_sdc"
+        cfg.latentdriver_use_all_vehicle_tokens = True
+        cfg.latentdriver_vehicle_token_cap = 128
+        cfg.latentdriver_encode_in_ego_frame = True
+        cfg.latentdriver_encode_yaw_degrees = True
+    else:
+        cfg.planner_kind = "idm_route"
+        cfg.planner_name = "idm_route"
+
+    # Shared perturbation defaults used across notebook experiments.
+    cfg.perturb_use_behavioral_proposals = True
+    cfg.perturb_target_selection_mode = "highest_interaction"
+    cfg.perturb_target_top_k = 2
+    cfg.perturb_interaction_ttc_horizon_s = 6.0
+    cfg.perturb_interaction_w_proximity = 1.0
+    cfg.perturb_interaction_w_ttc = 1.25
+    cfg.perturb_interaction_w_closing_speed = 0.35
+    cfg.perturb_interaction_w_heading_conflict = 0.35
+    cfg.perturb_behavioral_primitive_cycle = (
+        "toward_ego",
+        "away_from_ego",
+        "target_brake",
+        "target_accel",
+        "lateral_left",
+        "lateral_right",
+        "diag_toward_left",
+        "diag_toward_right",
+    )
+    cfg.perturb_behavioral_longitudinal_gain = 1.05
+    cfg.perturb_behavioral_lateral_gain = 1.20
+    cfg.perturb_behavioral_interaction_gain = 1.25
+    cfg.perturb_behavioral_toward_ego_blend = 0.65
+    cfg.planner_surprise_name = str(planner_surprise_name).strip().lower()
+
+    rows = [
+        {"group": "planner", "key": "backend", "value": cfg.planner_kind},
+        {"group": "planner", "key": "planner_name", "value": cfg.planner_name},
+        {"group": "planner", "key": "surprise_metric", "value": cfg.planner_surprise_name},
+        {"group": "perturb", "key": "target_selection_mode", "value": cfg.perturb_target_selection_mode},
+        {"group": "perturb", "key": "behavioral_primitives", "value": ",".join(cfg.perturb_behavioral_primitive_cycle)},
+    ]
+    if cfg.planner_kind == "smart":
+        rows.extend([
+            {"group": "smart", "key": "mode", "value": cfg.smart_mode},
+            {"group": "smart", "key": "control_actor", "value": cfg.smart_control_actor},
+            {"group": "smart", "key": "repo_path", "value": cfg.smart_repo_path},
+        ])
+    elif cfg.planner_kind == "latentdriver":
+        rows.extend([
+            {"group": "latentdriver", "key": "use_all_vehicle_tokens", "value": bool(cfg.latentdriver_use_all_vehicle_tokens)},
+            {"group": "latentdriver", "key": "vehicle_token_cap", "value": int(cfg.latentdriver_vehicle_token_cap)},
+            {"group": "latentdriver", "key": "encode_in_ego_frame", "value": bool(cfg.latentdriver_encode_in_ego_frame)},
+            {"group": "latentdriver", "key": "encode_yaw_degrees", "value": bool(cfg.latentdriver_encode_yaw_degrees)},
+        ])
+    return pd.DataFrame(rows)
+
+
 @dataclass
 class QuickProbeBundle:
     cfg: ClosedLoopConfig
@@ -93,6 +178,8 @@ class RunContextBundle:
     shard_id: int = 0
     auto_run_main_loop_when_ready: bool = True
     run_main_loop_override: Optional[bool] = None
+    planner_backend: str = ""
+    planner_profile_df: pd.DataFrame = field(default_factory=pd.DataFrame)
 
 
 @dataclass
@@ -364,11 +451,14 @@ def initialize_run_context(
     latentdriver_log_forward_errors: bool = True,
     latentdriver_log_forward_errors_max: int = 10,
     run_tag_prefix: str = "closedloop",
+    planner_backend: str = "smart",
+    planner_surprise_name: str = "predictive_w2",
     auto_generate_run_tag_if_empty: bool = True,
     resume_mode: str = "auto",
     warn_on_config_drift: bool = True,
 ) -> RunContextBundle:
-    cfg, search_cfg, ckpt_scan_df = initialize_configs()
+    planner_backend = _normalize_planner_backend(planner_backend)
+    cfg, search_cfg, ckpt_scan_df = initialize_configs(planner_kind_override=planner_backend)
 
     # Fast iteration defaults for Colab loops.
     cfg.n_eval_scenarios = int(max(1, n_eval_scenarios))
@@ -379,6 +469,11 @@ def initialize_run_context(
     cfg.latentdriver_auto_align_token_count = bool(latentdriver_auto_align_token_count)
     cfg.latentdriver_log_forward_errors = bool(latentdriver_log_forward_errors)
     cfg.latentdriver_log_forward_errors_max = int(max(1, latentdriver_log_forward_errors_max))
+    planner_profile_df = configure_experiment_profile(
+        cfg=cfg,
+        planner_backend=planner_backend,
+        planner_surprise_name=planner_surprise_name,
+    )
 
     run_mode_requested = _normalize_resume_mode(resume_mode)
     requested_run_tag = str(run_tag).strip()
@@ -492,6 +587,8 @@ def initialize_run_context(
         shard_id=int(shard_id_int),
         auto_run_main_loop_when_ready=bool(auto_run_main_loop_when_ready),
         run_main_loop_override=run_main_loop_override,
+        planner_backend=str(planner_backend),
+        planner_profile_df=planner_profile_df,
     )
 
 
@@ -740,6 +837,11 @@ def report_run_context(bundle: RunContextBundle, display_fn: Optional[Any] = Non
         f"AUTO_RUN_MAIN_LOOP_WHEN_READY={bundle.auto_run_main_loop_when_ready}, "
         f"RUN_MAIN_LOOP_OVERRIDE={bundle.run_main_loop_override}"
     )
+    print(
+        "[planner] "
+        f"backend={bundle.planner_backend}, planner_name={bundle.cfg.planner_name}, "
+        f"surprise_metric={bundle.cfg.planner_surprise_name}"
+    )
     if bundle.run_mode_applied == "fresh" and bundle.has_existing_progress:
         print(
             "[run-mode warning] fresh mode requested but existing progress was detected for this RUN_TAG. "
@@ -758,6 +860,8 @@ def report_run_context(bundle: RunContextBundle, display_fn: Optional[Any] = Non
             display_fn(bundle.config_drift_df)
         if len(bundle.ckpt_scan_df):
             display_fn(bundle.ckpt_scan_df.head(10))
+        if len(bundle.planner_profile_df):
+            display_fn(bundle.planner_profile_df)
 
 
 def report_quick_probe_bundle(
@@ -775,7 +879,7 @@ def report_quick_probe_bundle(
         if used <= 0:
             print(
                 "[probe] no scenario produced a feasible base rollout; "
-                "inspect preflight/LatentDriver forward path before trusting probe calibration."
+                "inspect preflight/planner forward path before trusting probe calibration."
             )
             if skipped_reason_counts and skipped_reason_counts not in {"{}", "nan"}:
                 print(f"[probe] base infeasibility reasons: {skipped_reason_counts}")

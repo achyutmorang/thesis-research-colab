@@ -51,7 +51,7 @@ class ClosedLoopConfig:
     enable_intervention_proxy: bool = True
 
     # Closed-loop planner settings
-    planner_kind: str = 'latentdriver'  # 'latentdriver' or 'idm_route'
+    planner_kind: str = 'latentdriver'  # 'latentdriver' | 'smart' | 'idm_route'
     planner_name: str = 'latentdriver_waypoint_sdc'
 
     # Planner-dependent surprise settings
@@ -81,6 +81,19 @@ class ClosedLoopConfig:
     latentdriver_vehicle_token_cap: int = 128
     latentdriver_encode_in_ego_frame: bool = True
     latentdriver_encode_yaw_degrees: bool = True
+
+    # SMART integration (predictive belief backend)
+    # Current implementation supports a robust proxy mode in the same runtime.
+    # Use strict mode only when full SMART model runtime wiring is available.
+    smart_mode: str = 'proxy'  # proxy | strict
+    smart_repo_path: str = '/content/SMART'
+    smart_ckpt_path: str = ''
+    smart_control_actor: str = 'idm_route'  # idm_route | expert
+    smart_action_dt_seconds: float = 0.1
+    smart_base_std_xy: float = 0.35
+    smart_base_std_yaw: float = 0.12
+    smart_interaction_dist_scale_m: float = 8.0
+    smart_interaction_closing_speed_scale_mps: float = 6.0
     # Perturbation injection controls:
     # apply at current simulator timestep and optionally persist for a short window.
     perturb_from_current_timestep: bool = True
@@ -263,15 +276,39 @@ def resolve_latentdriver_checkpoint(cfg: ClosedLoopConfig) -> Tuple[ClosedLoopCo
     return cfg, scan_df
 
 
-def initialize_configs() -> Tuple[ClosedLoopConfig, SearchConfig, pd.DataFrame]:
+def _normalize_planner_kind(value: Optional[str]) -> Optional[str]:
+    if value is None:
+        return None
+    kind = str(value).strip().lower()
+    if kind in {'', 'auto'}:
+        return None
+    if kind not in {'latentdriver', 'smart', 'idm_route'}:
+        raise ValueError(f'Unsupported planner_kind={value!r}. Use one of: latentdriver, smart, idm_route.')
+    return kind
+
+
+def initialize_configs(planner_kind_override: Optional[str] = None) -> Tuple[ClosedLoopConfig, SearchConfig, pd.DataFrame]:
     cfg = align_dataset_scale(ClosedLoopConfig())
+    planner_kind = _normalize_planner_kind(planner_kind_override)
+    if planner_kind is not None:
+        cfg.planner_kind = planner_kind
+        if planner_kind == 'smart':
+            cfg.planner_name = 'smart_predictive_proxy_sdc'
+        elif planner_kind == 'idm_route':
+            cfg.planner_name = 'idm_route'
+        else:
+            cfg.planner_name = 'latentdriver_waypoint_sdc'
+
     search_cfg = SearchConfig()
     cfg, scan_df = resolve_latentdriver_checkpoint(cfg)
 
     np.random.seed(cfg.global_seed)
     random.seed(cfg.global_seed)
 
-    print('[ckpt] final cfg.latentdriver_ckpt_path =', cfg.latentdriver_ckpt_path)
+    if cfg.planner_kind == 'latentdriver':
+        print('[ckpt] final cfg.latentdriver_ckpt_path =', cfg.latentdriver_ckpt_path)
+    else:
+        print(f'[planner] planner_kind={cfg.planner_kind}; latentdriver checkpoint scan skipped.')
     return cfg, search_cfg, scan_df
 
 

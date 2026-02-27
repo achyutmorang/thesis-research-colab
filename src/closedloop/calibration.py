@@ -19,6 +19,7 @@ from .latentdriver import (
     make_closed_loop_components,
     project_delta_vec,
 )
+from .smart import smart_observation_contract
 from .metrics import compute_risk_metrics, planner_action_surprise_kl, risk_kwargs_from_cfg, robust_scale
 
 def run_closedloop_preflight_checks(runner: Any, cfg: ClosedLoopConfig, eval_idx: np.ndarray) -> pd.DataFrame:
@@ -34,6 +35,14 @@ def run_closedloop_preflight_checks(runner: Any, cfg: ClosedLoopConfig, eval_idx
         add('latentdriver_ckpt_exists', ckpt_ok, cfg.latentdriver_ckpt_path)
         contract = latentdriver_observation_contract()
         add('latentdriver_expected_feature_dim', contract['feature_dim'] == 7, str(contract))
+    elif cfg.planner_kind == 'smart':
+        mode = str(getattr(cfg, 'smart_mode', 'proxy')).strip().lower()
+        add('smart_mode_valid', mode in {'proxy', 'strict'}, f'mode={mode}')
+        add('smart_repo_exists', Path(cfg.smart_repo_path).exists(), cfg.smart_repo_path)
+        if mode == 'strict':
+            add('smart_ckpt_exists', bool(str(cfg.smart_ckpt_path).strip()) and Path(cfg.smart_ckpt_path).exists(), cfg.smart_ckpt_path)
+        contract = smart_observation_contract()
+        add('smart_expected_distribution_dim', int(contract.get('distribution_dims', 0)) == 3, str(contract))
 
     try:
         sid = None
@@ -87,12 +96,13 @@ def run_closedloop_preflight_checks(runner: Any, cfg: ClosedLoopConfig, eval_idx
             f'effect_l2_mean={effect_l2:.6f}, proposal_rollout_feasible={int(bool(pfeasible))}, note={pnote}',
         )
 
-        if planner_bundle.get('planner_type') == 'latentdriver':
+        planner_type = str(planner_bundle.get('planner_type', ''))
+        if planner_type in {'latentdriver', 'smart'}:
             non_null = int(sum(d is not None for d in dist_trace))
-            add('latentdriver_distribution_trace_nonempty', non_null > 0, f'non_null_steps={non_null}/{len(dist_trace)}')
+            add('predictive_distribution_trace_nonempty', non_null > 0, f'non_null_steps={non_null}/{len(dist_trace)}')
             if non_null > 0:
                 first = next(d for d in dist_trace if d is not None)
-                add('latentdriver_dist_fields', all(k in first for k in ['weights', 'means', 'stds']), str(list(first.keys())))
+                add('predictive_dist_fields', all(k in first for k in ['weights', 'means', 'stds']), str(list(first.keys())))
             dist_diag = dist_trace_diagnostics(dist_trace)
             fallback_ratio = float(dist_diag.get('dist_fallback_ratio', np.nan))
             actor_fallback_ratio = float(dist_diag.get('dist_actor_fallback_ratio', np.nan))
@@ -101,45 +111,54 @@ def run_closedloop_preflight_checks(runner: Any, cfg: ClosedLoopConfig, eval_idx
             proxy_source_ratio = float(dist_diag.get('dist_source_proxy_ratio', np.nan))
             max_fallback = float(getattr(cfg, 'latentdriver_preflight_max_fallback_ratio', 0.95))
             add(
-                'latentdriver_dist_fallback_ratio_ok',
+                'predictive_dist_fallback_ratio_ok',
                 bool(np.isfinite(fallback_ratio) and fallback_ratio < max_fallback),
                 f'fallback_ratio={fallback_ratio:.4f}, actor_fallback_ratio={actor_fallback_ratio:.4f}, max={max_fallback:.4f}',
             )
             add(
-                'latentdriver_dist_model_source_ratio_positive',
+                'predictive_dist_model_source_ratio_positive',
                 bool(np.isfinite(model_source_ratio) and model_source_ratio > 0.0),
                 f'model_source_ratio={model_source_ratio:.4f}, proxy_source_ratio={proxy_source_ratio:.4f}',
             )
             add(
-                'latentdriver_dist_finite_ratio_positive',
+                'predictive_dist_finite_ratio_positive',
                 bool(np.isfinite(finite_ratio) and finite_ratio > 0.0),
                 f'dist_finite_ratio={finite_ratio:.4f}',
             )
-            obs_info = planner_bundle['ld_adapter'].last_obs_info
-            feat_dim_ok = int(obs_info.get('feature_dim', -1)) == int(latentdriver_observation_contract()['feature_dim'])
-            add('latentdriver_obs_feature_dim_ok', feat_dim_ok, str(obs_info))
-            add('latentdriver_obs_finite', bool(obs_info.get('finite', False)), str(obs_info))
-            ld_adapter = planner_bundle['ld_adapter']
-            token_count_expected = int(getattr(ld_adapter, '_expected_token_count', 0))
-            token_align_info = dict(getattr(ld_adapter, '_token_align_info', {}))
-            add(
-                'latentdriver_expected_token_count_known',
-                True,
-                f'expected_tokens={token_count_expected}, source={getattr(ld_adapter, "_expected_token_count_source", "unknown")}',
-            )
-            add(
-                'latentdriver_token_alignment_ready',
-                bool(token_align_info.get('enabled', 1) == 1),
-                str(token_align_info),
-            )
-            route = str(getattr(ld_adapter, '_last_forward_route', 'unknown'))
-            err = str(getattr(ld_adapter, '_last_forward_error', ''))
-            route_ok = (route != 'failed') and (len(err.strip()) == 0)
-            add(
-                'latentdriver_forward_route_ok',
-                bool(route_ok),
-                f'route={route}; last_error={err[:240]}',
-            )
+            if planner_type == 'latentdriver':
+                obs_info = planner_bundle['ld_adapter'].last_obs_info
+                feat_dim_ok = int(obs_info.get('feature_dim', -1)) == int(latentdriver_observation_contract()['feature_dim'])
+                add('latentdriver_obs_feature_dim_ok', feat_dim_ok, str(obs_info))
+                add('latentdriver_obs_finite', bool(obs_info.get('finite', False)), str(obs_info))
+                ld_adapter = planner_bundle['ld_adapter']
+                token_count_expected = int(getattr(ld_adapter, '_expected_token_count', 0))
+                token_align_info = dict(getattr(ld_adapter, '_token_align_info', {}))
+                add(
+                    'latentdriver_expected_token_count_known',
+                    True,
+                    f'expected_tokens={token_count_expected}, source={getattr(ld_adapter, "_expected_token_count_source", "unknown")}',
+                )
+                add(
+                    'latentdriver_token_alignment_ready',
+                    bool(token_align_info.get('enabled', 1) == 1),
+                    str(token_align_info),
+                )
+                route = str(getattr(ld_adapter, '_last_forward_route', 'unknown'))
+                err = str(getattr(ld_adapter, '_last_forward_error', ''))
+                route_ok = (route != 'failed') and (len(err.strip()) == 0)
+                add(
+                    'latentdriver_forward_route_ok',
+                    bool(route_ok),
+                    f'route={route}; last_error={err[:240]}',
+                )
+            elif planner_type == 'smart':
+                smart_adapter = planner_bundle.get('smart_adapter', None)
+                obs_info = dict(getattr(smart_adapter, 'last_obs_info', {})) if smart_adapter is not None else {}
+                add('smart_obs_finite', bool(obs_info.get('finite', False)), str(obs_info))
+                route = str(getattr(smart_adapter, 'last_route', 'unknown')) if smart_adapter is not None else 'unknown'
+                err = str(getattr(smart_adapter, 'last_error', '')) if smart_adapter is not None else ''
+                route_ok = (route != 'failed') and (len(err.strip()) == 0)
+                add('smart_forward_route_ok', bool(route_ok), f'route={route}; last_error={err[:240]}')
 
     except Exception as e:
         add('smoke_rollout_exception', False, str(e))
@@ -338,7 +357,7 @@ def calibrate_closed_loop_thresholds(
                 seed=cfg.global_seed + int(sid),
             )
             base_risk = compute_risk_metrics(base_xy, base_valid, **risk_kwargs_from_cfg(cfg))
-            if planner_bundle['planner_type'] == 'latentdriver':
+            if planner_bundle['planner_type'] in {'latentdriver', 'smart'}:
                 base_dist_diag = dist_trace_diagnostics(base_dist_trace)
             else:
                 base_dist_diag = {
@@ -364,7 +383,7 @@ def calibrate_closed_loop_thresholds(
                 prop_dist_trace: List[Optional[Dict[str, np.ndarray]]],
                 seed_offset: int,
             ) -> Tuple[float, Dict[str, float], Dict[str, float], str]:
-                if planner_bundle['planner_type'] == 'latentdriver':
+                if planner_bundle['planner_type'] in {'latentdriver', 'smart'}:
                     surprise_val, predictive_source = predictive_divergence_from_dist_traces(
                         trace_p=prop_dist_trace,
                         trace_q=base_dist_trace,
@@ -1161,7 +1180,9 @@ def diagnose_surprise_root_cause(
     )
     forward_fail_detail = ''
     if len(preflight_failed) > 0 and 'check' in preflight_failed.columns and 'detail' in preflight_failed.columns:
-        forward_rows = preflight_failed[preflight_failed['check'] == 'latentdriver_forward_route_ok']
+        forward_rows = preflight_failed[
+            preflight_failed['check'].isin(['latentdriver_forward_route_ok', 'smart_forward_route_ok'])
+        ]
         if len(forward_rows) > 0:
             forward_fail_detail = str(forward_rows.iloc[0].get('detail', ''))
 
@@ -1233,7 +1254,7 @@ def diagnose_surprise_root_cause(
             'distribution_fallback_dominant',
             'high',
             f'proposal_dist_fallback_ratio={fallback_ratio:.4f}',
-            'Focus on LatentDriver forward path (token alignment, route errors) before tuning gate thresholds.',
+            'Focus on planner predictive-forward path (shape alignment, route errors) before tuning gate thresholds.',
         )
     if np.isfinite(model_source_ratio) and model_source_ratio <= 0.05:
         add_finding(

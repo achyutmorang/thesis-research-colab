@@ -42,7 +42,7 @@ def evaluate_delta_closed_loop(
 
     risk = compute_risk_metrics(xy, valid, **risk_kwargs_from_cfg(cfg))
 
-    if planner_bundle['planner_type'] == 'latentdriver':
+    if planner_bundle['planner_type'] in {'latentdriver', 'smart'}:
         surprise_pd, predictive_source = predictive_divergence_from_dist_traces(
             trace_p=dist_trace,
             trace_q=base_metrics['base_dist_trace'],
