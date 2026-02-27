@@ -29,10 +29,10 @@ from .config import (
 from .latentdriver import (
     _choose_target_non_ego,
     closed_loop_rollout_selected,
+    predictive_divergence_from_dist_traces,
     dist_trace_change_stats,
     dist_trace_diagnostics,
     make_closed_loop_components,
-    predictive_kl_from_dist_traces,
 )
 from .metrics import compute_risk_metrics, planner_action_surprise_kl, risk_kwargs_from_cfg
 from .resume_io import (
@@ -492,7 +492,7 @@ def run_quick_surprise_probe(
 
         try:
             selected_idx = np.asarray(rec['selected_indices'], dtype=np.int32)
-            target_idx = _choose_target_non_ego(rec['state'], selected_idx)
+            target_idx = _choose_target_non_ego(rec['state'], selected_idx, cfg=cfg)
             planner_bundle = make_closed_loop_components(rec['state'], cfg.planner_kind, cfg.planner_name, cfg)
 
             base_rollouts: List[Dict[str, Any]] = []
@@ -547,9 +547,10 @@ def run_quick_surprise_probe(
             ) -> Tuple[float, Dict[str, float], Dict[str, float], str]:
                 base_info = base_rollouts[int(repeat_id)]
                 if planner_bundle['planner_type'] == 'latentdriver':
-                    p_surprise = predictive_kl_from_dist_traces(
-                        p_dist_trace,
-                        base_info['base_dist_trace'],
+                    p_surprise, predictive_source = predictive_divergence_from_dist_traces(
+                        trace_p=p_dist_trace,
+                        trace_q=base_info['base_dist_trace'],
+                        metric=cfg.planner_surprise_name,
                         estimator=cfg.predictive_kl_estimator,
                         n_mc_samples=cfg.predictive_kl_mc_samples,
                         seed=int(cfg.predictive_kl_mc_seed + sid * 1000 + seed_offset),
@@ -559,7 +560,7 @@ def run_quick_surprise_probe(
                     )
                     p_dist_diag = dist_trace_diagnostics(p_dist_trace)
                     trace_diag = dist_trace_change_stats(p_dist_trace, base_info['base_dist_trace'])
-                    surprise_source = 'predictive_kl'
+                    surprise_source = str(predictive_source)
 
                     if (not np.isfinite(p_surprise)) or (float(p_surprise) <= 1e-12):
                         action_surprise = planner_action_surprise_kl(
@@ -596,6 +597,8 @@ def run_quick_surprise_probe(
                         'trace_pair_ratio_all': np.nan,
                         'step_mean_l2_mean': np.nan,
                         'step_mean_l2_all_mean': np.nan,
+                        'step_w2_mean': np.nan,
+                        'step_w2_all_mean': np.nan,
                         'step_logit_l1_mean': np.nan,
                         'step_logit_l1_all_mean': np.nan,
                     }
@@ -606,9 +609,18 @@ def run_quick_surprise_probe(
             for k in range(proposals_per_scenario):
                 chosen_prop = None
                 chosen_attempts = 0
+                chosen_meta: Dict[str, Any] = {}
                 for attempt in range(max_resample_attempts):
                     proposal_key = int(k + attempt * proposals_per_scenario)
-                    prop_try = make_calibration_delta_proposal(rng, proposal_key, search_cfg)
+                    prop_try, prop_meta_try = make_calibration_delta_proposal(
+                        rng=rng,
+                        k=proposal_key,
+                        search_cfg=search_cfg,
+                        base_state=rec['state'],
+                        target_obj_idx=target_idx,
+                        cfg=cfg,
+                        return_meta=True,
+                    )
                     seed_try = int(cfg.global_seed + sid + 1000 + k * 101 + attempt)
                     p_xy_try, p_valid_try, p_actions_try, p_action_valid_try, p_dist_trace_try, p_try_feasible, _ = closed_loop_rollout_selected(
                         base_state=rec['state'],
@@ -642,12 +654,14 @@ def run_quick_surprise_probe(
                         realize_reason = 'rollout_infeasible'
                     chosen_prop = np.asarray(prop_try, dtype=float)
                     chosen_attempts = int(attempt + 1)
+                    chosen_meta = dict(prop_meta_try) if isinstance(prop_meta_try, dict) else {}
                     if realized_ok:
                         break
 
                 if chosen_prop is None:
                     chosen_prop = np.zeros((2,), dtype=float)
                     chosen_attempts = 0
+                    chosen_meta = {}
 
                 for repeat_id in range(repeat_seeds):
                     seed_offset = int(1000 + k * 101 + repeat_id * 10007)
@@ -704,6 +718,10 @@ def run_quick_surprise_probe(
                         'proposal_realized': int(realized_ok),
                         'proposal_attempts': int(chosen_attempts),
                         'proposal_realization_reason': str(realize_reason),
+                        'proposal_kind': str(chosen_meta.get('proposal_kind', 'unknown')),
+                        'proposal_primitive': str(chosen_meta.get('primitive', '')),
+                        'proposal_primitive_scale': float(chosen_meta.get('primitive_scale', np.nan)),
+                        'proposal_primitive_gain': float(chosen_meta.get('primitive_gain', np.nan)),
                         'base_dist_fallback_ratio': float(base_dist_diag.get('dist_fallback_ratio', np.nan)),
                         'base_dist_actor_fallback_ratio': float(base_dist_diag.get('dist_actor_fallback_ratio', np.nan)),
                         'base_dist_source_model_ratio': float(base_dist_diag.get('dist_source_model_ratio', np.nan)),
@@ -716,6 +734,8 @@ def run_quick_surprise_probe(
                         'trace_pair_ratio_all': float(trace_diag.get('trace_pair_ratio_all', np.nan)),
                         'step_mean_l2_mean': float(trace_diag.get('step_mean_l2_mean', np.nan)),
                         'step_mean_l2_all_mean': float(trace_diag.get('step_mean_l2_all_mean', np.nan)),
+                        'step_w2_mean': float(trace_diag.get('step_w2_mean', np.nan)),
+                        'step_w2_all_mean': float(trace_diag.get('step_w2_all_mean', np.nan)),
                         'step_logit_l1_mean': float(trace_diag.get('step_logit_l1_mean', np.nan)),
                         'step_logit_l1_all_mean': float(trace_diag.get('step_logit_l1_all_mean', np.nan)),
                         'probe_error': '',
@@ -731,6 +751,10 @@ def run_quick_surprise_probe(
                 'proposal_realized': 0,
                 'proposal_attempts': 0,
                 'proposal_realization_reason': 'probe_exception',
+                'proposal_kind': 'probe_exception',
+                'proposal_primitive': '',
+                'proposal_primitive_scale': np.nan,
+                'proposal_primitive_gain': np.nan,
                 'proposal_dist_fallback_ratio': np.nan,
                 'proposal_dist_actor_fallback_ratio': np.nan,
                 'proposal_dist_source_model_ratio': np.nan,
@@ -739,6 +763,8 @@ def run_quick_surprise_probe(
                 'trace_pair_ratio_all': np.nan,
                 'step_mean_l2_mean': np.nan,
                 'step_mean_l2_all_mean': np.nan,
+                'step_w2_mean': np.nan,
+                'step_w2_all_mean': np.nan,
                 'step_logit_l1_mean': np.nan,
                 'step_logit_l1_all_mean': np.nan,
                 'proposal_rollout_feasible': 0,
@@ -806,6 +832,7 @@ def run_quick_surprise_probe(
             'trace_pair_ratio_mean': np.nan,
             'trace_pair_ratio_all_mean': np.nan,
             'step_mean_l2_all_mean': np.nan,
+            'step_w2_all_mean': np.nan,
             'step_logit_l1_all_mean': np.nan,
             'proposal_realized_fraction': np.nan,
             'proposal_attempts_mean': np.nan,
@@ -849,6 +876,7 @@ def run_quick_surprise_probe(
         'trace_pair_ratio_mean': _safe_col_nanmean(probe_df, 'trace_pair_ratio'),
         'trace_pair_ratio_all_mean': _safe_col_nanmean(probe_df, 'trace_pair_ratio_all'),
         'step_mean_l2_all_mean': _safe_col_nanmean(probe_df, 'step_mean_l2_all_mean'),
+        'step_w2_all_mean': _safe_col_nanmean(probe_df, 'step_w2_all_mean'),
         'step_logit_l1_all_mean': _safe_col_nanmean(probe_df, 'step_logit_l1_all_mean'),
         'proposal_realized_fraction': _safe_col_nanmean(probe_df, 'proposal_realized'),
         'proposal_attempts_mean': _safe_col_nanmean(probe_df, 'proposal_attempts'),
@@ -924,7 +952,7 @@ def run_closed_loop(
 
             try:
                 selected_idx = np.asarray(rec['selected_indices'], dtype=np.int32)
-                target_idx = _choose_target_non_ego(rec['state'], selected_idx)
+                target_idx = _choose_target_non_ego(rec['state'], selected_idx, cfg=cfg)
                 planner_bundle = make_closed_loop_components(rec['state'], cfg.planner_kind, cfg.planner_name, cfg)
 
                 # Common random numbers across methods:
@@ -935,7 +963,17 @@ def run_closed_loop(
                 if n_props > 0:
                     proposal_dirs: List[np.ndarray] = []
                     for k in range(n_props):
-                        prop = np.asarray(make_calibration_delta_proposal(scenario_rng, k, search_cfg), dtype=float).reshape(-1)
+                        prop = np.asarray(
+                            make_calibration_delta_proposal(
+                                rng=scenario_rng,
+                                k=k,
+                                search_cfg=search_cfg,
+                                base_state=rec['state'],
+                                target_obj_idx=target_idx,
+                                cfg=cfg,
+                            ),
+                            dtype=float,
+                        ).reshape(-1)
                         if prop.size < 2:
                             prop = np.asarray([1.0, 0.0], dtype=float)
                         norm = float(np.linalg.norm(prop[:2]))

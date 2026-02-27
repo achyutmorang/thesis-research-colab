@@ -541,8 +541,25 @@ def export_closedloop_artifacts(
             indent=2,
         )
 
+    surprise_name = str(getattr(cfg, 'planner_surprise_name', 'predictive_kl')).strip().lower()
+    if surprise_name in {'predictive_w2', 'wasserstein', 'wasserstein2', 'w2'}:
+        surprise_type = 'planner_dependent_predictive_w2'
+        surprise_formula = (
+            'Wasserstein-2 distance between proposal/base LatentDriver action distributions, '
+            'averaged across valid paired closed-loop steps'
+        )
+    elif surprise_name == 'action_kl':
+        surprise_type = 'planner_action_kl'
+        surprise_formula = 'Action-level KL between proposal/base ego action traces over valid paired steps'
+    else:
+        surprise_type = 'planner_dependent_predictive_kl'
+        surprise_formula = (
+            'KL( p_pi(a|state_delta) || p_pi(a|state_base) ) estimated by Monte Carlo '
+            'on LatentDriver diagonal-GMM action distributions'
+        )
+
     carry_forward_config = {
-        'experiment_track': 'B_closed_loop_simulation_only',
+        'experiment_track': 'closed_loop_simulation_only',
         'created_utc': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
         'planner': {
             'planner_kind': cfg.planner_kind,
@@ -550,8 +567,8 @@ def export_closedloop_artifacts(
         },
         'surprise_definition': {
             'name': cfg.planner_surprise_name,
-            'type': 'planner_dependent_predictive_kl',
-            'formula': 'KL( p_pi(a|state_delta) || p_pi(a|state_base) ) estimated by Monte Carlo on LatentDriver diagonal-GMM action distributions',
+            'type': surprise_type,
+            'formula': surprise_formula,
             'predictive_kl_estimator': cfg.predictive_kl_estimator,
             'predictive_kl_mc_samples': int(cfg.predictive_kl_mc_samples),
             'predictive_kl_mc_seed': int(cfg.predictive_kl_mc_seed),

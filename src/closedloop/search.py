@@ -7,9 +7,9 @@ import numpy as np
 from .config import SearchConfig, ClosedLoopConfig
 from .latentdriver import (
     closed_loop_rollout_selected,
+    predictive_divergence_from_dist_traces,
     dist_trace_change_stats,
     dist_trace_diagnostics,
-    predictive_kl_from_dist_traces,
     project_delta_vec,
 )
 from .metrics import compute_risk_metrics, planner_action_surprise_kl, risk_kwargs_from_cfg
@@ -43,9 +43,10 @@ def evaluate_delta_closed_loop(
     risk = compute_risk_metrics(xy, valid, **risk_kwargs_from_cfg(cfg))
 
     if planner_bundle['planner_type'] == 'latentdriver':
-        surprise_pd = predictive_kl_from_dist_traces(
-            dist_trace,
-            base_metrics['base_dist_trace'],
+        surprise_pd, predictive_source = predictive_divergence_from_dist_traces(
+            trace_p=dist_trace,
+            trace_q=base_metrics['base_dist_trace'],
+            metric=cfg.planner_surprise_name,
             estimator=cfg.predictive_kl_estimator,
             n_mc_samples=cfg.predictive_kl_mc_samples,
             seed=int(cfg.predictive_kl_mc_seed + int(seed)),
@@ -54,7 +55,7 @@ def evaluate_delta_closed_loop(
             skip_fallback_steps=bool(cfg.predictive_kl_skip_fallback_steps),
         )
         dist_diag = dist_trace_diagnostics(dist_trace)
-        surprise_source = 'predictive_kl'
+        surprise_source = str(predictive_source)
         if (not np.isfinite(surprise_pd)) or (float(surprise_pd) <= 1e-12):
             trace_change_diag = dist_trace_change_stats(dist_trace, base_metrics['base_dist_trace'])
             action_surprise = planner_action_surprise_kl(

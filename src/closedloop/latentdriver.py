@@ -144,7 +144,22 @@ def project_delta_vec(delta: np.ndarray, clip: float, l2_budget: float) -> np.nd
         d = d * (l2_budget / norm)
     return d
 
-def _choose_target_non_ego(base_state: Any, selected_idx: np.ndarray) -> int:
+def _unit_2d(vec: Any, fallback: Tuple[float, float] = (1.0, 0.0)) -> np.ndarray:
+    v = np.asarray(vec, dtype=float).reshape(-1)
+    if v.size < 2:
+        return np.asarray(fallback, dtype=float)
+    out = np.asarray(v[:2], dtype=float)
+    n = float(np.linalg.norm(out))
+    if (not np.isfinite(n)) or (n <= 1e-12):
+        return np.asarray(fallback, dtype=float)
+    return out / n
+
+
+def _interaction_candidates(
+    base_state: Any,
+    selected_idx: np.ndarray,
+    cfg: Optional[ClosedLoopConfig] = None,
+) -> List[Dict[str, float]]:
     is_sdc_all = np.asarray(base_state.object_metadata.is_sdc).astype(bool)
     valid_raw = np.asarray(base_state.log_trajectory.valid)
     while valid_raw.ndim > 1 and valid_raw.shape[0] == 1:
@@ -157,48 +172,197 @@ def _choose_target_non_ego(base_state: Any, selected_idx: np.ndarray) -> int:
         valid_t0_all = np.asarray(valid_raw[:, 0]).astype(bool).reshape(-1)
     candidates = [int(i) for i in selected_idx.tolist() if (not is_sdc_all[i]) and valid_t0_all[i]]
     if len(candidates) == 0:
-        raise ValueError('No valid non-ego object found for perturbation.')
+        return []
+
     try:
         sdc_idx = int(np.argmax(is_sdc_all))
         traj = getattr(base_state, 'current_sim_trajectory', getattr(base_state, 'log_trajectory', None))
-        xy0_all = np.asarray(getattr(traj, 'xy', base_state.log_trajectory.xy))
-        sdc_xy = np.asarray(_xy_for_object(xy0_all, sdc_idx), dtype=float)
-        speed = _squeeze_feature(getattr(traj, 'speed', np.zeros((xy0_all.shape[0],), dtype=float)))
-        yaw = _squeeze_feature(getattr(traj, 'yaw', np.zeros((xy0_all.shape[0],), dtype=float)))
+        xy_all = np.asarray(getattr(traj, 'xy', base_state.log_trajectory.xy))
+        speed = _squeeze_feature(getattr(traj, 'speed', np.zeros((xy_all.shape[0],), dtype=float)))
+        yaw = _squeeze_feature(getattr(traj, 'yaw', np.zeros((xy_all.shape[0],), dtype=float)))
+        sdc_xy = np.asarray(_xy_for_object(xy_all, sdc_idx), dtype=float)
         sdc_speed = _feature_value_for_object(speed, sdc_idx, 0.0)
         sdc_yaw = _feature_value_for_object(yaw, sdc_idx, 0.0)
         sdc_vel = np.asarray([np.cos(sdc_yaw), np.sin(sdc_yaw)], dtype=float) * float(sdc_speed)
 
-        best_idx = int(candidates[0])
-        best_score = -np.inf
+        ttc_horizon = float(max(0.5, getattr(cfg, 'perturb_interaction_ttc_horizon_s', 6.0))) if cfg is not None else 6.0
+        w_proximity = float(max(0.0, getattr(cfg, 'perturb_interaction_w_proximity', 1.0))) if cfg is not None else 1.0
+        w_ttc = float(max(0.0, getattr(cfg, 'perturb_interaction_w_ttc', 1.25))) if cfg is not None else 1.25
+        w_closing = float(max(0.0, getattr(cfg, 'perturb_interaction_w_closing_speed', 0.35))) if cfg is not None else 0.35
+        w_heading = float(max(0.0, getattr(cfg, 'perturb_interaction_w_heading_conflict', 0.35))) if cfg is not None else 0.35
+
+        rows: List[Dict[str, float]] = []
         for c in candidates:
-            c_xy = np.asarray(_xy_for_object(xy0_all, int(c)), dtype=float)
+            c_xy = np.asarray(_xy_for_object(xy_all, int(c)), dtype=float)
             rel_pos = c_xy - sdc_xy
             dist = float(np.linalg.norm(rel_pos))
             if not np.isfinite(dist):
                 continue
+            rel_hat = _unit_2d(rel_pos, fallback=(1.0, 0.0))
 
             c_speed = _feature_value_for_object(speed, int(c), 0.0)
             c_yaw = _feature_value_for_object(yaw, int(c), 0.0)
             c_vel = np.asarray([np.cos(c_yaw), np.sin(c_yaw)], dtype=float) * float(c_speed)
             rel_vel = c_vel - sdc_vel
+            closing_speed = float(max(0.0, -np.dot(rel_hat, rel_vel)))
+            ttc = dist / max(closing_speed, 1e-6) if closing_speed > 1e-6 else float('inf')
+            ttc_capped = min(ttc, ttc_horizon) if np.isfinite(ttc) else float(ttc_horizon)
 
-            if dist > 1e-6:
-                closing_speed = float(-np.dot(rel_pos / dist, rel_vel))
-            else:
-                closing_speed = 0.0
-            ttc = dist / max(closing_speed, 1e-6) if closing_speed > 0.0 else float('inf')
+            yaw_diff = float(np.arctan2(np.sin(c_yaw - sdc_yaw), np.cos(c_yaw - sdc_yaw)))
+            heading_conflict = float(abs(np.sin(yaw_diff)))
 
             proximity_term = 1.0 / max(dist, 1e-3)
-            ttc_term = 0.0 if (not np.isfinite(ttc)) else 1.0 / max(ttc, 1e-3)
-            score = proximity_term + ttc_term
-
-            if score > best_score:
-                best_score = float(score)
-                best_idx = int(c)
-        return int(best_idx)
+            ttc_term = 0.0 if (not np.isfinite(ttc)) else (1.0 / max(ttc_capped, 1e-3))
+            closing_term = closing_speed / max(float(c_speed) + float(abs(sdc_speed)) + 1e-3, 1e-3)
+            score = (
+                w_proximity * proximity_term
+                + w_ttc * ttc_term
+                + w_closing * closing_term
+                + w_heading * heading_conflict * proximity_term
+            )
+            rows.append({
+                'obj_idx': float(c),
+                'score': float(score),
+                'dist': float(dist),
+                'ttc': float(ttc) if np.isfinite(ttc) else float('inf'),
+                'closing_speed': float(closing_speed),
+                'heading_conflict': float(heading_conflict),
+            })
+        rows.sort(key=lambda r: float(r.get('score', -np.inf)), reverse=True)
+        return rows
     except Exception:
-        return int(candidates[0])
+        return [{'obj_idx': float(c), 'score': float(-i)} for i, c in enumerate(candidates)]
+
+
+def _choose_target_non_ego(base_state: Any, selected_idx: np.ndarray, cfg: Optional[ClosedLoopConfig] = None) -> int:
+    rows = _interaction_candidates(base_state, selected_idx, cfg=cfg)
+    if len(rows) == 0:
+        raise ValueError('No valid non-ego object found for perturbation.')
+
+    mode = str(getattr(cfg, 'perturb_target_selection_mode', 'highest_interaction') if cfg is not None else 'highest_interaction').strip().lower()
+    top_k = int(max(1, getattr(cfg, 'perturb_target_top_k', 1))) if cfg is not None else 1
+    ranked = rows[:top_k]
+
+    if mode == 'nearest':
+        nearest = min(rows, key=lambda r: float(r.get('dist', np.inf)))
+        return int(nearest['obj_idx'])
+    if mode == 'first_valid':
+        return int(rows[0]['obj_idx'])
+    # Default: highest interaction score (optionally constrained to top_k).
+    return int(ranked[0]['obj_idx'])
+
+
+def make_behavioral_delta_proposal(
+    base_state: Any,
+    target_obj_idx: int,
+    rng: np.random.Generator,
+    k: int,
+    search_cfg: Any,
+    cfg: Optional[ClosedLoopConfig] = None,
+) -> Tuple[np.ndarray, Dict[str, Any]]:
+    primitive_cycle = tuple(getattr(cfg, 'perturb_behavioral_primitive_cycle', ())) if cfg is not None else ()
+    if len(primitive_cycle) == 0:
+        primitive_cycle = (
+            'toward_ego',
+            'away_from_ego',
+            'target_brake',
+            'target_accel',
+            'lateral_left',
+            'lateral_right',
+            'diag_toward_left',
+            'diag_toward_right',
+        )
+    primitive = str(primitive_cycle[int(k) % int(len(primitive_cycle))]).strip().lower()
+
+    scales = np.asarray(
+        getattr(search_cfg, 'proposal_scale_ladder', (0.45, 0.75, 1.05, 1.35)),
+        dtype=float,
+    ).reshape(-1)
+    scales = scales[np.isfinite(scales) & (scales > 0.0)]
+    if scales.size == 0:
+        scales = np.asarray([max(float(getattr(search_cfg, 'random_scale', 0.35)), 0.55)], dtype=float)
+    scale = float(scales[(int(k) // int(len(primitive_cycle))) % int(len(scales))])
+
+    longitudinal_gain = float(max(0.1, getattr(cfg, 'perturb_behavioral_longitudinal_gain', 1.05))) if cfg is not None else 1.05
+    lateral_gain = float(max(0.1, getattr(cfg, 'perturb_behavioral_lateral_gain', 1.20))) if cfg is not None else 1.20
+    interaction_gain = float(max(0.1, getattr(cfg, 'perturb_behavioral_interaction_gain', 1.25))) if cfg is not None else 1.25
+    toward_blend = float(np.clip(getattr(cfg, 'perturb_behavioral_toward_ego_blend', 0.65) if cfg is not None else 0.65, 0.0, 1.0))
+
+    jitter_sigma = float(max(0.0, getattr(search_cfg, 'proposal_jitter_sigma', 0.12)))
+    fallback_dirs = np.asarray(
+        [[1.0, 0.0], [0.0, 1.0], [-1.0, 0.0], [0.0, -1.0], [1.0, 1.0], [1.0, -1.0], [-1.0, 1.0], [-1.0, -1.0]],
+        dtype=float,
+    )
+
+    try:
+        is_sdc_all = np.asarray(base_state.object_metadata.is_sdc).astype(bool)
+        sdc_idx = int(np.argmax(is_sdc_all))
+        traj = getattr(base_state, 'current_sim_trajectory', getattr(base_state, 'log_trajectory', None))
+        xy_all = np.asarray(getattr(traj, 'xy', base_state.log_trajectory.xy))
+        speed = _squeeze_feature(getattr(traj, 'speed', np.zeros((xy_all.shape[0],), dtype=float)))
+        yaw = _squeeze_feature(getattr(traj, 'yaw', np.zeros((xy_all.shape[0],), dtype=float)))
+
+        sdc_xy = np.asarray(_xy_for_object(xy_all, sdc_idx), dtype=float)
+        tgt_xy = np.asarray(_xy_for_object(xy_all, int(target_obj_idx)), dtype=float)
+        sdc_yaw = _feature_value_for_object(yaw, sdc_idx, 0.0)
+        tgt_yaw = _feature_value_for_object(yaw, int(target_obj_idx), 0.0)
+
+        ego_fwd = _unit_2d([np.cos(sdc_yaw), np.sin(sdc_yaw)], fallback=(1.0, 0.0))
+        tgt_fwd = _unit_2d([np.cos(tgt_yaw), np.sin(tgt_yaw)], fallback=tuple(ego_fwd.tolist()))
+        tgt_left = np.asarray([-tgt_fwd[1], tgt_fwd[0]], dtype=float)
+        rel = tgt_xy - sdc_xy
+        toward_ego = _unit_2d(-rel, fallback=tuple((-ego_fwd).tolist()))
+
+        gain = 1.0
+        if primitive == 'toward_ego':
+            direction = toward_ego
+            gain = interaction_gain
+        elif primitive == 'away_from_ego':
+            direction = -toward_ego
+            gain = interaction_gain
+        elif primitive == 'target_brake':
+            direction = -tgt_fwd
+            gain = longitudinal_gain
+        elif primitive == 'target_accel':
+            direction = tgt_fwd
+            gain = longitudinal_gain
+        elif primitive == 'lateral_left':
+            direction = tgt_left
+            gain = lateral_gain
+        elif primitive == 'lateral_right':
+            direction = -tgt_left
+            gain = lateral_gain
+        elif primitive == 'diag_toward_left':
+            direction = _unit_2d(toward_blend * toward_ego + (1.0 - toward_blend) * tgt_left)
+            gain = interaction_gain
+        elif primitive == 'diag_toward_right':
+            direction = _unit_2d(toward_blend * toward_ego - (1.0 - toward_blend) * tgt_left)
+            gain = interaction_gain
+        else:
+            base_dir = fallback_dirs[int(k) % int(fallback_dirs.shape[0])]
+            direction = _unit_2d(base_dir)
+
+        raw = float(scale * gain) * np.asarray(direction, dtype=float)
+        jitter = rng.normal(loc=0.0, scale=jitter_sigma * max(0.25, float(scale)), size=(2,))
+        prop = raw + jitter
+        prop = project_delta_vec(prop, float(search_cfg.delta_clip), float(search_cfg.delta_l2_budget))
+        return prop.astype(float), {
+            'primitive': primitive,
+            'primitive_scale': float(scale),
+            'primitive_gain': float(gain),
+            'target_dist_to_ego': float(np.linalg.norm(rel)),
+        }
+    except Exception:
+        base_dir = fallback_dirs[int(k) % int(fallback_dirs.shape[0])]
+        base_dir = _unit_2d(base_dir)
+        jitter = rng.normal(loc=0.0, scale=jitter_sigma * max(0.25, float(scale)), size=(2,))
+        prop = project_delta_vec(float(scale) * base_dir + jitter, float(search_cfg.delta_clip), float(search_cfg.delta_l2_budget))
+        return prop.astype(float), {
+            'primitive': 'fallback_geometric',
+            'primitive_scale': float(scale),
+            'primitive_gain': 1.0,
+            'target_dist_to_ego': np.nan,
+        }
 
 def _replace_obj(obj: Any, **kwargs: Any) -> Any:
     errors = []
@@ -666,6 +830,56 @@ def _gaussian_kl(mu_p: np.ndarray, cov_p: np.ndarray, mu_q: np.ndarray, cov_q: n
     kl = 0.5 * (term_trace + term_quad - d + (logdet_q - logdet_p))
     return float(max(0.0, kl))
 
+
+def _symmetrize_cov(cov: np.ndarray) -> np.ndarray:
+    c = np.asarray(cov, dtype=float)
+    return 0.5 * (c + c.T)
+
+
+def _psd_matrix_sqrt(cov: np.ndarray) -> np.ndarray:
+    sym = _symmetrize_cov(cov)
+    vals, vecs = np.linalg.eigh(sym)
+    vals = np.clip(vals, 0.0, None)
+    root = (vecs * np.sqrt(vals)) @ vecs.T
+    return _symmetrize_cov(root)
+
+
+def _gaussian_w2(mu_p: np.ndarray, cov_p: np.ndarray, mu_q: np.ndarray, cov_q: np.ndarray) -> float:
+    try:
+        m_p = np.asarray(mu_p, dtype=float).reshape(-1)
+        m_q = np.asarray(mu_q, dtype=float).reshape(-1)
+        d = int(min(m_p.shape[0], m_q.shape[0], cov_p.shape[0], cov_q.shape[0]))
+        if d <= 0:
+            return 0.0
+
+        m_p = m_p[:d]
+        m_q = m_q[:d]
+        c_p = _symmetrize_cov(np.asarray(cov_p, dtype=float)[:d, :d]) + 1e-9 * np.eye(d)
+        c_q = _symmetrize_cov(np.asarray(cov_q, dtype=float)[:d, :d]) + 1e-9 * np.eye(d)
+
+        mean_term = float(np.sum((m_p - m_q) ** 2))
+        c_q_sqrt = _psd_matrix_sqrt(c_q)
+        middle = _symmetrize_cov(c_q_sqrt @ c_p @ c_q_sqrt)
+        middle_sqrt = _psd_matrix_sqrt(middle)
+        trace_term = float(np.trace(c_p + c_q - 2.0 * middle_sqrt))
+        dist_sq = float(max(0.0, mean_term + max(trace_term, 0.0)))
+        return float(np.sqrt(dist_sq))
+    except Exception:
+        # Conservative fallback using diagonal approximation.
+        m_p = np.asarray(mu_p, dtype=float).reshape(-1)
+        m_q = np.asarray(mu_q, dtype=float).reshape(-1)
+        d = int(min(m_p.shape[0], m_q.shape[0], cov_p.shape[0], cov_q.shape[0]))
+        if d <= 0:
+            return 0.0
+        m_p = m_p[:d]
+        m_q = m_q[:d]
+        diag_p = np.clip(np.diag(np.asarray(cov_p, dtype=float)[:d, :d]), 0.0, None)
+        diag_q = np.clip(np.diag(np.asarray(cov_q, dtype=float)[:d, :d]), 0.0, None)
+        mean_term = float(np.sum((m_p - m_q) ** 2))
+        cov_term = float(np.sum((np.sqrt(diag_p) - np.sqrt(diag_q)) ** 2))
+        return float(np.sqrt(max(0.0, mean_term + cov_term)))
+
+
 def _sanitize_diag_gmm(dist: Dict[str, np.ndarray], eps: float) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     w = np.asarray(dist['weights'], dtype=float).reshape(-1)
     means = np.asarray(dist['means'], dtype=float)
@@ -816,6 +1030,69 @@ def predictive_kl_from_dist_traces(
     if len(vals) == 0:
         return 0.0
     return float(np.mean(vals))
+
+
+def predictive_w2_from_dist_traces(
+    trace_p: List[Optional[Dict[str, np.ndarray]]],
+    trace_q: List[Optional[Dict[str, np.ndarray]]],
+    skip_fallback_steps: bool = True,
+) -> float:
+    vals: List[float] = []
+    n = min(len(trace_p), len(trace_q))
+    for i in range(n):
+        dp = trace_p[i]
+        dq = trace_q[i]
+        if dp is None or dq is None:
+            continue
+        if bool(skip_fallback_steps) and (_trace_step_is_fallback(dp) or _trace_step_is_fallback(dq)):
+            continue
+        mu_p, cov_p = _moment_match_diag_gmm(dp)
+        mu_q, cov_q = _moment_match_diag_gmm(dq)
+        vals.append(float(_gaussian_w2(mu_p, cov_p, mu_q, cov_q)))
+    if len(vals) == 0:
+        return 0.0
+    return float(np.mean(vals))
+
+
+def predictive_divergence_from_dist_traces(
+    trace_p: List[Optional[Dict[str, np.ndarray]]],
+    trace_q: List[Optional[Dict[str, np.ndarray]]],
+    metric: str = 'predictive_kl',
+    estimator: str = 'mixture_mc',
+    n_mc_samples: int = 96,
+    seed: int = 12345,
+    eps: float = 1e-8,
+    symmetric: bool = True,
+    skip_fallback_steps: bool = True,
+) -> Tuple[float, str]:
+    metric_key = str(metric).strip().lower()
+    if metric_key in {'predictive_w2', 'wasserstein', 'wasserstein2', 'w2'}:
+        return (
+            float(
+                predictive_w2_from_dist_traces(
+                    trace_p=trace_p,
+                    trace_q=trace_q,
+                    skip_fallback_steps=bool(skip_fallback_steps),
+                )
+            ),
+            'predictive_w2',
+        )
+    return (
+        float(
+            predictive_kl_from_dist_traces(
+                trace_p=trace_p,
+                trace_q=trace_q,
+                estimator=estimator,
+                n_mc_samples=n_mc_samples,
+                seed=seed,
+                eps=eps,
+                symmetric=symmetric,
+                skip_fallback_steps=bool(skip_fallback_steps),
+            )
+        ),
+        'predictive_kl',
+    )
+
 
 class LatentDriverPredictiveKLAdapter:
     def __init__(self, cfg: ClosedLoopConfig):
@@ -1737,6 +2014,12 @@ def dist_trace_change_stats(
             'step_mean_l2_all_mean': np.nan,
             'step_std_l2_mean': np.nan,
             'step_std_l2_all_mean': np.nan,
+            'step_w2_mean': np.nan,
+            'step_w2_p50': np.nan,
+            'step_w2_p95': np.nan,
+            'step_w2_nonzero_ratio': 0.0,
+            'step_w2_all_mean': np.nan,
+            'step_w2_all_nonzero_ratio': 0.0,
             'step_moment_kl_mean': np.nan,
             'step_moment_kl_p50': np.nan,
             'step_moment_kl_p95': np.nan,
@@ -1753,10 +2036,12 @@ def dist_trace_change_stats(
 
     mean_l2_vals: List[float] = []
     std_l2_vals: List[float] = []
+    w2_vals: List[float] = []
     kl_vals: List[float] = []
     logit_l1_vals: List[float] = []
     mean_l2_all_vals: List[float] = []
     std_l2_all_vals: List[float] = []
+    w2_all_vals: List[float] = []
     kl_all_vals: List[float] = []
     logit_l1_all_vals: List[float] = []
     pair_steps_all = 0
@@ -1779,11 +2064,13 @@ def dist_trace_change_stats(
         std_p = np.sqrt(np.maximum(np.diag(cov_p)[:d], 0.0))
         std_q = np.sqrt(np.maximum(np.diag(cov_q)[:d], 0.0))
         std_l2 = float(np.linalg.norm(std_p - std_q))
+        step_w2 = float(_gaussian_w2(mu_p[:d], cov_p[:d, :d], mu_q[:d], cov_q[:d, :d]))
         step_kl = float(_gaussian_kl(mu_p[:d], cov_p[:d, :d], mu_q[:d], cov_q[:d, :d]))
         step_logit_l1 = float(_trace_step_logit_l1(dp, dq))
 
         mean_l2_all_vals.append(mean_l2)
         std_l2_all_vals.append(std_l2)
+        w2_all_vals.append(step_w2)
         kl_all_vals.append(step_kl)
         logit_l1_all_vals.append(step_logit_l1)
 
@@ -1792,6 +2079,7 @@ def dist_trace_change_stats(
 
         mean_l2_vals.append(mean_l2)
         std_l2_vals.append(std_l2)
+        w2_vals.append(step_w2)
         kl_vals.append(step_kl)
         logit_l1_vals.append(step_logit_l1)
 
@@ -1800,6 +2088,7 @@ def dist_trace_change_stats(
         kl_all_arr = np.asarray(kl_all_vals, dtype=float)
         mean_l2_all_arr = np.asarray(mean_l2_all_vals, dtype=float)
         std_l2_all_arr = np.asarray(std_l2_all_vals, dtype=float)
+        w2_all_arr = np.asarray(w2_all_vals, dtype=float)
         logit_l1_all_arr = np.asarray(logit_l1_all_vals, dtype=float)
         return {
             'trace_pair_steps': 0.0,
@@ -1813,6 +2102,12 @@ def dist_trace_change_stats(
             'step_mean_l2_all_mean': float(np.mean(mean_l2_all_arr)) if mean_l2_all_arr.size > 0 else np.nan,
             'step_std_l2_mean': np.nan,
             'step_std_l2_all_mean': float(np.mean(std_l2_all_arr)) if std_l2_all_arr.size > 0 else np.nan,
+            'step_w2_mean': np.nan,
+            'step_w2_p50': np.nan,
+            'step_w2_p95': np.nan,
+            'step_w2_nonzero_ratio': 0.0,
+            'step_w2_all_mean': float(np.mean(w2_all_arr)) if w2_all_arr.size > 0 else np.nan,
+            'step_w2_all_nonzero_ratio': float(np.mean(w2_all_arr > 1e-9)) if w2_all_arr.size > 0 else 0.0,
             'step_moment_kl_mean': np.nan,
             'step_moment_kl_p50': np.nan,
             'step_moment_kl_p95': np.nan,
@@ -1830,10 +2125,12 @@ def dist_trace_change_stats(
     kl_arr = np.asarray(kl_vals, dtype=float)
     mean_l2_arr = np.asarray(mean_l2_vals, dtype=float)
     std_l2_arr = np.asarray(std_l2_vals, dtype=float)
+    w2_arr = np.asarray(w2_vals, dtype=float)
     logit_l1_arr = np.asarray(logit_l1_vals, dtype=float)
     kl_all_arr = np.asarray(kl_all_vals, dtype=float)
     mean_l2_all_arr = np.asarray(mean_l2_all_vals, dtype=float)
     std_l2_all_arr = np.asarray(std_l2_all_vals, dtype=float)
+    w2_all_arr = np.asarray(w2_all_vals, dtype=float)
     logit_l1_all_arr = np.asarray(logit_l1_all_vals, dtype=float)
 
     return {
@@ -1848,6 +2145,12 @@ def dist_trace_change_stats(
         'step_mean_l2_all_mean': float(np.mean(mean_l2_all_arr)),
         'step_std_l2_mean': float(np.mean(std_l2_arr)),
         'step_std_l2_all_mean': float(np.mean(std_l2_all_arr)),
+        'step_w2_mean': float(np.mean(w2_arr)),
+        'step_w2_p50': float(np.quantile(w2_arr, 0.50)),
+        'step_w2_p95': float(np.quantile(w2_arr, 0.95)),
+        'step_w2_nonzero_ratio': float(np.mean(w2_arr > 1e-9)),
+        'step_w2_all_mean': float(np.mean(w2_all_arr)),
+        'step_w2_all_nonzero_ratio': float(np.mean(w2_all_arr > 1e-9)),
         'step_moment_kl_mean': float(np.mean(kl_arr)),
         'step_moment_kl_p50': float(np.quantile(kl_arr, 0.50)),
         'step_moment_kl_p95': float(np.quantile(kl_arr, 0.95)),

@@ -55,7 +55,7 @@ class ClosedLoopConfig:
     planner_name: str = 'latentdriver_waypoint_sdc'
 
     # Planner-dependent surprise settings
-    planner_surprise_name: str = 'predictive_kl'
+    planner_surprise_name: str = 'predictive_kl'  # predictive_kl | predictive_w2 | action_kl
     predictive_kl_estimator: str = 'mixture_mc'  # 'mixture_mc' or 'moment_match'
     predictive_kl_mc_samples: int = 192
     predictive_kl_mc_seed: int = 12345
@@ -81,6 +81,30 @@ class ClosedLoopConfig:
     # apply at current simulator timestep and optionally persist for a short window.
     perturb_from_current_timestep: bool = True
     perturb_persist_steps: int = 3
+    # Target-selection policy for perturbations.
+    perturb_target_selection_mode: str = 'highest_interaction'  # highest_interaction | nearest | first_valid
+    perturb_target_top_k: int = 2
+    perturb_interaction_ttc_horizon_s: float = 6.0
+    perturb_interaction_w_proximity: float = 1.0
+    perturb_interaction_w_ttc: float = 1.25
+    perturb_interaction_w_closing_speed: float = 0.35
+    perturb_interaction_w_heading_conflict: float = 0.35
+    # Proposal generation policy.
+    perturb_use_behavioral_proposals: bool = True
+    perturb_behavioral_primitive_cycle: Tuple[str, ...] = (
+        'toward_ego',
+        'away_from_ego',
+        'target_brake',
+        'target_accel',
+        'lateral_left',
+        'lateral_right',
+        'diag_toward_left',
+        'diag_toward_right',
+    )
+    perturb_behavioral_longitudinal_gain: float = 1.05
+    perturb_behavioral_lateral_gain: float = 1.20
+    perturb_behavioral_interaction_gain: float = 1.25
+    perturb_behavioral_toward_ego_blend: float = 0.65
 
     # Calibration from closed-loop base rollouts
     n_closedloop_calib: int = 120
