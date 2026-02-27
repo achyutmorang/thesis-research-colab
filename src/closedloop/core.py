@@ -29,8 +29,8 @@ from .config import (
 from .planner_backends import (
     _choose_target_non_ego,
     closed_loop_rollout_selected,
+    latent_belief_kl_from_dist_trace,
     perturb_initial_state,
-    predictive_divergence_from_dist_traces,
     dist_trace_change_stats,
     dist_trace_diagnostics,
     make_closed_loop_components,
@@ -508,7 +508,7 @@ def run_quick_surprise_probe(
                     planner_bundle=planner_bundle,
                     seed=base_seed,
                 )
-                if planner_bundle['planner_type'] in {'latentdriver', 'smart'}:
+                if planner_bundle['planner_type'] == 'latentdriver':
                     base_dist_diag = dist_trace_diagnostics(base_dist_trace)
                 else:
                     base_dist_diag = {
@@ -547,21 +547,15 @@ def run_quick_surprise_probe(
                 seed_offset: int,
             ) -> Tuple[float, Dict[str, float], Dict[str, float], str]:
                 base_info = base_rollouts[int(repeat_id)]
-                if planner_bundle['planner_type'] in {'latentdriver', 'smart'}:
-                    p_surprise, predictive_source = predictive_divergence_from_dist_traces(
-                        trace_p=p_dist_trace,
-                        trace_q=base_info['base_dist_trace'],
-                        metric=cfg.planner_surprise_name,
-                        estimator=cfg.predictive_kl_estimator,
-                        n_mc_samples=cfg.predictive_kl_mc_samples,
-                        seed=int(cfg.predictive_kl_mc_seed + sid * 1000 + seed_offset),
-                        eps=float(cfg.predictive_kl_eps),
-                        symmetric=bool(cfg.predictive_kl_symmetric),
+                if planner_bundle['planner_type'] == 'latentdriver':
+                    p_surprise, belief_diag = latent_belief_kl_from_dist_trace(
+                        trace=p_dist_trace,
                         skip_fallback_steps=bool(cfg.predictive_kl_skip_fallback_steps),
                     )
                     p_dist_diag = dist_trace_diagnostics(p_dist_trace)
+                    p_dist_diag.update(belief_diag)
                     trace_diag = dist_trace_change_stats(p_dist_trace, base_info['base_dist_trace'])
-                    surprise_source = str(predictive_source)
+                    surprise_source = 'latent_belief_kl'
 
                     if (not np.isfinite(p_surprise)) or (float(p_surprise) <= 1e-12):
                         action_surprise = planner_action_surprise_kl(
@@ -573,11 +567,11 @@ def run_quick_surprise_probe(
                         )
                         if np.isfinite(action_surprise) and float(action_surprise) > 1e-12:
                             p_surprise = float(action_surprise)
-                            if float(trace_diag.get('trace_pair_ratio', 0.0)) > 0.0:
+                            if float(belief_diag.get('belief_kl_step_count', 0.0)) > 0.0:
                                 surprise_source = 'action_kl_fallback'
                             else:
-                                surprise_source = 'action_kl_no_dist_pairs'
-                        elif float(trace_diag.get('trace_pair_ratio', 0.0)) <= 0.0:
+                                surprise_source = 'action_kl_no_belief_pairs'
+                        elif float(belief_diag.get('belief_kl_step_count', 0.0)) <= 0.0:
                             p_surprise = np.nan
                 else:
                     p_surprise = planner_action_surprise_kl(
@@ -665,7 +659,7 @@ def run_quick_surprise_probe(
                     chosen_meta = {}
 
                 token_shift_l2 = np.nan
-                if planner_bundle['planner_type'] in {'latentdriver', 'smart'}:
+                if planner_bundle['planner_type'] == 'latentdriver':
                     try:
                         ld_adapter = planner_bundle['ld_adapter']
                         base_tok = np.asarray(ld_adapter.encode_tokens(rec['state'], selected_idx), dtype=float)

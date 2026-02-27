@@ -17,7 +17,6 @@ from waymax import dynamics as waymax_dynamics
 from waymax import env as waymax_env
 
 from .config import ClosedLoopConfig
-from .smart import get_smart_adapter
 
 # JAX compatibility shim for libraries still calling removed top-level tree APIs.
 if not hasattr(jax, 'tree_map'):
@@ -751,6 +750,9 @@ def _latentdriver_fallback_dist(
         'means': means,
         'stds': np.ones((1, d), dtype=np.float32) * 0.5,
         'fallback': np.asarray(1, dtype=np.int32),
+        'belief_kl_step': np.asarray(np.nan, dtype=np.float32),
+        'belief_kl_mean': np.asarray(np.nan, dtype=np.float32),
+        'belief_kl_available': np.asarray(0, dtype=np.int32),
         'source': str(source),
     }
 
@@ -802,6 +804,9 @@ def _inject_action_proxy_into_dist(
     out['weights'] = weights
     out['means'] = means
     out['stds'] = stds
+    out.setdefault('belief_kl_step', np.asarray(np.nan, dtype=np.float32))
+    out.setdefault('belief_kl_mean', np.asarray(np.nan, dtype=np.float32))
+    out.setdefault('belief_kl_available', np.asarray(0, dtype=np.int32))
     out['source'] = str(source)
     return out
 
@@ -1236,6 +1241,56 @@ def predictive_divergence_from_dist_traces(
     )
 
 
+def _scalar_from_dist_entry(dist: Dict[str, np.ndarray], key: str, default: float = np.nan) -> float:
+    if not isinstance(dist, dict):
+        return float(default)
+    try:
+        arr = np.asarray(dist.get(key, default), dtype=float).reshape(-1)
+        if arr.size <= 0:
+            return float(default)
+        return float(arr[0])
+    except Exception:
+        return float(default)
+
+
+def latent_belief_kl_from_dist_trace(
+    trace: List[Optional[Dict[str, np.ndarray]]],
+    skip_fallback_steps: bool = True,
+) -> Tuple[float, Dict[str, float]]:
+    total_steps = int(len(trace))
+    paired_steps = 0
+    used_vals: List[float] = []
+
+    for d in trace:
+        if not isinstance(d, dict):
+            continue
+        paired_steps += 1
+        if bool(skip_fallback_steps) and _trace_step_is_fallback(d):
+            continue
+        val = _scalar_from_dist_entry(d, 'belief_kl_step', default=np.nan)
+        if not np.isfinite(val):
+            val = _scalar_from_dist_entry(d, 'belief_kl_mean', default=np.nan)
+        if np.isfinite(val):
+            used_vals.append(float(max(0.0, val)))
+
+    if len(used_vals) <= 0:
+        return np.nan, {
+            'belief_kl_step_count': 0.0,
+            'belief_kl_step_ratio': 0.0,
+            'belief_kl_pair_ratio': 0.0,
+            'belief_kl_p95': np.nan,
+        }
+
+    arr = np.asarray(used_vals, dtype=float)
+    used = float(arr.size)
+    return float(np.mean(arr)), {
+        'belief_kl_step_count': used,
+        'belief_kl_step_ratio': float(used / max(total_steps, 1)),
+        'belief_kl_pair_ratio': float(used / max(paired_steps, 1)),
+        'belief_kl_p95': float(np.quantile(arr, 0.95)),
+    }
+
+
 class LatentDriverPredictiveKLAdapter:
     def __init__(self, cfg: ClosedLoopConfig):
         self.cfg = cfg
@@ -1660,6 +1715,17 @@ class LatentDriverPredictiveKLAdapter:
                 source='fallback:model_forward_error',
             )
 
+        belief_kl_step = np.nan
+        belief_kl_mean = np.nan
+        try:
+            belief_kl_steps = self._extract_latent_belief_kl_steps(model_out)
+            if belief_kl_steps.size > 0:
+                belief_kl_step = float(belief_kl_steps[-1])
+                belief_kl_mean = float(np.nanmean(belief_kl_steps))
+        except Exception:
+            belief_kl_step = np.nan
+            belief_kl_mean = np.nan
+
         logits = action_dis[:, 0]
         out_model = action_dis[:, 1:6]
         yaw = action_dis[:, 6:7]
@@ -1678,6 +1744,9 @@ class LatentDriverPredictiveKLAdapter:
             'means': means.astype(np.float32),
             'stds': stds.astype(np.float32),
             'fallback': np.asarray(0, dtype=np.int32),
+            'belief_kl_step': np.asarray(belief_kl_step, dtype=np.float32),
+            'belief_kl_mean': np.asarray(belief_kl_mean, dtype=np.float32),
+            'belief_kl_available': np.asarray(int(np.isfinite(belief_kl_step)), dtype=np.int32),
             'source': f'model:{self._last_forward_route}',
         }
 
@@ -1755,6 +1824,148 @@ class LatentDriverPredictiveKLAdapter:
         if step.shape[1] < 7:
             raise ValueError(f'Action distribution has too few params: shape={step.shape}, expected >=7.')
         return step[:, :7]
+
+    @staticmethod
+    def _reshape_distribution_tensor(x: np.ndarray) -> np.ndarray:
+        arr = np.asarray(x, dtype=np.float32)
+        if arr.ndim <= 0:
+            return arr.reshape(1, 1, 1)
+        if arr.ndim == 1:
+            return arr.reshape(1, arr.shape[0], 1)
+        if arr.ndim == 2:
+            return arr[:, :, None]
+        return arr.reshape(arr.shape[0], arr.shape[1], -1)
+
+    def _coerce_distribution_pair(self, dist_obj: Any) -> Tuple[np.ndarray, np.ndarray]:
+        if isinstance(dist_obj, dict):
+            mu = None
+            sigma = None
+            for key in ('mu', 'mean', 'means'):
+                if key in dist_obj:
+                    mu = dist_obj[key]
+                    break
+            for key in ('sigma', 'std', 'stds', 'scale'):
+                if key in dist_obj:
+                    sigma = dist_obj[key]
+                    break
+            if (mu is None) or (sigma is None):
+                raise ValueError('distribution dict must contain mu/sigma-like keys')
+        elif isinstance(dist_obj, (list, tuple)) and len(dist_obj) >= 2:
+            mu, sigma = dist_obj[0], dist_obj[1]
+        else:
+            raise ValueError('distribution must be tuple/list pair or dict with mu/sigma')
+
+        mu_arr = self._reshape_distribution_tensor(self._to_numpy(mu))
+        sigma_arr = self._reshape_distribution_tensor(self._to_numpy(sigma))
+
+        b = int(min(mu_arr.shape[0], sigma_arr.shape[0]))
+        t = int(min(mu_arr.shape[1], sigma_arr.shape[1]))
+        d = int(min(mu_arr.shape[2], sigma_arr.shape[2]))
+        if (b <= 0) or (t <= 0) or (d <= 0):
+            raise ValueError('distribution pair has empty dimensions after alignment')
+
+        mu_arr = np.asarray(mu_arr[:b, :t, :d], dtype=np.float32)
+        sigma_arr = np.asarray(np.clip(np.abs(sigma_arr[:b, :t, :d]), 1e-4, None), dtype=np.float32)
+        return mu_arr, sigma_arr
+
+    def _looks_like_distribution_pair(self, obj: Any) -> bool:
+        try:
+            self._coerce_distribution_pair(obj)
+            return True
+        except Exception:
+            return False
+
+    def _extract_latent_distribution_pairs(
+        self,
+        model_out: Any,
+    ) -> Tuple[Tuple[np.ndarray, np.ndarray], Tuple[np.ndarray, np.ndarray]]:
+        if isinstance(model_out, (list, tuple)) and len(model_out) >= 3:
+            prior_obj = model_out[1]
+            posterior_obj = model_out[2]
+            if self._looks_like_distribution_pair(prior_obj) and self._looks_like_distribution_pair(posterior_obj):
+                return self._coerce_distribution_pair(prior_obj), self._coerce_distribution_pair(posterior_obj)
+
+        key_pairs = [
+            ('latent_dist', 'rep_dist'),
+            ('prior_dist', 'posterior_dist'),
+            ('prior', 'posterior'),
+        ]
+        if isinstance(model_out, dict):
+            for prior_key, post_key in key_pairs:
+                if (prior_key in model_out) and (post_key in model_out):
+                    return (
+                        self._coerce_distribution_pair(model_out[prior_key]),
+                        self._coerce_distribution_pair(model_out[post_key]),
+                    )
+
+        for prior_key, post_key in key_pairs:
+            if hasattr(model_out, prior_key) and hasattr(model_out, post_key):
+                return (
+                    self._coerce_distribution_pair(getattr(model_out, prior_key)),
+                    self._coerce_distribution_pair(getattr(model_out, post_key)),
+                )
+
+        raise ValueError('Latent belief distributions (latent_dist/rep_dist) not found in model output')
+
+    @staticmethod
+    def _diag_gaussian_kl_posterior_to_prior(
+        prior_mu: np.ndarray,
+        prior_sigma: np.ndarray,
+        posterior_mu: np.ndarray,
+        posterior_sigma: np.ndarray,
+    ) -> np.ndarray:
+        eps = 1e-8
+        prior_sigma = np.clip(np.asarray(prior_sigma, dtype=np.float32), eps, None)
+        posterior_sigma = np.clip(np.asarray(posterior_sigma, dtype=np.float32), eps, None)
+        prior_mu = np.asarray(prior_mu, dtype=np.float32)
+        posterior_mu = np.asarray(posterior_mu, dtype=np.float32)
+
+        prior_var = np.maximum(prior_sigma ** 2, eps)
+        posterior_var = np.maximum(posterior_sigma ** 2, eps)
+        delta = posterior_mu - prior_mu
+        kl = np.log(prior_sigma / posterior_sigma) - 0.5 + (posterior_var + delta ** 2) / (2.0 * prior_var)
+        return np.sum(kl, axis=-1)
+
+    def _extract_latent_belief_kl_steps(self, model_out: Any) -> np.ndarray:
+        (prior_mu, prior_sigma), (posterior_mu, posterior_sigma) = self._extract_latent_distribution_pairs(model_out)
+
+        b = int(min(prior_mu.shape[0], posterior_mu.shape[0]))
+        t_prior = int(prior_mu.shape[1])
+        t_post = int(posterior_mu.shape[1])
+        d = int(min(prior_mu.shape[2], posterior_mu.shape[2]))
+        if (b <= 0) or (d <= 0):
+            return np.zeros((0,), dtype=np.float32)
+
+        prior_mu = prior_mu[:b, :, :d]
+        prior_sigma = prior_sigma[:b, :, :d]
+        posterior_mu = posterior_mu[:b, :, :d]
+        posterior_sigma = posterior_sigma[:b, :, :d]
+
+        # Match the LatentDriver training objective alignment: prior[:, :-1] vs posterior[:, 1:].
+        if (t_prior > 1) and (t_post > 1):
+            prior_mu = prior_mu[:, :-1, :]
+            prior_sigma = prior_sigma[:, :-1, :]
+            posterior_mu = posterior_mu[:, 1:, :]
+            posterior_sigma = posterior_sigma[:, 1:, :]
+
+        t = int(min(prior_mu.shape[1], posterior_mu.shape[1]))
+        if t <= 0:
+            return np.zeros((0,), dtype=np.float32)
+
+        prior_mu = prior_mu[:, :t, :]
+        prior_sigma = prior_sigma[:, :t, :]
+        posterior_mu = posterior_mu[:, :t, :]
+        posterior_sigma = posterior_sigma[:, :t, :]
+
+        step_kl_bt = self._diag_gaussian_kl_posterior_to_prior(
+            prior_mu=prior_mu,
+            prior_sigma=prior_sigma,
+            posterior_mu=posterior_mu,
+            posterior_sigma=posterior_sigma,
+        )
+        step_kl = np.asarray(np.nanmean(step_kl_bt, axis=0), dtype=np.float32).reshape(-1)
+        step_kl = np.clip(step_kl, 0.0, None)
+        return step_kl
 
     def _extract_action_distribution(self, model_out: Any) -> np.ndarray:
         errors: List[str] = []
@@ -1856,101 +2067,31 @@ def make_closed_loop_components(base_state: Any, planner_kind: str, planner_name
         'sdc_idx': sdc_idx,
     }
 
-    if planner_kind == 'latentdriver':
-        adapter = get_latentdriver_adapter(cfg)
-        planner_actor = adapter.build_control_actor(is_controlled_func=planner_mask_fn)
-        sdc_fallback_actor = waymax_agents.create_expert_actor(
-            dynamics_model=env_dynamics,
-            is_controlled_func=planner_mask_fn,
-        )
+    if planner_kind != 'latentdriver':
+        raise ValueError(f'Unsupported planner_kind={planner_kind!r}. Only latentdriver is supported.')
 
-        if cfg.latentdriver_action_type == 'waypoint':
-            control_dynamics_model = waymax_dynamics.DeltaLocal()
-        elif cfg.latentdriver_action_type == 'bicycle':
-            control_dynamics_model = waymax_dynamics.InvertibleBicycleModel()
-        else:
-            raise ValueError(f'Unknown latentdriver_action_type: {cfg.latentdriver_action_type}')
+    adapter = get_latentdriver_adapter(cfg)
+    planner_actor = adapter.build_control_actor(is_controlled_func=planner_mask_fn)
+    sdc_fallback_actor = waymax_agents.create_expert_actor(
+        dynamics_model=env_dynamics,
+        is_controlled_func=planner_mask_fn,
+    )
 
-        planner_bundle.update({
-            'planner_type': 'latentdriver',
-            'planner_actor': planner_actor,
-            'sdc_fallback_actor': sdc_fallback_actor,
-            'control_dynamics_model': control_dynamics_model,
-            'ld_adapter': adapter,
-            'planner_used': 'LatentDriverPredictiveKL',
-        })
-
-    elif planner_kind == 'smart':
-        smart_adapter = get_smart_adapter(cfg)
-        planner_actor = None
-        errors = []
-
-        control_kind = str(getattr(cfg, 'smart_control_actor', 'idm_route')).strip().lower()
-        if control_kind == 'idm_route':
-            try:
-                planner_actor = waymax_agents.IDMRoutePolicy(is_controlled_func=planner_mask_fn)
-                planner_used = 'SMARTPredictiveProxy+IDMRoutePolicy'
-            except Exception as e:
-                errors.append(f'IDMRoutePolicy failed: {e}')
-        elif control_kind == 'expert':
-            try:
-                planner_actor = waymax_agents.create_expert_actor(
-                    dynamics_model=env_dynamics,
-                    is_controlled_func=planner_mask_fn,
-                )
-                planner_used = 'SMARTPredictiveProxy+ExpertActor'
-            except Exception as e:
-                errors.append(f'Expert actor failed: {e}')
-        else:
-            errors.append(f'Unknown smart_control_actor: {control_kind}')
-
-        if planner_actor is None:
-            try:
-                planner_actor = waymax_agents.create_expert_actor(
-                    dynamics_model=env_dynamics,
-                    is_controlled_func=planner_mask_fn,
-                )
-                planner_used = 'SMARTPredictiveProxy+ExpertActorFallback'
-            except Exception as e:
-                errors.append(f'Expert fallback failed: {e}')
-                raise RuntimeError('SMART planner actor construction failed. ' + ' | '.join(errors))
-
-        planner_bundle.update({
-            'planner_type': 'smart',
-            'planner_actor': planner_actor,
-            'smart_adapter': smart_adapter,
-            'planner_used': planner_used,
-        })
-
-    elif planner_kind == 'idm_route':
-        planner_actor = None
-        errors = []
-
-        try:
-            planner_actor = waymax_agents.IDMRoutePolicy(is_controlled_func=planner_mask_fn)
-            planner_used = 'IDMRoutePolicy'
-        except Exception as e:
-            errors.append(f'IDMRoutePolicy failed: {e}')
-
-        if planner_actor is None:
-            try:
-                planner_actor = waymax_agents.create_expert_actor(
-                    dynamics_model=env_dynamics,
-                    is_controlled_func=planner_mask_fn,
-                )
-                planner_used = 'ExpertActorFallback'
-            except Exception as e:
-                errors.append(f'Expert fallback failed: {e}')
-                raise RuntimeError('Planner actor construction failed. ' + ' | '.join(errors))
-
-        planner_bundle.update({
-            'planner_type': 'actor',
-            'planner_actor': planner_actor,
-            'planner_used': planner_used,
-        })
-
+    if cfg.latentdriver_action_type == 'waypoint':
+        control_dynamics_model = waymax_dynamics.DeltaLocal()
+    elif cfg.latentdriver_action_type == 'bicycle':
+        control_dynamics_model = waymax_dynamics.InvertibleBicycleModel()
     else:
-        raise ValueError(f'Unsupported planner_kind: {planner_kind}')
+        raise ValueError(f'Unknown latentdriver_action_type: {cfg.latentdriver_action_type}')
+
+    planner_bundle.update({
+        'planner_type': 'latentdriver',
+        'planner_actor': planner_actor,
+        'sdc_fallback_actor': sdc_fallback_actor,
+        'control_dynamics_model': control_dynamics_model,
+        'ld_adapter': adapter,
+        'planner_used': 'LatentDriverPredictiveKL',
+    })
 
     if planner_bundle['planner_used'] != planner_name:
         print(f"[planner notice] requested={planner_name}, used={planner_bundle['planner_used']}")
@@ -2023,23 +2164,16 @@ def closed_loop_rollout_selected(
         ld_state_hist: List[np.ndarray] = []
         ld_action_hist: List[np.ndarray] = []
 
-        if planner_type == 'actor':
-            planner_actor = planner_bundle['planner_actor']
-            k0, step_key = jax.random.split(step_key)
-            actor_state_planner = planner_actor.init(k0, state)
-        elif planner_type == 'smart':
-            planner_actor = planner_bundle['planner_actor']
-            smart_adapter = planner_bundle['smart_adapter']
-            k0, step_key = jax.random.split(step_key)
-            actor_state_planner = planner_actor.init(k0, state)
-        else:
-            planner_actor = planner_bundle['planner_actor']
-            sdc_fallback_actor = planner_bundle['sdc_fallback_actor']
-            control_dynamics_model = planner_bundle['control_dynamics_model']
-            ld_adapter = planner_bundle['ld_adapter']
-            actor_state_planner = None
-            kfb, step_key = jax.random.split(step_key)
-            actor_state_sdc_fallback = sdc_fallback_actor.init(kfb, state)
+        if planner_type != 'latentdriver':
+            raise ValueError(f'Unsupported planner_type={planner_type!r}. Only latentdriver is supported.')
+
+        planner_actor = planner_bundle['planner_actor']
+        sdc_fallback_actor = planner_bundle['sdc_fallback_actor']
+        control_dynamics_model = planner_bundle['control_dynamics_model']
+        ld_adapter = planner_bundle['ld_adapter']
+        actor_state_planner = None
+        kfb, step_key = jax.random.split(step_key)
+        actor_state_sdc_fallback = sdc_fallback_actor.init(kfb, state)
 
         for t in range(int(cfg.future_steps)):
             cur = state.current_sim_trajectory
@@ -2053,88 +2187,63 @@ def closed_loop_rollout_selected(
             step_key, sub = jax.random.split(step_key)
             subkeys = jax.random.split(sub, 2)
 
-            if planner_type == 'actor':
-                out_p = planner_actor.select_action({}, state, actor_state_planner, subkeys[0])
+            tokens = ld_adapter.encode_tokens(state, selected_idx)
+            ld_state_hist.append(tokens)
+
+            try:
+                action_vec, dist_step = ld_adapter.predict_action_and_dist(ld_state_hist, ld_action_hist)
+            except Exception:
+                action_vec = np.zeros((3,), dtype=np.float32)
+                dist_step = _latentdriver_fallback_dist(
+                    action_dim=np.asarray(action_vec).size,
+                    mean_hint=action_vec,
+                    source='fallback:predict_action_exception',
+                )
+            if isinstance(dist_step, dict):
+                dist_step.setdefault('fallback', np.asarray(0, dtype=np.int32))
+                dist_step.setdefault('source', 'model')
+                dist_step.setdefault('actor_fallback', np.asarray(0, dtype=np.int32))
+                dist_step.setdefault('belief_kl_step', np.asarray(np.nan, dtype=np.float32))
+                dist_step.setdefault('belief_kl_mean', np.asarray(np.nan, dtype=np.float32))
+                dist_step.setdefault('belief_kl_available', np.asarray(0, dtype=np.int32))
+                try:
+                    is_model_fallback = float(np.asarray(dist_step.get('fallback', 0)).reshape(-1)[0]) > 0.5
+                except Exception:
+                    is_model_fallback = False
+                if is_model_fallback:
+                    dist_step = _inject_action_proxy_into_dist(
+                        dist_step,
+                        action_vec=action_vec,
+                        source='proxy:model_fallback_action',
+                    )
+            ld_action_hist.append(np.asarray(action_vec, dtype=np.float32))
+            dist_trace.append(dist_step)
+
+            try:
+                out_p_raw = planner_actor.select_action({'actions': action_vec.tolist()}, state, None, None)
+
+                cur_timestep = int(np.asarray(state.timestep).reshape(-1)[0])
+                traj = waymax_datatypes.dynamic_slice(
+                    inputs=state.sim_trajectory,
+                    start_index=cur_timestep,
+                    slice_size=1,
+                    axis=-1,
+                )
+                action_transformed = control_dynamics_model.compute_update(out_p_raw.action, traj).as_action()
+                out_p = _replace_action(out_p_raw, action_transformed)
+                action_ok = True
+            except Exception:
+                # Fallback keeps simulation running if LatentDriver actor path breaks.
+                out_p = sdc_fallback_actor.select_action({}, state, actor_state_sdc_fallback, subkeys[0])
+                actor_state_sdc_fallback = out_p.actor_state
                 action_vec, action_ok = _extract_sdc_action_vector(out_p, sdc_idx=sdc_idx, fallback_dim=3)
-                dist_trace.append(None)
-                actor_state_planner = out_p.actor_state
-            elif planner_type == 'smart':
-                out_p = planner_actor.select_action({}, state, actor_state_planner, subkeys[0])
-                action_vec, action_ok = _extract_sdc_action_vector(out_p, sdc_idx=sdc_idx, fallback_dim=3)
-                actor_state_planner = out_p.actor_state
-                try:
-                    dist_step = smart_adapter.predict_distribution(
-                        state=state,
-                        sdc_idx=sdc_idx,
-                        action_hint=action_vec,
-                    )
-                except Exception:
-                    dist_step = _latentdriver_fallback_dist(
-                        action_dim=np.asarray(action_vec).size,
-                        mean_hint=action_vec,
-                        source='fallback:smart_predict_exception',
-                    )
                 if isinstance(dist_step, dict):
-                    dist_step.setdefault('fallback', np.asarray(0, dtype=np.int32))
-                    dist_step.setdefault('source', 'model:smart_proxy')
-                    dist_step.setdefault('actor_fallback', np.asarray(0, dtype=np.int32))
-                dist_trace.append(dist_step)
-
-            else:
-                tokens = ld_adapter.encode_tokens(state, selected_idx)
-                ld_state_hist.append(tokens)
-
-                try:
-                    action_vec, dist_step = ld_adapter.predict_action_and_dist(ld_state_hist, ld_action_hist)
-                except Exception:
-                    action_vec = np.zeros((3,), dtype=np.float32)
-                    dist_step = _latentdriver_fallback_dist(
-                        action_dim=np.asarray(action_vec).size,
-                        mean_hint=action_vec,
-                        source='fallback:predict_action_exception',
+                    dist_step['actor_fallback'] = np.asarray(1, dtype=np.int32)
+                    dist_step = _inject_action_proxy_into_dist(
+                        dist_step,
+                        action_vec=action_vec,
+                        source='proxy:actor_fallback_action',
                     )
-                if isinstance(dist_step, dict):
-                    dist_step.setdefault('fallback', np.asarray(0, dtype=np.int32))
-                    dist_step.setdefault('source', 'model')
-                    dist_step.setdefault('actor_fallback', np.asarray(0, dtype=np.int32))
-                    try:
-                        is_model_fallback = float(np.asarray(dist_step.get('fallback', 0)).reshape(-1)[0]) > 0.5
-                    except Exception:
-                        is_model_fallback = False
-                    if is_model_fallback:
-                        dist_step = _inject_action_proxy_into_dist(
-                            dist_step,
-                            action_vec=action_vec,
-                            source='proxy:model_fallback_action',
-                        )
-                ld_action_hist.append(np.asarray(action_vec, dtype=np.float32))
-                dist_trace.append(dist_step)
-
-                try:
-                    out_p_raw = planner_actor.select_action({'actions': action_vec.tolist()}, state, None, None)
-
-                    cur_timestep = int(np.asarray(state.timestep).reshape(-1)[0])
-                    traj = waymax_datatypes.dynamic_slice(
-                        inputs=state.sim_trajectory,
-                        start_index=cur_timestep,
-                        slice_size=1,
-                        axis=-1,
-                    )
-                    action_transformed = control_dynamics_model.compute_update(out_p_raw.action, traj).as_action()
-                    out_p = _replace_action(out_p_raw, action_transformed)
-                    action_ok = True
-                except Exception:
-                    # Fallback keeps simulation running if LatentDriver actor path breaks.
-                    out_p = sdc_fallback_actor.select_action({}, state, actor_state_sdc_fallback, subkeys[0])
-                    actor_state_sdc_fallback = out_p.actor_state
-                    action_vec, action_ok = _extract_sdc_action_vector(out_p, sdc_idx=sdc_idx, fallback_dim=3)
-                    if isinstance(dist_step, dict):
-                        dist_step['actor_fallback'] = np.asarray(1, dtype=np.int32)
-                        dist_step = _inject_action_proxy_into_dist(
-                            dist_step,
-                            action_vec=action_vec,
-                            source='proxy:actor_fallback_action',
-                        )
 
             if action_dim is None:
                 action_dim = int(np.asarray(action_vec).size)
@@ -2209,6 +2318,9 @@ def dist_trace_diagnostics(dist_trace: List[Optional[Dict[str, np.ndarray]]]) ->
             'dist_source_model_ratio': 0.0,
             'dist_source_fallback_ratio': 0.0,
             'dist_source_proxy_ratio': 0.0,
+            'dist_belief_kl_available_steps': 0.0,
+            'dist_belief_kl_available_ratio': 0.0,
+            'dist_belief_kl_mean': np.nan,
         }
 
     comp_counts = []
@@ -2221,6 +2333,8 @@ def dist_trace_diagnostics(dist_trace: List[Optional[Dict[str, np.ndarray]]]) ->
     source_model_flags = []
     source_fallback_flags = []
     source_proxy_flags = []
+    belief_kl_available_flags = []
+    belief_kl_vals = []
     for d in non_null:
         w = np.asarray(d.get('weights', []), dtype=float).reshape(-1)
         s = np.asarray(d.get('stds', []), dtype=float)
@@ -2236,6 +2350,12 @@ def dist_trace_diagnostics(dist_trace: List[Optional[Dict[str, np.ndarray]]]) ->
         source_model_flags.append(float(s_l.startswith('model:')))
         source_fallback_flags.append(float(s_l.startswith('fallback')))
         source_proxy_flags.append(float(s_l.startswith('proxy:')))
+        belief_step = _scalar_from_dist_entry(d, 'belief_kl_step', default=np.nan)
+        if not np.isfinite(belief_step):
+            belief_step = _scalar_from_dist_entry(d, 'belief_kl_mean', default=np.nan)
+        belief_kl_available_flags.append(float(np.isfinite(belief_step)))
+        if np.isfinite(belief_step):
+            belief_kl_vals.append(float(max(0.0, belief_step)))
 
     return {
         'dist_non_null_steps': float(non_null_steps),
@@ -2252,6 +2372,9 @@ def dist_trace_diagnostics(dist_trace: List[Optional[Dict[str, np.ndarray]]]) ->
         'dist_source_model_ratio': float(np.nanmean(source_model_flags)) if len(source_model_flags) else 0.0,
         'dist_source_fallback_ratio': float(np.nanmean(source_fallback_flags)) if len(source_fallback_flags) else 0.0,
         'dist_source_proxy_ratio': float(np.nanmean(source_proxy_flags)) if len(source_proxy_flags) else 0.0,
+        'dist_belief_kl_available_steps': float(np.nansum(belief_kl_available_flags)) if len(belief_kl_available_flags) else 0.0,
+        'dist_belief_kl_available_ratio': float(np.nanmean(belief_kl_available_flags)) if len(belief_kl_available_flags) else 0.0,
+        'dist_belief_kl_mean': float(np.nanmean(np.asarray(belief_kl_vals, dtype=float))) if len(belief_kl_vals) else np.nan,
     }
 
 def dist_trace_change_stats(

@@ -47,40 +47,23 @@ def _float_or_default(value: Any, default: float = 0.0) -> float:
 
 def _normalize_planner_backend(value: Any) -> str:
     backend = str(value).strip().lower()
-    if backend not in {"smart", "latentdriver", "idm_route"}:
-        raise ValueError(f"Unsupported planner backend={value!r}. Expected: smart | latentdriver | idm_route.")
+    if backend != "latentdriver":
+        raise ValueError(f"Unsupported planner backend={value!r}. Only latentdriver is supported.")
     return backend
 
 
 def configure_experiment_profile(
     cfg: ClosedLoopConfig,
-    planner_backend: str = "smart",
-    planner_surprise_name: str = "predictive_w2",
+    planner_backend: str = "latentdriver",
+    planner_surprise_name: str = "latent_belief_kl",
 ) -> pd.DataFrame:
     backend = _normalize_planner_backend(planner_backend)
-
-    if backend == "smart":
-        cfg.planner_kind = "smart"
-        cfg.planner_name = "smart_predictive_proxy_sdc"
-        cfg.smart_mode = "proxy"
-        cfg.smart_control_actor = "idm_route"
-        cfg.smart_repo_path = "/content/SMART"
-        cfg.smart_ckpt_path = ""
-        cfg.smart_action_dt_seconds = 0.1
-        cfg.smart_base_std_xy = 0.35
-        cfg.smart_base_std_yaw = 0.12
-        cfg.smart_interaction_dist_scale_m = 8.0
-        cfg.smart_interaction_closing_speed_scale_mps = 6.0
-    elif backend == "latentdriver":
-        cfg.planner_kind = "latentdriver"
-        cfg.planner_name = "latentdriver_waypoint_sdc"
-        cfg.latentdriver_use_all_vehicle_tokens = True
-        cfg.latentdriver_vehicle_token_cap = 128
-        cfg.latentdriver_encode_in_ego_frame = True
-        cfg.latentdriver_encode_yaw_degrees = True
-    else:
-        cfg.planner_kind = "idm_route"
-        cfg.planner_name = "idm_route"
+    cfg.planner_kind = backend
+    cfg.planner_name = "latentdriver_waypoint_sdc"
+    cfg.latentdriver_use_all_vehicle_tokens = True
+    cfg.latentdriver_vehicle_token_cap = 128
+    cfg.latentdriver_encode_in_ego_frame = True
+    cfg.latentdriver_encode_yaw_degrees = True
 
     # Shared perturbation defaults used across notebook experiments.
     cfg.perturb_use_behavioral_proposals = True
@@ -114,13 +97,7 @@ def configure_experiment_profile(
         {"group": "perturb", "key": "target_selection_mode", "value": cfg.perturb_target_selection_mode},
         {"group": "perturb", "key": "behavioral_primitives", "value": ",".join(cfg.perturb_behavioral_primitive_cycle)},
     ]
-    if cfg.planner_kind == "smart":
-        rows.extend([
-            {"group": "smart", "key": "mode", "value": cfg.smart_mode},
-            {"group": "smart", "key": "control_actor", "value": cfg.smart_control_actor},
-            {"group": "smart", "key": "repo_path", "value": cfg.smart_repo_path},
-        ])
-    elif cfg.planner_kind == "latentdriver":
+    if cfg.planner_kind == "latentdriver":
         rows.extend([
             {"group": "latentdriver", "key": "use_all_vehicle_tokens", "value": bool(cfg.latentdriver_use_all_vehicle_tokens)},
             {"group": "latentdriver", "key": "vehicle_token_cap", "value": int(cfg.latentdriver_vehicle_token_cap)},
@@ -451,8 +428,8 @@ def initialize_run_context(
     latentdriver_log_forward_errors: bool = True,
     latentdriver_log_forward_errors_max: int = 10,
     run_tag_prefix: str = "closedloop",
-    planner_backend: str = "smart",
-    planner_surprise_name: str = "predictive_w2",
+    planner_backend: str = "latentdriver",
+    planner_surprise_name: str = "latent_belief_kl",
     auto_generate_run_tag_if_empty: bool = True,
     resume_mode: str = "auto",
     warn_on_config_drift: bool = True,

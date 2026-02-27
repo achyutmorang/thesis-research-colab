@@ -7,8 +7,7 @@ import numpy as np
 from .config import SearchConfig, ClosedLoopConfig
 from .planner_backends import (
     closed_loop_rollout_selected,
-    predictive_divergence_from_dist_traces,
-    dist_trace_change_stats,
+    latent_belief_kl_from_dist_trace,
     dist_trace_diagnostics,
     project_delta_vec,
 )
@@ -42,22 +41,15 @@ def evaluate_delta_closed_loop(
 
     risk = compute_risk_metrics(xy, valid, **risk_kwargs_from_cfg(cfg))
 
-    if planner_bundle['planner_type'] in {'latentdriver', 'smart'}:
-        surprise_pd, predictive_source = predictive_divergence_from_dist_traces(
-            trace_p=dist_trace,
-            trace_q=base_metrics['base_dist_trace'],
-            metric=cfg.planner_surprise_name,
-            estimator=cfg.predictive_kl_estimator,
-            n_mc_samples=cfg.predictive_kl_mc_samples,
-            seed=int(cfg.predictive_kl_mc_seed + int(seed)),
-            eps=float(cfg.predictive_kl_eps),
-            symmetric=bool(cfg.predictive_kl_symmetric),
+    if planner_bundle['planner_type'] == 'latentdriver':
+        surprise_pd, belief_diag = latent_belief_kl_from_dist_trace(
+            trace=dist_trace,
             skip_fallback_steps=bool(cfg.predictive_kl_skip_fallback_steps),
         )
         dist_diag = dist_trace_diagnostics(dist_trace)
-        surprise_source = str(predictive_source)
+        dist_diag.update(belief_diag)
+        surprise_source = 'latent_belief_kl'
         if (not np.isfinite(surprise_pd)) or (float(surprise_pd) <= 1e-12):
-            trace_change_diag = dist_trace_change_stats(dist_trace, base_metrics['base_dist_trace'])
             action_surprise = planner_action_surprise_kl(
                 actions,
                 action_valid,
@@ -67,10 +59,10 @@ def evaluate_delta_closed_loop(
             )
             if np.isfinite(action_surprise) and float(action_surprise) > 1e-12:
                 surprise_pd = float(action_surprise)
-                if float(trace_change_diag.get('trace_pair_ratio', 0.0)) > 0.0:
+                if float(belief_diag.get('belief_kl_step_count', 0.0)) > 0.0:
                     surprise_source = 'action_kl_fallback'
                 else:
-                    surprise_source = 'action_kl_no_dist_pairs'
+                    surprise_source = 'action_kl_no_belief_pairs'
     else:
         surprise_pd = planner_action_surprise_kl(
             actions,

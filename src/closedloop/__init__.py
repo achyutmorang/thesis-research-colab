@@ -24,7 +24,6 @@ from .signal_analysis import (
     analyze_surprise_signal_usefulness,
     save_surprise_signal_usefulness_artifacts,
 )
-from .smart import smart_observation_contract
 from .visualization import plot_predictive_distribution_step, preview_predictive_distribution_pair
 from .colab_runtime import (
     ensure_drive_ready,
@@ -74,7 +73,6 @@ __all__ = [
     'run_surprise_quality_gate',
     'run_closed_loop',
     'save_surprise_signal_usefulness_artifacts',
-    'smart_observation_contract',
     'plot_predictive_distribution_step',
     'preview_predictive_distribution_pair',
     'shard_run_prefix',

@@ -11,7 +11,7 @@ from .config import SearchConfig, ClosedLoopConfig
 from .planner_backends import (
     _choose_target_non_ego,
     closed_loop_rollout_selected,
-    predictive_divergence_from_dist_traces,
+    latent_belief_kl_from_dist_trace,
     dist_trace_change_stats,
     dist_trace_diagnostics,
     latentdriver_observation_contract,
@@ -19,7 +19,6 @@ from .planner_backends import (
     make_closed_loop_components,
     project_delta_vec,
 )
-from .smart import smart_observation_contract
 from .metrics import compute_risk_metrics, planner_action_surprise_kl, risk_kwargs_from_cfg, robust_scale
 
 def run_closedloop_preflight_checks(runner: Any, cfg: ClosedLoopConfig, eval_idx: np.ndarray) -> pd.DataFrame:
@@ -35,14 +34,6 @@ def run_closedloop_preflight_checks(runner: Any, cfg: ClosedLoopConfig, eval_idx
         add('latentdriver_ckpt_exists', ckpt_ok, cfg.latentdriver_ckpt_path)
         contract = latentdriver_observation_contract()
         add('latentdriver_expected_feature_dim', contract['feature_dim'] == 7, str(contract))
-    elif cfg.planner_kind == 'smart':
-        mode = str(getattr(cfg, 'smart_mode', 'proxy')).strip().lower()
-        add('smart_mode_valid', mode in {'proxy', 'strict'}, f'mode={mode}')
-        add('smart_repo_exists', Path(cfg.smart_repo_path).exists(), cfg.smart_repo_path)
-        if mode == 'strict':
-            add('smart_ckpt_exists', bool(str(cfg.smart_ckpt_path).strip()) and Path(cfg.smart_ckpt_path).exists(), cfg.smart_ckpt_path)
-        contract = smart_observation_contract()
-        add('smart_expected_distribution_dim', int(contract.get('distribution_dims', 0)) == 3, str(contract))
 
     try:
         sid = None
@@ -97,7 +88,7 @@ def run_closedloop_preflight_checks(runner: Any, cfg: ClosedLoopConfig, eval_idx
         )
 
         planner_type = str(planner_bundle.get('planner_type', ''))
-        if planner_type in {'latentdriver', 'smart'}:
+        if planner_type == 'latentdriver':
             non_null = int(sum(d is not None for d in dist_trace))
             add('predictive_distribution_trace_nonempty', non_null > 0, f'non_null_steps={non_null}/{len(dist_trace)}')
             if non_null > 0:
@@ -151,14 +142,6 @@ def run_closedloop_preflight_checks(runner: Any, cfg: ClosedLoopConfig, eval_idx
                     bool(route_ok),
                     f'route={route}; last_error={err[:240]}',
                 )
-            elif planner_type == 'smart':
-                smart_adapter = planner_bundle.get('smart_adapter', None)
-                obs_info = dict(getattr(smart_adapter, 'last_obs_info', {})) if smart_adapter is not None else {}
-                add('smart_obs_finite', bool(obs_info.get('finite', False)), str(obs_info))
-                route = str(getattr(smart_adapter, 'last_route', 'unknown')) if smart_adapter is not None else 'unknown'
-                err = str(getattr(smart_adapter, 'last_error', '')) if smart_adapter is not None else ''
-                route_ok = (route != 'failed') and (len(err.strip()) == 0)
-                add('smart_forward_route_ok', bool(route_ok), f'route={route}; last_error={err[:240]}')
 
     except Exception as e:
         add('smoke_rollout_exception', False, str(e))
@@ -357,7 +340,7 @@ def calibrate_closed_loop_thresholds(
                 seed=cfg.global_seed + int(sid),
             )
             base_risk = compute_risk_metrics(base_xy, base_valid, **risk_kwargs_from_cfg(cfg))
-            if planner_bundle['planner_type'] in {'latentdriver', 'smart'}:
+            if planner_bundle['planner_type'] == 'latentdriver':
                 base_dist_diag = dist_trace_diagnostics(base_dist_trace)
             else:
                 base_dist_diag = {
@@ -383,23 +366,17 @@ def calibrate_closed_loop_thresholds(
                 prop_dist_trace: List[Optional[Dict[str, np.ndarray]]],
                 seed_offset: int,
             ) -> Tuple[float, Dict[str, float], Dict[str, float], str]:
-                if planner_bundle['planner_type'] in {'latentdriver', 'smart'}:
-                    surprise_val, predictive_source = predictive_divergence_from_dist_traces(
-                        trace_p=prop_dist_trace,
-                        trace_q=base_dist_trace,
-                        metric=cfg.planner_surprise_name,
-                        estimator=cfg.predictive_kl_estimator,
-                        n_mc_samples=cfg.predictive_kl_mc_samples,
-                        seed=int(cfg.predictive_kl_mc_seed + int(sid) * 1000 + int(seed_offset)),
-                        eps=float(cfg.predictive_kl_eps),
-                        symmetric=bool(cfg.predictive_kl_symmetric),
+                if planner_bundle['planner_type'] == 'latentdriver':
+                    surprise_val, belief_diag = latent_belief_kl_from_dist_trace(
+                        trace=prop_dist_trace,
                         skip_fallback_steps=bool(cfg.predictive_kl_skip_fallback_steps),
                     )
                     prop_dist_diag = dist_trace_diagnostics(prop_dist_trace)
+                    prop_dist_diag.update(belief_diag)
                     trace_diag = dist_trace_change_stats(prop_dist_trace, base_dist_trace)
-                    source = str(predictive_source)
-                    trace_pair_ratio = float(trace_diag.get('trace_pair_ratio', 0.0))
-                    if trace_pair_ratio <= 0.0:
+                    source = 'latent_belief_kl'
+                    belief_count = float(belief_diag.get('belief_kl_step_count', 0.0))
+                    if belief_count <= 0.0:
                         action_surprise = planner_action_surprise_kl(
                             prop_actions,
                             prop_action_valid,
@@ -409,7 +386,7 @@ def calibrate_closed_loop_thresholds(
                         )
                         if np.isfinite(action_surprise) and float(action_surprise) > 1e-12:
                             surprise_val = float(action_surprise)
-                            source = 'action_kl_no_dist_pairs'
+                            source = 'action_kl_no_belief_pairs'
                         else:
                             surprise_val = np.nan
                     elif (not np.isfinite(surprise_val)) or (float(surprise_val) <= 1e-12):
@@ -1181,7 +1158,7 @@ def diagnose_surprise_root_cause(
     forward_fail_detail = ''
     if len(preflight_failed) > 0 and 'check' in preflight_failed.columns and 'detail' in preflight_failed.columns:
         forward_rows = preflight_failed[
-            preflight_failed['check'].isin(['latentdriver_forward_route_ok', 'smart_forward_route_ok'])
+            preflight_failed['check'].isin(['latentdriver_forward_route_ok'])
         ]
         if len(forward_rows) > 0:
             forward_fail_detail = str(forward_rows.iloc[0].get('detail', ''))
