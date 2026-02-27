@@ -113,6 +113,10 @@ def evaluate_delta_closed_loop(
         proposal_surprise_abs=float(proposal_surprise_abs) if np.isfinite(proposal_surprise_abs) else np.nan,
         action_divergence=float(action_surprise) if np.isfinite(action_surprise) else np.nan,
         metric_hint=str(getattr(cfg, 'planner_surprise_name', 'predictive_seq_w2')),
+        proposal_delta_l2=float(np.linalg.norm(delta_proj)),
+        perturb_floor_weight=float(getattr(cfg, 'surprise_counterfactual_floor_weight', 0.02)),
+        response_floor_weight=float(getattr(cfg, 'surprise_counterfactual_response_weight', 0.35)),
+        use_additive_score=bool(getattr(cfg, 'surprise_counterfactual_use_additive_score', True)),
     )
     surprise_source = (
         f"counterfactual_composite:"
@@ -155,8 +159,15 @@ def evaluate_delta_closed_loop(
         'proposal_surprise_pd': float(proposal_surprise_abs) if np.isfinite(proposal_surprise_abs) else np.nan,
         'proposal_effect_l2_mean': float(effect_l2_mean),
         'surprise_belief_shift': float(surprise_components.get('surprise_belief_shift', 0.0)),
+        'surprise_belief_shift_raw': float(surprise_components.get('surprise_belief_shift_raw', 0.0)),
         'surprise_policy_shift': float(surprise_components.get('surprise_policy_shift', 0.0)),
+        'surprise_policy_shift_raw': float(surprise_components.get('surprise_policy_shift_raw', 0.0)),
         'surprise_realization_ratio': float(surprise_components.get('surprise_realization_ratio', 0.0)),
+        'surprise_realization_ratio_raw': float(surprise_components.get('surprise_realization_ratio_raw', 0.0)),
+        'surprise_response_ratio': float(surprise_components.get('surprise_response_ratio', 0.0)),
+        'surprise_signal_floor': float(surprise_components.get('surprise_signal_floor', 0.0)),
+        'surprise_response_floor': float(surprise_components.get('surprise_response_floor', 0.0)),
+        'surprise_score_mode': str(surprise_components.get('surprise_score_mode', 'unknown')),
         'surprise_belief_term': float(surprise_components.get('surprise_belief_term', 0.0)),
         'surprise_policy_term': float(surprise_components.get('surprise_policy_term', 0.0)),
         'surprise_action_divergence': float(surprise_components.get('surprise_action_divergence', 0.0)),

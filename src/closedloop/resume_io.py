@@ -569,10 +569,12 @@ def export_closedloop_artifacts(
     surprise_name = str(getattr(cfg, 'planner_surprise_name', 'predictive_seq_w2')).strip().lower()
     surprise_type = 'counterfactual_composite'
     surprise_formula = (
-        'S(delta)=log(1+B)*log(1+P)*R, '
-        'B from predictive belief-shift statistics (step_moment_kl_*), '
-        'P from predictive policy-shift statistics (step_w2_*/step_logit_l1_*, action_kl fallback), '
-        f'R=clip(effect_l2_mean/delta_l2_budget,0,1); base divergence metric hint={surprise_name}'
+        'S(delta)=R_eff*(wB*log(1+B_eff)+wP*log(1+P_eff)); '
+        'B_eff=max(B_raw,response_floor,signal_floor), P_eff=max(P_raw,response_floor,signal_floor), '
+        'R_eff=max(R_raw,response_floor,signal_floor), '
+        'signal_floor=floor_weight*max(proposal_delta_ratio,response_ratio,R_raw), '
+        'response_floor=response_weight*response_ratio; '
+        f'base divergence metric hint={surprise_name}'
     )
 
     carry_forward_config = {

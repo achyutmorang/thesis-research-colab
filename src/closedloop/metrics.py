@@ -176,6 +176,13 @@ def _nonnegative_finite(value: Any, default: float = 0.0) -> float:
     return float(max(0.0, out))
 
 
+def _bounded_log_squash(value: Any) -> float:
+    v = _nonnegative_finite(value, default=0.0)
+    if v <= 0.0:
+        return 0.0
+    return float(np.clip(1.0 - np.exp(-v), 0.0, 1.0))
+
+
 def compute_counterfactual_surprise_score(
     trace_change_diag: Dict[str, float],
     effect_l2_mean: float,
@@ -184,10 +191,20 @@ def compute_counterfactual_surprise_score(
     proposal_surprise_abs: float = np.nan,
     action_divergence: float = np.nan,
     metric_hint: str = "predictive_seq_w2",
+    proposal_delta_l2: float = np.nan,
+    perturb_floor_weight: float = 0.02,
+    response_floor_weight: float = 0.35,
+    use_additive_score: bool = True,
 ) -> Tuple[float, Dict[str, Any]]:
-    """Composite planner-centered surprise:
-    score = log1p(B) * log1p(P) * R
-    where B: belief-shift proxy, P: policy-shift proxy, R: realization ratio.
+    """Composite planner-centered surprise with anti-collapse salience floor.
+
+    B_raw: belief-shift proxy (belief updates / latent divergence)
+    P_raw: policy-shift proxy (action/predictive distribution divergence)
+    R_raw: realized effect ratio from rollout trajectories
+
+    Channels are lifted by a small counterfactual floor based on proposal
+    magnitude and rollout response so the signal remains optimization-feasible
+    even when one divergence channel is near machine precision.
     """
     trace_change_diag = trace_change_diag if isinstance(trace_change_diag, dict) else {}
 
@@ -203,17 +220,17 @@ def compute_counterfactual_surprise_score(
     if metric_key in {"latent_belief_kl", "belief_kl"}:
         belief_candidates = [belief_candidates[-1], *belief_candidates[:-1]]
 
-    belief_shift = 0.0
+    belief_shift_raw = 0.0
     belief_source = 'none'
     for src, val in belief_candidates:
         if np.isfinite(val) and float(val) > 0.0:
-            belief_shift = float(val)
+            belief_shift_raw = float(val)
             belief_source = str(src)
             break
     if belief_source == 'none':
         for src, val in belief_candidates:
             if np.isfinite(val):
-                belief_shift = float(max(0.0, val))
+                belief_shift_raw = float(max(0.0, val))
                 belief_source = str(src)
                 break
 
@@ -242,36 +259,89 @@ def compute_counterfactual_surprise_score(
             ("action_kl", _nonnegative_finite(action_divergence, default=np.nan)),
             ("step_moment_kl_all_mean", _nonnegative_finite(trace_change_diag.get("step_moment_kl_all_mean", np.nan), default=np.nan)),
         ]
-    policy_shift = 0.0
+    policy_shift_raw = 0.0
     policy_source = 'none'
     for src, val in policy_candidates:
         if np.isfinite(val) and float(val) > 0.0:
-            policy_shift = float(val)
+            policy_shift_raw = float(val)
             policy_source = str(src)
             break
     if policy_source == 'none':
         for src, val in policy_candidates:
             if np.isfinite(val):
-                policy_shift = float(max(0.0, val))
+                policy_shift_raw = float(max(0.0, val))
                 policy_source = str(src)
                 break
 
     denom = max(_nonnegative_finite(effect_l2_budget, default=0.0), 1e-6)
-    effect_ratio = float(np.clip(_nonnegative_finite(effect_l2_mean, default=0.0) / denom, 0.0, 1.0))
+    effect_ratio_raw = float(np.clip(_nonnegative_finite(effect_l2_mean, default=0.0) / denom, 0.0, 1.0))
+    proposal_ratio = float(np.clip(_nonnegative_finite(proposal_delta_l2, default=np.nan) / denom, 0.0, 1.0))
+    if not np.isfinite(proposal_ratio):
+        proposal_ratio = float(effect_ratio_raw)
 
-    belief_term = float(np.log1p(max(0.0, belief_shift)))
-    policy_term = float(np.log1p(max(0.0, policy_shift)))
-    surprise_score = float(belief_term * policy_term * effect_ratio)
+    response_candidates = [
+        ("step_mean_l2_all_mean", float(np.clip(_nonnegative_finite(trace_change_diag.get("step_mean_l2_all_mean", np.nan), default=0.0) / denom, 0.0, 1.0))),
+        ("step_mean_l2_mean", float(np.clip(_nonnegative_finite(trace_change_diag.get("step_mean_l2_mean", np.nan), default=0.0) / denom, 0.0, 1.0))),
+        ("step_w2_all_mean", _bounded_log_squash(trace_change_diag.get("step_w2_all_mean", np.nan))),
+        ("step_w2_mean", _bounded_log_squash(trace_change_diag.get("step_w2_mean", np.nan))),
+        ("step_moment_kl_all_mean", _bounded_log_squash(trace_change_diag.get("step_moment_kl_all_mean", np.nan))),
+        ("step_moment_kl_mean", _bounded_log_squash(trace_change_diag.get("step_moment_kl_mean", np.nan))),
+        ("step_logit_l1_all_mean", _bounded_log_squash(trace_change_diag.get("step_logit_l1_all_mean", np.nan))),
+        ("step_logit_l1_mean", _bounded_log_squash(trace_change_diag.get("step_logit_l1_mean", np.nan))),
+    ]
+    response_ratio = 0.0
+    response_source = "none"
+    for src, val in response_candidates:
+        if np.isfinite(val) and float(val) > response_ratio:
+            response_ratio = float(val)
+            response_source = str(src)
+
+    base_floor_driver = max(0.0, float(max(effect_ratio_raw, proposal_ratio, response_ratio)))
+    signal_floor = float(max(0.0, float(perturb_floor_weight)) * base_floor_driver)
+    response_floor = float(max(0.0, float(response_floor_weight)) * response_ratio)
+
+    belief_shift = float(max(0.0, belief_shift_raw, response_floor, signal_floor))
+    policy_shift = float(max(0.0, policy_shift_raw, response_floor, signal_floor))
+    effect_ratio = float(max(0.0, effect_ratio_raw, response_floor, signal_floor))
+
+    belief_term = float(np.log1p(belief_shift))
+    policy_term = float(np.log1p(policy_shift))
+    if metric_key in {"latent_belief_kl", "belief_kl"}:
+        belief_weight, policy_weight = 0.65, 0.35
+    elif metric_key in {"action_kl"}:
+        belief_weight, policy_weight = 0.35, 0.65
+    else:
+        belief_weight, policy_weight = 0.5, 0.5
+
+    if bool(use_additive_score):
+        blended_term = float(belief_weight * belief_term + policy_weight * policy_term)
+        surprise_score = float(effect_ratio * blended_term)
+        score_mode = "additive_blend"
+    else:
+        surprise_score = float(effect_ratio * belief_term * policy_term)
+        score_mode = "multiplicative_product"
 
     diag = {
         'surprise_metric_hint': str(metric_key),
+        'surprise_score_mode': str(score_mode),
+        'surprise_belief_weight': float(belief_weight),
+        'surprise_policy_weight': float(policy_weight),
+        'surprise_belief_shift_raw': float(belief_shift_raw),
+        'surprise_policy_shift_raw': float(policy_shift_raw),
         'surprise_belief_shift': float(belief_shift),
         'surprise_policy_shift': float(policy_shift),
+        'surprise_realization_ratio_raw': float(effect_ratio_raw),
         'surprise_realization_ratio': float(effect_ratio),
+        'surprise_response_ratio': float(response_ratio),
+        'surprise_response_source': str(response_source),
+        'surprise_proposal_delta_ratio': float(proposal_ratio),
+        'surprise_signal_floor': float(signal_floor),
+        'surprise_response_floor': float(response_floor),
         'surprise_belief_term': float(belief_term),
         'surprise_policy_term': float(policy_term),
         'surprise_effect_l2_mean': float(_nonnegative_finite(effect_l2_mean, default=0.0)),
         'surprise_effect_l2_budget': float(denom),
+        'surprise_proposal_delta_l2': float(_nonnegative_finite(proposal_delta_l2, default=0.0)),
         'surprise_action_divergence': float(_nonnegative_finite(action_divergence, default=0.0)),
         'surprise_belief_source': str(belief_source),
         'surprise_policy_source': str(policy_source),

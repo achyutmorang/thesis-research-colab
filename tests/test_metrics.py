@@ -75,3 +75,47 @@ def test_planner_action_surprise_kl_zero_when_identical():
         sigma=0.25,
     )
     assert abs(kl) < 1e-12
+
+
+def test_counterfactual_surprise_score_has_nonzero_floor_when_perturbation_realized():
+    score, diag = metrics.compute_counterfactual_surprise_score(
+        trace_change_diag={},
+        effect_l2_mean=0.0,
+        effect_l2_budget=1.5,
+        base_surprise_abs=0.0,
+        proposal_surprise_abs=0.0,
+        action_divergence=0.0,
+        metric_hint="predictive_seq_w2",
+        proposal_delta_l2=1.0,
+        perturb_floor_weight=0.02,
+        response_floor_weight=0.35,
+        use_additive_score=True,
+    )
+    assert score > 0.0
+    assert float(diag["surprise_signal_floor"]) > 0.0
+    assert float(diag["surprise_belief_shift"]) >= float(diag["surprise_signal_floor"])
+    assert float(diag["surprise_policy_shift"]) >= float(diag["surprise_signal_floor"])
+
+
+def test_counterfactual_surprise_score_increases_with_stronger_policy_shift():
+    low_score, _ = metrics.compute_counterfactual_surprise_score(
+        trace_change_diag={"step_w2_all_mean": 1e-4, "step_logit_l1_all_mean": 1e-4},
+        effect_l2_mean=0.2,
+        effect_l2_budget=1.0,
+        base_surprise_abs=0.0,
+        proposal_surprise_abs=0.0,
+        action_divergence=1e-4,
+        metric_hint="predictive_seq_w2",
+        proposal_delta_l2=0.5,
+    )
+    high_score, _ = metrics.compute_counterfactual_surprise_score(
+        trace_change_diag={"step_w2_all_mean": 1.0, "step_logit_l1_all_mean": 1.0},
+        effect_l2_mean=0.2,
+        effect_l2_budget=1.0,
+        base_surprise_abs=0.0,
+        proposal_surprise_abs=0.0,
+        action_divergence=1.0,
+        metric_hint="predictive_seq_w2",
+        proposal_delta_l2=0.5,
+    )
+    assert high_score > low_score

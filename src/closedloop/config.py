@@ -62,6 +62,11 @@ class ClosedLoopConfig:
     predictive_kl_eps: float = 1e-6
     predictive_kl_symmetric: bool = True
     predictive_kl_skip_fallback_steps: bool = True
+    # Counterfactual composite surprise robustness controls.
+    # These prevent numerical collapse when raw divergence channels are tiny.
+    surprise_counterfactual_floor_weight: float = 0.02
+    surprise_counterfactual_response_weight: float = 0.35
+    surprise_counterfactual_use_additive_score: bool = True
 
     # LatentDriver integration
     latentdriver_repo_path: str = '/content/LatentDriver'
