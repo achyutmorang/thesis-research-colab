@@ -510,6 +510,16 @@ def run_quick_surprise_probe(
                 )
                 if planner_bundle['planner_type'] == 'latentdriver':
                     base_dist_diag = dist_trace_diagnostics(base_dist_trace)
+                    base_surprise_abs_raw, _ = latent_belief_kl_from_dist_trace(
+                        trace=base_dist_trace,
+                        skip_fallback_steps=bool(cfg.predictive_kl_skip_fallback_steps),
+                    )
+                    if np.isfinite(base_surprise_abs_raw):
+                        base_surprise_abs = float(base_surprise_abs_raw)
+                        base_surprise_source = 'latent_belief_kl'
+                    else:
+                        base_surprise_abs = 0.0
+                        base_surprise_source = 'base_no_belief_pairs_zero'
                 else:
                     base_dist_diag = {
                         'dist_fallback_ratio': np.nan,
@@ -517,6 +527,8 @@ def run_quick_surprise_probe(
                         'dist_source_model_ratio': np.nan,
                         'dist_source_proxy_ratio': np.nan,
                     }
+                    base_surprise_abs = 0.0
+                    base_surprise_source = 'base_zero_non_latentdriver'
                 base_rollouts.append({
                     'base_xy': base_xy,
                     'base_valid': base_valid,
@@ -526,6 +538,8 @@ def run_quick_surprise_probe(
                     'base_feasible': base_feasible,
                     'base_note': str(base_note),
                     'base_dist_diag': base_dist_diag,
+                    'base_surprise_abs': float(base_surprise_abs),
+                    'base_surprise_source': str(base_surprise_source),
                 })
 
             feasible_repeat_ids = [rid for rid, info in enumerate(base_rollouts) if bool(info['base_feasible'])]
@@ -545,10 +559,10 @@ def run_quick_surprise_probe(
                 p_dist_trace: List[Optional[Dict[str, np.ndarray]]],
                 repeat_id: int,
                 seed_offset: int,
-            ) -> Tuple[float, Dict[str, float], Dict[str, float], str]:
+            ) -> Tuple[float, float, Dict[str, float], Dict[str, float], str]:
                 base_info = base_rollouts[int(repeat_id)]
                 if planner_bundle['planner_type'] == 'latentdriver':
-                    p_surprise, belief_diag = latent_belief_kl_from_dist_trace(
+                    p_surprise_abs, belief_diag = latent_belief_kl_from_dist_trace(
                         trace=p_dist_trace,
                         skip_fallback_steps=bool(cfg.predictive_kl_skip_fallback_steps),
                     )
@@ -557,7 +571,7 @@ def run_quick_surprise_probe(
                     trace_diag = dist_trace_change_stats(p_dist_trace, base_info['base_dist_trace'])
                     surprise_source = 'latent_belief_kl'
 
-                    if (not np.isfinite(p_surprise)) or (float(p_surprise) <= 1e-12):
+                    if (not np.isfinite(p_surprise_abs)) or (float(p_surprise_abs) <= 1e-12):
                         action_surprise = planner_action_surprise_kl(
                             p_actions,
                             p_action_valid,
@@ -566,15 +580,15 @@ def run_quick_surprise_probe(
                             sigma=0.25,
                         )
                         if np.isfinite(action_surprise) and float(action_surprise) > 1e-12:
-                            p_surprise = float(action_surprise)
+                            p_surprise_abs = float(action_surprise)
                             if float(belief_diag.get('belief_kl_step_count', 0.0)) > 0.0:
                                 surprise_source = 'action_kl_fallback'
                             else:
                                 surprise_source = 'action_kl_no_belief_pairs'
                         elif float(belief_diag.get('belief_kl_step_count', 0.0)) <= 0.0:
-                            p_surprise = np.nan
+                            p_surprise_abs = np.nan
                 else:
-                    p_surprise = planner_action_surprise_kl(
+                    p_surprise_abs = planner_action_surprise_kl(
                         p_actions,
                         p_action_valid,
                         base_info['base_actions'],
@@ -598,7 +612,12 @@ def run_quick_surprise_probe(
                         'step_logit_l1_all_mean': np.nan,
                     }
                     surprise_source = 'action_kl'
-                return float(p_surprise), p_dist_diag, trace_diag, str(surprise_source)
+                p_surprise = (
+                    float(p_surprise_abs - float(base_info.get('base_surprise_abs', 0.0)))
+                    if np.isfinite(p_surprise_abs)
+                    else np.nan
+                )
+                return float(p_surprise), float(p_surprise_abs) if np.isfinite(p_surprise_abs) else np.nan, p_dist_diag, trace_diag, str(surprise_source)
 
             rng = np.random.default_rng(int(cfg.global_seed + sid * 10007 + 77))
             for k in range(proposals_per_scenario):
@@ -626,7 +645,7 @@ def run_quick_surprise_probe(
                         planner_bundle=planner_bundle,
                         seed=seed_try,
                     )
-                    _, _, trace_diag_try, _ = _compute_surprise_for_repeat(
+                    _, _, _, trace_diag_try, _ = _compute_surprise_for_repeat(
                         p_actions=p_actions_try,
                         p_action_valid=p_action_valid_try,
                         p_dist_trace=p_dist_trace_try,
@@ -686,7 +705,7 @@ def run_quick_surprise_probe(
                         planner_bundle=planner_bundle,
                         seed=int(cfg.global_seed + sid + seed_offset),
                     )
-                    p_surprise, p_dist_diag, trace_diag, surprise_source = _compute_surprise_for_repeat(
+                    p_surprise, p_surprise_abs, p_dist_diag, trace_diag, surprise_source = _compute_surprise_for_repeat(
                         p_actions=p_actions,
                         p_action_valid=p_action_valid,
                         p_dist_trace=p_dist_trace,
@@ -725,7 +744,10 @@ def run_quick_surprise_probe(
                         'delta_y': float(chosen_prop[1]),
                         'delta_l2': float(np.linalg.norm(chosen_prop)),
                         'surprise_pd': float(p_surprise),
+                        'base_surprise_pd': float(base_rollouts[repeat_id].get('base_surprise_abs', 0.0)),
+                        'proposal_surprise_pd': float(p_surprise_abs) if np.isfinite(p_surprise_abs) else np.nan,
                         'surprise_source': str(surprise_source),
+                        'base_surprise_source': str(base_rollouts[repeat_id].get('base_surprise_source', 'unknown')),
                         'proposal_effect_l2_mean': float(effect_l2_mean),
                         'proposal_realized': int(realized_ok),
                         'proposal_attempts': int(chosen_attempts),
@@ -759,7 +781,10 @@ def run_quick_surprise_probe(
                 'proposal_id': -1,
                 'repeat_id': 0,
                 'surprise_pd': np.nan,
+                'base_surprise_pd': np.nan,
+                'proposal_surprise_pd': np.nan,
                 'surprise_source': 'probe_exception',
+                'base_surprise_source': 'probe_exception',
                 'proposal_effect_l2_mean': np.nan,
                 'proposal_realized': 0,
                 'proposal_attempts': 0,

@@ -41,15 +41,18 @@ def evaluate_delta_closed_loop(
 
     risk = compute_risk_metrics(xy, valid, **risk_kwargs_from_cfg(cfg))
 
+    base_surprise_abs = float(base_metrics.get('base_surprise', 0.0))
+    proposal_surprise_abs = np.nan
+
     if planner_bundle['planner_type'] == 'latentdriver':
-        surprise_pd, belief_diag = latent_belief_kl_from_dist_trace(
+        proposal_surprise_abs, belief_diag = latent_belief_kl_from_dist_trace(
             trace=dist_trace,
             skip_fallback_steps=bool(cfg.predictive_kl_skip_fallback_steps),
         )
         dist_diag = dist_trace_diagnostics(dist_trace)
         dist_diag.update(belief_diag)
         surprise_source = 'latent_belief_kl'
-        if (not np.isfinite(surprise_pd)) or (float(surprise_pd) <= 1e-12):
+        if (not np.isfinite(proposal_surprise_abs)) or (float(proposal_surprise_abs) <= 1e-12):
             action_surprise = planner_action_surprise_kl(
                 actions,
                 action_valid,
@@ -58,13 +61,13 @@ def evaluate_delta_closed_loop(
                 sigma=0.25,
             )
             if np.isfinite(action_surprise) and float(action_surprise) > 1e-12:
-                surprise_pd = float(action_surprise)
+                proposal_surprise_abs = float(action_surprise)
                 if float(belief_diag.get('belief_kl_step_count', 0.0)) > 0.0:
                     surprise_source = 'action_kl_fallback'
                 else:
                     surprise_source = 'action_kl_no_belief_pairs'
     else:
-        surprise_pd = planner_action_surprise_kl(
+        proposal_surprise_abs = planner_action_surprise_kl(
             actions,
             action_valid,
             base_metrics['base_actions'],
@@ -82,8 +85,13 @@ def evaluate_delta_closed_loop(
         }
         surprise_source = 'action_kl'
 
+    if np.isfinite(proposal_surprise_abs):
+        surprise_pd = float(proposal_surprise_abs - base_surprise_abs)
+    else:
+        surprise_pd = np.nan
+
     delta_risk = float(risk['risk_sks'] - base_metrics['base_risk'])
-    delta_surprise = float(surprise_pd - base_metrics['base_surprise'])
+    delta_surprise = float(surprise_pd) if np.isfinite(surprise_pd) else np.nan
 
     norm_delta_risk = delta_risk / max(float(thresholds['risk_scale']), search_cfg.min_scale)
     norm_delta_surprise = delta_surprise / max(float(thresholds['surprise_scale']), search_cfg.min_scale)
@@ -109,6 +117,8 @@ def evaluate_delta_closed_loop(
         'surprise_kl': float(surprise_pd),
         'surprise_source': str(surprise_source),
         'surprise_metric': cfg.planner_surprise_name,
+        'base_surprise_pd': float(base_surprise_abs),
+        'proposal_surprise_pd': float(proposal_surprise_abs) if np.isfinite(proposal_surprise_abs) else np.nan,
         'delta_risk': float(delta_risk),
         'delta_surprise': float(delta_surprise),
         'failure_proxy': float(risk['failure_extended_proxy']),
@@ -187,10 +197,18 @@ def optimize_method_closed_loop(
         seed=int(rollout_seed_schedule[0]),
     )
     base_risk = compute_risk_metrics(base_xy, base_valid, **risk_kwargs_from_cfg(cfg))
+    base_surprise_abs = 0.0
+    if planner_bundle['planner_type'] == 'latentdriver':
+        base_surprise_raw, _ = latent_belief_kl_from_dist_trace(
+            trace=base_dist_trace,
+            skip_fallback_steps=bool(cfg.predictive_kl_skip_fallback_steps),
+        )
+        if np.isfinite(base_surprise_raw):
+            base_surprise_abs = float(base_surprise_raw)
 
     base_metrics = {
         'base_risk': float(base_risk['risk_sks']),
-        'base_surprise': 0.0,
+        'base_surprise': float(base_surprise_abs),
         'base_actions': np.asarray(base_actions, dtype=np.float32),
         'base_action_valid': np.asarray(base_action_valid, dtype=bool),
         'base_dist_trace': base_dist_trace,
