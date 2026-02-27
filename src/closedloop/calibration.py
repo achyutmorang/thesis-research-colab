@@ -506,6 +506,7 @@ def calibrate_closed_loop_thresholds(
                         base_surprise_abs=float(base_surprise_abs),
                         proposal_surprise_abs=float(s_surprise_abs) if np.isfinite(s_surprise_abs) else np.nan,
                         action_divergence=float(s_action_div) if np.isfinite(s_action_div) else np.nan,
+                        metric_hint=str(getattr(cfg, 'planner_surprise_name', 'predictive_seq_w2')),
                     )
                     s_source = (
                         'counterfactual_composite:'
@@ -584,6 +585,7 @@ def calibrate_closed_loop_thresholds(
                         base_surprise_abs=float(base_surprise_abs),
                         proposal_surprise_abs=float(p_surprise_abs) if np.isfinite(p_surprise_abs) else np.nan,
                         action_divergence=float(p_action_div) if np.isfinite(p_action_div) else np.nan,
+                        metric_hint=str(getattr(cfg, 'planner_surprise_name', 'predictive_seq_w2')),
                     )
                     surprise_source = (
                         'counterfactual_composite:'

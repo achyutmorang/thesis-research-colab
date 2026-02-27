@@ -183,6 +183,7 @@ def compute_counterfactual_surprise_score(
     base_surprise_abs: float = np.nan,
     proposal_surprise_abs: float = np.nan,
     action_divergence: float = np.nan,
+    metric_hint: str = "predictive_seq_w2",
 ) -> Tuple[float, Dict[str, Any]]:
     """Composite planner-centered surprise:
     score = log1p(B) * log1p(P) * R
@@ -190,14 +191,17 @@ def compute_counterfactual_surprise_score(
     """
     trace_change_diag = trace_change_diag if isinstance(trace_change_diag, dict) else {}
 
+    metric_key = str(metric_hint).strip().lower()
     belief_candidates = [
-        ('step_moment_kl_all_mean', _nonnegative_finite(trace_change_diag.get('step_moment_kl_all_mean', np.nan), default=np.nan)),
-        ('step_moment_kl_mean', _nonnegative_finite(trace_change_diag.get('step_moment_kl_mean', np.nan), default=np.nan)),
+        ("step_moment_kl_all_mean", _nonnegative_finite(trace_change_diag.get("step_moment_kl_all_mean", np.nan), default=np.nan)),
+        ("step_moment_kl_mean", _nonnegative_finite(trace_change_diag.get("step_moment_kl_mean", np.nan), default=np.nan)),
     ]
     belief_delta = np.nan
     if np.isfinite(float(proposal_surprise_abs)) and np.isfinite(float(base_surprise_abs)):
         belief_delta = _nonnegative_finite(float(proposal_surprise_abs) - float(base_surprise_abs), default=np.nan)
-        belief_candidates.append(('rollout_belief_delta', belief_delta))
+        belief_candidates.append(("rollout_belief_delta", belief_delta))
+    if metric_key in {"latent_belief_kl", "belief_kl"}:
+        belief_candidates = [belief_candidates[-1], *belief_candidates[:-1]]
 
     belief_shift = 0.0
     belief_source = 'none'
@@ -213,13 +217,31 @@ def compute_counterfactual_surprise_score(
                 belief_source = str(src)
                 break
 
-    policy_candidates = [
-        ('step_w2_all_mean', _nonnegative_finite(trace_change_diag.get('step_w2_all_mean', np.nan), default=np.nan)),
-        ('step_w2_mean', _nonnegative_finite(trace_change_diag.get('step_w2_mean', np.nan), default=np.nan)),
-        ('step_logit_l1_all_mean', _nonnegative_finite(trace_change_diag.get('step_logit_l1_all_mean', np.nan), default=np.nan)),
-        ('step_logit_l1_mean', _nonnegative_finite(trace_change_diag.get('step_logit_l1_mean', np.nan), default=np.nan)),
-        ('action_kl', _nonnegative_finite(action_divergence, default=np.nan)),
-    ]
+    if metric_key in {"predictive_seq_kl", "sequence_kl", "seq_kl", "predictive_kl"}:
+        policy_candidates = [
+            ("step_moment_kl_all_mean", _nonnegative_finite(trace_change_diag.get("step_moment_kl_all_mean", np.nan), default=np.nan)),
+            ("step_moment_kl_mean", _nonnegative_finite(trace_change_diag.get("step_moment_kl_mean", np.nan), default=np.nan)),
+            ("step_logit_l1_all_mean", _nonnegative_finite(trace_change_diag.get("step_logit_l1_all_mean", np.nan), default=np.nan)),
+            ("step_logit_l1_mean", _nonnegative_finite(trace_change_diag.get("step_logit_l1_mean", np.nan), default=np.nan)),
+            ("action_kl", _nonnegative_finite(action_divergence, default=np.nan)),
+            ("step_w2_all_mean", _nonnegative_finite(trace_change_diag.get("step_w2_all_mean", np.nan), default=np.nan)),
+        ]
+    elif metric_key in {"action_kl"}:
+        policy_candidates = [
+            ("action_kl", _nonnegative_finite(action_divergence, default=np.nan)),
+            ("step_logit_l1_all_mean", _nonnegative_finite(trace_change_diag.get("step_logit_l1_all_mean", np.nan), default=np.nan)),
+            ("step_logit_l1_mean", _nonnegative_finite(trace_change_diag.get("step_logit_l1_mean", np.nan), default=np.nan)),
+            ("step_w2_all_mean", _nonnegative_finite(trace_change_diag.get("step_w2_all_mean", np.nan), default=np.nan)),
+        ]
+    else:
+        policy_candidates = [
+            ("step_w2_all_mean", _nonnegative_finite(trace_change_diag.get("step_w2_all_mean", np.nan), default=np.nan)),
+            ("step_w2_mean", _nonnegative_finite(trace_change_diag.get("step_w2_mean", np.nan), default=np.nan)),
+            ("step_logit_l1_all_mean", _nonnegative_finite(trace_change_diag.get("step_logit_l1_all_mean", np.nan), default=np.nan)),
+            ("step_logit_l1_mean", _nonnegative_finite(trace_change_diag.get("step_logit_l1_mean", np.nan), default=np.nan)),
+            ("action_kl", _nonnegative_finite(action_divergence, default=np.nan)),
+            ("step_moment_kl_all_mean", _nonnegative_finite(trace_change_diag.get("step_moment_kl_all_mean", np.nan), default=np.nan)),
+        ]
     policy_shift = 0.0
     policy_source = 'none'
     for src, val in policy_candidates:
@@ -242,6 +264,7 @@ def compute_counterfactual_surprise_score(
     surprise_score = float(belief_term * policy_term * effect_ratio)
 
     diag = {
+        'surprise_metric_hint': str(metric_key),
         'surprise_belief_shift': float(belief_shift),
         'surprise_policy_shift': float(policy_shift),
         'surprise_realization_ratio': float(effect_ratio),

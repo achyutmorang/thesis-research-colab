@@ -114,10 +114,12 @@ class QuickProbeBundle:
     quick_probe_df: pd.DataFrame = field(default_factory=pd.DataFrame)
     quick_probe_summary_df: pd.DataFrame = field(default_factory=pd.DataFrame)
     quick_probe_attempts_df: pd.DataFrame = field(default_factory=pd.DataFrame)
+    quick_probe_metric_summary_df: pd.DataFrame = field(default_factory=pd.DataFrame)
     quick_probe_feasibility_df: pd.DataFrame = field(default_factory=pd.DataFrame)
     final_collapsed: bool = True
     signal_feasible: bool = False
     signal_failure_reasons: str = ""
+    selected_surprise_metric: str = ""
     applied_tuning: bool = False
     dataset_config: Any = None
     data_iter: Optional[Iterable[Any]] = None
@@ -660,6 +662,33 @@ def _probe_collapse_stats(
     return collapsed, metrics, reasons, feasibility_df
 
 
+def _normalize_probe_metrics(metrics: Optional[Sequence[str]], fallback: str) -> List[str]:
+    raw = list(metrics) if metrics is not None else [fallback]
+    out: List[str] = []
+    seen = set()
+    for m in raw:
+        key = str(m).strip().lower()
+        if not key:
+            continue
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(key)
+    if len(out) <= 0:
+        out = [str(fallback).strip().lower() or "predictive_seq_w2"]
+    return out
+
+
+def _probe_feasibility_score(metrics: Dict[str, float]) -> float:
+    nonzero = max(0.0, float(metrics.get("nonzero_surprise_fraction", 0.0)))
+    realized = max(0.0, float(metrics.get("proposal_realized_fraction", 0.0)))
+    effect = max(0.0, float(metrics.get("proposal_effect_l2_mean", 0.0)))
+    belief = max(0.0, float(metrics.get("surprise_belief_shift_mean", 0.0)))
+    policy = max(0.0, float(metrics.get("surprise_policy_shift_mean", 0.0)))
+    ratio = max(0.0, float(metrics.get("surprise_realization_ratio_mean", 0.0)))
+    return float(nonzero * realized * np.log1p(effect) * np.log1p(belief) * np.log1p(policy) * max(ratio, 1e-12))
+
+
 def build_full_simulation_context(
     cfg: ClosedLoopConfig,
     n_shards: int,
@@ -711,6 +740,8 @@ def run_quick_probe_with_auto_escalation(
     probe_delta_l2_multipliers: Sequence[float] = (1.0, 1.2, 1.4),
     probe_delta_clip_multipliers: Sequence[float] = (1.0, 1.1, 1.2),
     probe_budget_bump_per_escalation: int = 2,
+    probe_surprise_metrics: Optional[Sequence[str]] = None,
+    probe_metric_selection_policy: str = "first_feasible",  # first_feasible | best_feasible_score
     probe_min_nonzero_surprise_fraction: float = 0.01,
     probe_min_realized_fraction: float = 0.10,
     probe_min_effect_l2_mean: float = 0.05,
@@ -729,9 +760,12 @@ def run_quick_probe_with_auto_escalation(
     selected_search_cfg = search_cfg
     selected_probe_df = pd.DataFrame()
     selected_probe_summary_df = pd.DataFrame()
+    selected_probe_metric_summary_df = pd.DataFrame()
     selected_probe_feasibility_df = pd.DataFrame()
     selected_failure_reasons: List[str] = []
+    selected_surprise_metric = str(getattr(cfg, "planner_surprise_name", "predictive_seq_w2")).strip().lower()
     attempt_rows = []
+    metric_summary_rows = []
     final_collapsed = False
     signal_feasible = False
     applied_tuning = False
@@ -743,42 +777,63 @@ def run_quick_probe_with_auto_escalation(
         selected_cfg = None
         selected_search_cfg = None
 
-        for attempt in range(max_attempts):
-            scale_mult = float(scale_mults[min(attempt, len(scale_mults) - 1)])
-            l2_mult = float(l2_mults[min(attempt, len(l2_mults) - 1)])
-            clip_mult = float(clip_mults[min(attempt, len(clip_mults) - 1)])
+        metric_order = _normalize_probe_metrics(
+            probe_surprise_metrics,
+            fallback=str(getattr(cfg, "planner_surprise_name", "predictive_seq_w2")),
+        )
+        selection_policy = str(probe_metric_selection_policy).strip().lower()
+        if selection_policy not in {"first_feasible", "best_feasible_score"}:
+            selection_policy = "first_feasible"
 
-            cfg_trial = copy.deepcopy(cfg)
-            search_trial = copy.deepcopy(search_cfg)
+        best_candidate: Optional[Dict[str, Any]] = None
+        all_candidates: List[Dict[str, Any]] = []
+        selected_candidate: Optional[Dict[str, Any]] = None
+        stop_metric_sweep = False
 
-            search_trial.proposal_scale_ladder = tuple(float(x * scale_mult) for x in tuple(search_cfg.proposal_scale_ladder))
-            search_trial.random_scale = float(search_cfg.random_scale * scale_mult)
-            search_trial.delta_l2_budget = float(search_cfg.delta_l2_budget * l2_mult)
-            search_trial.delta_clip = float(search_cfg.delta_clip * clip_mult)
-            search_trial.budget_evals = int(search_cfg.budget_evals + attempt * int(probe_budget_bump_per_escalation))
+        for metric_name in metric_order:
+            metric_best_row: Optional[Dict[str, Any]] = None
+            metric_attempts = 0
+            metric_any_feasible = False
 
-            probe_dataset_config, probe_data_iter = make_waymax_data_iter(cfg_trial)
-            probe_df, probe_summary_df = run_quick_surprise_probe(
-                cfg=cfg_trial,
-                search_cfg=search_trial,
-                n_probe_scenarios=int(quick_probe_scenarios),
-                proposals_per_scenario=int(quick_probe_proposals_per_scenario),
-                data_iter=probe_data_iter,
-                dataset_config=probe_dataset_config,
-            )
-            collapsed, probe_metrics, failure_reasons, feasibility_df = _probe_collapse_stats(
-                probe_summary_df=probe_summary_df,
-                min_nonzero_surprise_fraction=float(probe_min_nonzero_surprise_fraction),
-                min_realized_fraction=float(probe_min_realized_fraction),
-                min_effect_l2_mean=float(probe_min_effect_l2_mean),
-                min_belief_shift_mean=float(probe_min_belief_shift_mean),
-                min_policy_shift_mean=float(probe_min_policy_shift_mean),
-                min_realization_ratio_mean=float(probe_min_realization_ratio_mean),
-                require_belief_and_policy=bool(probe_require_belief_and_policy),
-            )
+            for attempt in range(max_attempts):
+                metric_attempts += 1
+                scale_mult = float(scale_mults[min(attempt, len(scale_mults) - 1)])
+                l2_mult = float(l2_mults[min(attempt, len(l2_mults) - 1)])
+                clip_mult = float(clip_mults[min(attempt, len(clip_mults) - 1)])
 
-            attempt_rows.append(
-                {
+                cfg_trial = copy.deepcopy(cfg)
+                cfg_trial.planner_surprise_name = str(metric_name)
+                search_trial = copy.deepcopy(search_cfg)
+
+                search_trial.proposal_scale_ladder = tuple(float(x * scale_mult) for x in tuple(search_cfg.proposal_scale_ladder))
+                search_trial.random_scale = float(search_cfg.random_scale * scale_mult)
+                search_trial.delta_l2_budget = float(search_cfg.delta_l2_budget * l2_mult)
+                search_trial.delta_clip = float(search_cfg.delta_clip * clip_mult)
+                search_trial.budget_evals = int(search_cfg.budget_evals + attempt * int(probe_budget_bump_per_escalation))
+
+                probe_dataset_config, probe_data_iter = make_waymax_data_iter(cfg_trial)
+                probe_df, probe_summary_df = run_quick_surprise_probe(
+                    cfg=cfg_trial,
+                    search_cfg=search_trial,
+                    n_probe_scenarios=int(quick_probe_scenarios),
+                    proposals_per_scenario=int(quick_probe_proposals_per_scenario),
+                    data_iter=probe_data_iter,
+                    dataset_config=probe_dataset_config,
+                )
+                collapsed, probe_metrics, failure_reasons, feasibility_df = _probe_collapse_stats(
+                    probe_summary_df=probe_summary_df,
+                    min_nonzero_surprise_fraction=float(probe_min_nonzero_surprise_fraction),
+                    min_realized_fraction=float(probe_min_realized_fraction),
+                    min_effect_l2_mean=float(probe_min_effect_l2_mean),
+                    min_belief_shift_mean=float(probe_min_belief_shift_mean),
+                    min_policy_shift_mean=float(probe_min_policy_shift_mean),
+                    min_realization_ratio_mean=float(probe_min_realization_ratio_mean),
+                    require_belief_and_policy=bool(probe_require_belief_and_policy),
+                )
+                feasibility_score = _probe_feasibility_score(probe_metrics)
+
+                row = {
+                    "surprise_metric": str(metric_name),
                     "attempt": int(attempt + 1),
                     "collapsed": int(collapsed),
                     "scale_mult": float(scale_mult),
@@ -792,20 +847,76 @@ def run_quick_probe_with_auto_escalation(
                     "surprise_belief_shift_mean": float(probe_metrics.get("surprise_belief_shift_mean", 0.0)),
                     "surprise_policy_shift_mean": float(probe_metrics.get("surprise_policy_shift_mean", 0.0)),
                     "surprise_realization_ratio_mean": float(probe_metrics.get("surprise_realization_ratio_mean", 0.0)),
+                    "feasibility_score": float(feasibility_score),
                     "failure_reasons": "|".join(str(x) for x in failure_reasons),
                 }
-            )
-            selected_probe_df = probe_df.copy()
-            selected_probe_summary_df = probe_summary_df.copy()
-            selected_probe_feasibility_df = feasibility_df.copy()
-            selected_failure_reasons = list(failure_reasons)
-            final_collapsed = bool(collapsed)
-            signal_feasible = bool(not collapsed)
+                attempt_rows.append(row)
 
-            if not collapsed:
-                selected_cfg = cfg_trial
-                selected_search_cfg = search_trial
+                candidate = {
+                    "row": row,
+                    "cfg": cfg_trial,
+                    "search_cfg": search_trial,
+                    "probe_df": probe_df.copy(),
+                    "probe_summary_df": probe_summary_df.copy(),
+                    "probe_feasibility_df": feasibility_df.copy(),
+                    "failure_reasons": list(failure_reasons),
+                    "collapsed": bool(collapsed),
+                    "score": float(feasibility_score),
+                    "metric": str(metric_name),
+                }
+                all_candidates.append(candidate)
+
+                if (metric_best_row is None) or (float(row["feasibility_score"]) > float(metric_best_row["feasibility_score"])):
+                    metric_best_row = dict(row)
+                if (best_candidate is None) or (float(candidate["score"]) > float(best_candidate["score"])):
+                    best_candidate = candidate
+
+                if not bool(collapsed):
+                    metric_any_feasible = True
+                    if selection_policy == "first_feasible":
+                        selected_candidate = candidate
+                        stop_metric_sweep = True
+                        break
+
+                if bool(metric_any_feasible):
+                    break
+
+            if metric_best_row is not None:
+                metric_summary_rows.append(
+                    {
+                        "surprise_metric": str(metric_name),
+                        "metric_feasible": int(metric_any_feasible),
+                        "attempts_tried": int(metric_attempts),
+                        **metric_best_row,
+                    }
+                )
+
+            if stop_metric_sweep:
                 break
+
+        if (selected_candidate is None) and (selection_policy == "best_feasible_score"):
+            feasible_candidates = [c for c in all_candidates if not bool(c.get("collapsed", True))]
+            if len(feasible_candidates) > 0:
+                feasible_candidates = sorted(feasible_candidates, key=lambda c: float(c.get("score", 0.0)), reverse=True)
+                selected_candidate = feasible_candidates[0]
+
+        if (selected_candidate is None) and (best_candidate is not None):
+            selected_candidate = best_candidate
+
+        if selected_candidate is not None:
+            selected_cfg = selected_candidate["cfg"]
+            selected_search_cfg = selected_candidate["search_cfg"]
+            selected_probe_df = selected_candidate["probe_df"]
+            selected_probe_summary_df = selected_candidate["probe_summary_df"]
+            selected_probe_feasibility_df = selected_candidate["probe_feasibility_df"]
+            selected_failure_reasons = list(selected_candidate["failure_reasons"])
+            selected_surprise_metric = str(selected_candidate["metric"])
+            final_collapsed = bool(selected_candidate["collapsed"])
+            signal_feasible = bool(not final_collapsed)
+        else:
+            final_collapsed = True
+            signal_feasible = False
+            selected_failure_reasons = ["quick_probe_metric_sweep_empty"]
 
         if (not final_collapsed) and bool(apply_successful_probe_tuning) and (selected_cfg is not None) and (selected_search_cfg is not None):
             cfg = selected_cfg
@@ -822,6 +933,7 @@ def run_quick_probe_with_auto_escalation(
         selected_failure_reasons = ["quick_probe_skipped"]
 
     quick_probe_attempts_df = pd.DataFrame(attempt_rows)
+    quick_probe_metric_summary_df = pd.DataFrame(metric_summary_rows)
     if selected_cfg is None:
         selected_cfg = cfg
     if selected_search_cfg is None:
@@ -841,10 +953,12 @@ def run_quick_probe_with_auto_escalation(
         quick_probe_df=selected_probe_df,
         quick_probe_summary_df=selected_probe_summary_df,
         quick_probe_attempts_df=quick_probe_attempts_df,
+        quick_probe_metric_summary_df=quick_probe_metric_summary_df,
         quick_probe_feasibility_df=selected_probe_feasibility_df,
         final_collapsed=bool(final_collapsed),
         signal_feasible=bool(signal_feasible),
         signal_failure_reasons=", ".join(selected_failure_reasons),
+        selected_surprise_metric=str(selected_surprise_metric),
         applied_tuning=bool(applied_tuning),
         dataset_config=context_bundle.dataset_config,
         data_iter=context_bundle.data_iter,
@@ -981,6 +1095,8 @@ def report_quick_probe_bundle(
             )
 
     if display_fn is not None:
+        if len(bundle.quick_probe_metric_summary_df):
+            display_fn(bundle.quick_probe_metric_summary_df)
         if len(bundle.quick_probe_attempts_df):
             display_fn(bundle.quick_probe_attempts_df)
         if len(bundle.quick_probe_summary_df):
@@ -990,6 +1106,8 @@ def report_quick_probe_bundle(
         if len(bundle.quick_probe_df):
             display_fn(bundle.quick_probe_df.head(int(max(1, probe_preview_rows))))
 
+    if str(bundle.selected_surprise_metric).strip():
+        print(f"[probe] selected surprise instantiation = {bundle.selected_surprise_metric}")
     print(f"[probe] composite-signal feasibility = {bool(bundle.signal_feasible)}")
     if (not bool(bundle.signal_feasible)) and str(bundle.signal_failure_reasons).strip():
         print(f"[probe] failed checks: {bundle.signal_failure_reasons}")

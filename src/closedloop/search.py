@@ -112,6 +112,7 @@ def evaluate_delta_closed_loop(
         base_surprise_abs=float(base_surprise_abs),
         proposal_surprise_abs=float(proposal_surprise_abs) if np.isfinite(proposal_surprise_abs) else np.nan,
         action_divergence=float(action_surprise) if np.isfinite(action_surprise) else np.nan,
+        metric_hint=str(getattr(cfg, 'planner_surprise_name', 'predictive_seq_w2')),
     )
     surprise_source = (
         f"counterfactual_composite:"

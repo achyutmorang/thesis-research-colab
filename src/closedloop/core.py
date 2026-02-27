@@ -769,6 +769,7 @@ def run_quick_surprise_probe(
                             base_surprise_abs=float(base_rollouts[repeat_id].get('base_surprise_abs', 0.0)),
                             proposal_surprise_abs=float(p_surprise_abs) if np.isfinite(p_surprise_abs) else np.nan,
                             action_divergence=float(p_action_divergence) if np.isfinite(p_action_divergence) else np.nan,
+                            metric_hint=str(getattr(cfg, 'planner_surprise_name', 'predictive_seq_w2')),
                         )
                     surprise_source = (
                         'counterfactual_composite:'
