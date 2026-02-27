@@ -31,9 +31,17 @@ This codebase is intentionally experimental.
 ## Recommended Workflow
 1. Open `notebooks/closedloop_simulation_colab.ipynb` in Colab.
 2. Run Step 1 bootstrap cell.
-3. In Step 2, set user knobs (`PLANNER_BACKEND`, `RUN_TAG`, `RUN_MODE`, `PERSIST_ROOT`, sharding).
+3. Optional: run Step 1.5 SMART fine-tune smoke cell to validate SMART training/checkpoint flow.
+4. In Step 2, set user knobs (`PLANNER_BACKEND`, `RUN_TAG`, `RUN_MODE`, `PERSIST_ROOT`, sharding).
 4. Run quick probe (Step 3) before full dataset build.
 5. Continue preflight, calibration, gate, main loop, and export cells top-to-bottom.
+
+## SMART Fine-Tune Smoke (Colab)
+The closed-loop notebook includes an optional SMART smoke fine-tune cell powered by `src.platform.smart_finetune`.
+
+- It can clone SMART, generate minimal train/val configs, run a short training job, and emit checkpoint path.
+- Intended as a fast experiment harness before full-scale SMART training.
+- Current closed-loop planner backend still uses SMART proxy distributions; strict SMART model-in-loop rollout wiring remains a separate integration track.
 
 ## SMART Deployment Modes
 Use `PLANNER_BACKEND='smart'` in the closed-loop simulation notebook.
