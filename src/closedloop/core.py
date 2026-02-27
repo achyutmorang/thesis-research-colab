@@ -35,7 +35,12 @@ from .planner_backends import (
     dist_trace_diagnostics,
     make_closed_loop_components,
 )
-from .metrics import compute_risk_metrics, planner_action_surprise_kl, risk_kwargs_from_cfg
+from .metrics import (
+    compute_counterfactual_surprise_score,
+    compute_risk_metrics,
+    planner_action_surprise_kl,
+    risk_kwargs_from_cfg,
+)
 from .resume_io import (
     RESULTS_REQUIRED_COLUMNS,
     TRACE_REQUIRED_COLUMNS,
@@ -586,6 +591,7 @@ def run_quick_surprise_probe(
                 seed_offset: int,
             ) -> Tuple[float, float, Dict[str, float], Dict[str, float], str]:
                 base_info = base_rollouts[int(repeat_id)]
+                action_surprise = np.nan
                 if planner_bundle['planner_type'] == 'latentdriver':
                     p_surprise_abs, belief_diag = latent_belief_kl_from_dist_trace(
                         trace=p_dist_trace,
@@ -620,6 +626,7 @@ def run_quick_surprise_probe(
                         base_info['base_action_valid'],
                         sigma=0.25,
                     )
+                    action_surprise = float(p_surprise_abs) if np.isfinite(p_surprise_abs) else np.nan
                     p_dist_diag = {
                         'dist_fallback_ratio': np.nan,
                         'dist_actor_fallback_ratio': np.nan,
@@ -637,12 +644,13 @@ def run_quick_surprise_probe(
                         'step_logit_l1_all_mean': np.nan,
                     }
                     surprise_source = 'action_kl'
-                p_surprise = (
-                    float(p_surprise_abs - float(base_info.get('base_surprise_abs', 0.0)))
-                    if np.isfinite(p_surprise_abs)
-                    else np.nan
+                return (
+                    float(p_surprise_abs) if np.isfinite(p_surprise_abs) else np.nan,
+                    float(action_surprise) if np.isfinite(action_surprise) else np.nan,
+                    p_dist_diag,
+                    trace_diag,
+                    str(surprise_source),
                 )
-                return float(p_surprise), float(p_surprise_abs) if np.isfinite(p_surprise_abs) else np.nan, p_dist_diag, trace_diag, str(surprise_source)
 
             rng = np.random.default_rng(int(cfg.global_seed + sid * 10007 + 77))
             for k in range(proposals_per_scenario):
@@ -730,7 +738,7 @@ def run_quick_surprise_probe(
                         planner_bundle=planner_bundle,
                         seed=int(cfg.global_seed + sid + seed_offset),
                     )
-                    p_surprise, p_surprise_abs, p_dist_diag, trace_diag, surprise_source = _compute_surprise_for_repeat(
+                    p_surprise_abs, p_action_divergence, p_dist_diag, trace_diag, surprise_source_raw = _compute_surprise_for_repeat(
                         p_actions=p_actions,
                         p_action_valid=p_action_valid,
                         p_dist_trace=p_dist_trace,
@@ -747,14 +755,26 @@ def run_quick_surprise_probe(
                         realized_ok = False
                         realize_reason = 'rollout_infeasible'
                         p_surprise = np.nan
+                        p_score_diag = {}
                     else:
                         realized_ok, realize_reason = proposal_realization_ok(
                             cfg=cfg,
                             effect_l2_mean=effect_l2_mean,
                             trace_change_diag=trace_diag,
                         )
-                        if not realized_ok:
-                            p_surprise = np.nan
+                        p_surprise, p_score_diag = compute_counterfactual_surprise_score(
+                            trace_change_diag=trace_diag,
+                            effect_l2_mean=float(effect_l2_mean),
+                            effect_l2_budget=float(search_cfg.delta_l2_budget),
+                            base_surprise_abs=float(base_rollouts[repeat_id].get('base_surprise_abs', 0.0)),
+                            proposal_surprise_abs=float(p_surprise_abs) if np.isfinite(p_surprise_abs) else np.nan,
+                            action_divergence=float(p_action_divergence) if np.isfinite(p_action_divergence) else np.nan,
+                        )
+                    surprise_source = (
+                        'counterfactual_composite:'
+                        f"{p_score_diag.get('surprise_belief_source', 'none')}"
+                        f"+{p_score_diag.get('surprise_policy_source', 'none')}"
+                    ) if isinstance(p_score_diag, dict) else str(surprise_source_raw)
 
                     base_dist_diag = base_rollouts[repeat_id]['base_dist_diag']
                     rows.append({
@@ -777,6 +797,12 @@ def run_quick_surprise_probe(
                         'base_surprise_source': str(base_rollouts[repeat_id].get('base_surprise_source', 'unknown')),
                         'proposal_effect_l2_mean': float(effect_l2_mean),
                         'proposal_realized': int(realized_ok),
+                        'surprise_belief_shift': float(p_score_diag.get('surprise_belief_shift', np.nan)) if isinstance(p_score_diag, dict) else np.nan,
+                        'surprise_policy_shift': float(p_score_diag.get('surprise_policy_shift', np.nan)) if isinstance(p_score_diag, dict) else np.nan,
+                        'surprise_realization_ratio': float(p_score_diag.get('surprise_realization_ratio', np.nan)) if isinstance(p_score_diag, dict) else np.nan,
+                        'surprise_belief_term': float(p_score_diag.get('surprise_belief_term', np.nan)) if isinstance(p_score_diag, dict) else np.nan,
+                        'surprise_policy_term': float(p_score_diag.get('surprise_policy_term', np.nan)) if isinstance(p_score_diag, dict) else np.nan,
+                        'surprise_action_divergence': float(p_score_diag.get('surprise_action_divergence', p_action_divergence)) if isinstance(p_score_diag, dict) else float(p_action_divergence) if np.isfinite(p_action_divergence) else np.nan,
                         'proposal_attempts': int(chosen_attempts),
                         'proposal_realization_reason': str(realize_reason),
                         'proposal_kind': str(chosen_meta.get('proposal_kind', 'unknown')),
@@ -816,6 +842,12 @@ def run_quick_surprise_probe(
                 'base_surprise_source': 'probe_exception',
                 'proposal_effect_l2_mean': np.nan,
                 'proposal_realized': 0,
+                'surprise_belief_shift': np.nan,
+                'surprise_policy_shift': np.nan,
+                'surprise_realization_ratio': np.nan,
+                'surprise_belief_term': np.nan,
+                'surprise_policy_term': np.nan,
+                'surprise_action_divergence': np.nan,
                 'proposal_attempts': 0,
                 'proposal_realization_reason': 'probe_exception',
                 'proposal_kind': 'probe_exception',
@@ -902,6 +934,9 @@ def run_quick_surprise_probe(
             'step_mean_l2_all_mean': np.nan,
             'step_w2_all_mean': np.nan,
             'step_logit_l1_all_mean': np.nan,
+            'surprise_belief_shift_mean': np.nan,
+            'surprise_policy_shift_mean': np.nan,
+            'surprise_realization_ratio_mean': np.nan,
             'token_shift_l2_mean': np.nan,
             'token_shift_nonzero_fraction': np.nan,
             'proposal_realized_fraction': np.nan,
@@ -949,6 +984,9 @@ def run_quick_surprise_probe(
         'step_mean_l2_all_mean': _safe_col_nanmean(probe_df, 'step_mean_l2_all_mean'),
         'step_w2_all_mean': _safe_col_nanmean(probe_df, 'step_w2_all_mean'),
         'step_logit_l1_all_mean': _safe_col_nanmean(probe_df, 'step_logit_l1_all_mean'),
+        'surprise_belief_shift_mean': _safe_col_nanmean(probe_df, 'surprise_belief_shift'),
+        'surprise_policy_shift_mean': _safe_col_nanmean(probe_df, 'surprise_policy_shift'),
+        'surprise_realization_ratio_mean': _safe_col_nanmean(probe_df, 'surprise_realization_ratio'),
         'token_shift_l2_mean': _safe_col_nanmean(probe_df, 'token_shift_l2'),
         'token_shift_nonzero_fraction': float(np.nanmean(np.asarray(probe_df.get('token_shift_l2', np.nan), dtype=float) > 1e-8)) if len(probe_df) > 0 else np.nan,
         'proposal_realized_fraction': _safe_col_nanmean(probe_df, 'proposal_realized'),

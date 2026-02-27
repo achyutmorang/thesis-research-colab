@@ -131,6 +131,130 @@ def robust_scale(values: np.ndarray, min_scale: float = 1e-6) -> float:
     scale = iqr if iqr > min_scale else std
     return max(scale, min_scale)
 
+
+def trajectory_effect_l2_mean(
+    base_xy: np.ndarray,
+    base_valid: np.ndarray,
+    prop_xy: np.ndarray,
+    prop_valid: np.ndarray,
+) -> float:
+    xb = np.asarray(base_xy, dtype=float)
+    xp = np.asarray(prop_xy, dtype=float)
+    vb = np.asarray(base_valid, dtype=bool)
+    vp = np.asarray(prop_valid, dtype=bool)
+
+    if xb.ndim != 3 or xp.ndim != 3:
+        return 0.0
+
+    n_obj = int(min(xb.shape[0], xp.shape[0], vb.shape[0], vp.shape[0]))
+    n_t = int(min(xb.shape[1], xp.shape[1], vb.shape[1], vp.shape[1]))
+    if n_obj <= 0 or n_t <= 0:
+        return 0.0
+
+    xb = xb[:n_obj, :n_t, :2]
+    xp = xp[:n_obj, :n_t, :2]
+    vb = vb[:n_obj, :n_t]
+    vp = vp[:n_obj, :n_t]
+    mask = vb & vp
+    if not bool(np.any(mask)):
+        return 0.0
+
+    diff_l2 = np.linalg.norm(xp - xb, axis=-1)
+    vals = diff_l2[mask]
+    if vals.size <= 0:
+        return 0.0
+    return float(np.nanmean(vals))
+
+
+def _nonnegative_finite(value: Any, default: float = 0.0) -> float:
+    try:
+        out = float(value)
+    except (TypeError, ValueError):
+        return float(default)
+    if not np.isfinite(out):
+        return float(default)
+    return float(max(0.0, out))
+
+
+def compute_counterfactual_surprise_score(
+    trace_change_diag: Dict[str, float],
+    effect_l2_mean: float,
+    effect_l2_budget: float,
+    base_surprise_abs: float = np.nan,
+    proposal_surprise_abs: float = np.nan,
+    action_divergence: float = np.nan,
+) -> Tuple[float, Dict[str, Any]]:
+    """Composite planner-centered surprise:
+    score = log1p(B) * log1p(P) * R
+    where B: belief-shift proxy, P: policy-shift proxy, R: realization ratio.
+    """
+    trace_change_diag = trace_change_diag if isinstance(trace_change_diag, dict) else {}
+
+    belief_candidates = [
+        ('step_moment_kl_all_mean', _nonnegative_finite(trace_change_diag.get('step_moment_kl_all_mean', np.nan), default=np.nan)),
+        ('step_moment_kl_mean', _nonnegative_finite(trace_change_diag.get('step_moment_kl_mean', np.nan), default=np.nan)),
+    ]
+    belief_delta = np.nan
+    if np.isfinite(float(proposal_surprise_abs)) and np.isfinite(float(base_surprise_abs)):
+        belief_delta = _nonnegative_finite(float(proposal_surprise_abs) - float(base_surprise_abs), default=np.nan)
+        belief_candidates.append(('rollout_belief_delta', belief_delta))
+
+    belief_shift = 0.0
+    belief_source = 'none'
+    for src, val in belief_candidates:
+        if np.isfinite(val) and float(val) > 0.0:
+            belief_shift = float(val)
+            belief_source = str(src)
+            break
+    if belief_source == 'none':
+        for src, val in belief_candidates:
+            if np.isfinite(val):
+                belief_shift = float(max(0.0, val))
+                belief_source = str(src)
+                break
+
+    policy_candidates = [
+        ('step_w2_all_mean', _nonnegative_finite(trace_change_diag.get('step_w2_all_mean', np.nan), default=np.nan)),
+        ('step_w2_mean', _nonnegative_finite(trace_change_diag.get('step_w2_mean', np.nan), default=np.nan)),
+        ('step_logit_l1_all_mean', _nonnegative_finite(trace_change_diag.get('step_logit_l1_all_mean', np.nan), default=np.nan)),
+        ('step_logit_l1_mean', _nonnegative_finite(trace_change_diag.get('step_logit_l1_mean', np.nan), default=np.nan)),
+        ('action_kl', _nonnegative_finite(action_divergence, default=np.nan)),
+    ]
+    policy_shift = 0.0
+    policy_source = 'none'
+    for src, val in policy_candidates:
+        if np.isfinite(val) and float(val) > 0.0:
+            policy_shift = float(val)
+            policy_source = str(src)
+            break
+    if policy_source == 'none':
+        for src, val in policy_candidates:
+            if np.isfinite(val):
+                policy_shift = float(max(0.0, val))
+                policy_source = str(src)
+                break
+
+    denom = max(_nonnegative_finite(effect_l2_budget, default=0.0), 1e-6)
+    effect_ratio = float(np.clip(_nonnegative_finite(effect_l2_mean, default=0.0) / denom, 0.0, 1.0))
+
+    belief_term = float(np.log1p(max(0.0, belief_shift)))
+    policy_term = float(np.log1p(max(0.0, policy_shift)))
+    surprise_score = float(belief_term * policy_term * effect_ratio)
+
+    diag = {
+        'surprise_belief_shift': float(belief_shift),
+        'surprise_policy_shift': float(policy_shift),
+        'surprise_realization_ratio': float(effect_ratio),
+        'surprise_belief_term': float(belief_term),
+        'surprise_policy_term': float(policy_term),
+        'surprise_effect_l2_mean': float(_nonnegative_finite(effect_l2_mean, default=0.0)),
+        'surprise_effect_l2_budget': float(denom),
+        'surprise_action_divergence': float(_nonnegative_finite(action_divergence, default=0.0)),
+        'surprise_belief_source': str(belief_source),
+        'surprise_policy_source': str(policy_source),
+    }
+    return surprise_score, diag
+
 def planner_action_surprise_kl(
     actions: np.ndarray,
     action_valid: np.ndarray,

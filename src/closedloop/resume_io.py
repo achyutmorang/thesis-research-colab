@@ -566,40 +566,14 @@ def export_closedloop_artifacts(
             indent=2,
         )
 
-    surprise_name = str(getattr(cfg, 'planner_surprise_name', 'latent_belief_kl')).strip().lower()
-    if surprise_name in {'latent_belief_kl', 'belief_kl'}:
-        surprise_type = 'latent_belief_kl'
-        surprise_formula = (
-            'Mean per-step KL( posterior belief || prior belief ) from LatentDriver world-model latents '
-            '(prior from latent_dist[:, :-1], posterior from rep_dist[:, 1:]); fallback to action KL only if unavailable'
-        )
-    elif surprise_name in {'predictive_seq_w2', 'sequence_w2', 'seq_w2'}:
-        surprise_type = 'planner_dependent_predictive_seq_w2'
-        surprise_formula = (
-            'Sequence-level Wasserstein-2 distance between proposal/base planner predictive action distributions '
-            '(block-diagonal moment-matched rollout Gaussian)'
-        )
-    elif surprise_name in {'predictive_seq_kl', 'sequence_kl', 'seq_kl'}:
-        surprise_type = 'planner_dependent_predictive_seq_kl'
-        surprise_formula = (
-            'Sequence-level symmetric KL between proposal/base planner predictive action distributions '
-            '(block-diagonal moment-matched rollout Gaussian)'
-        )
-    elif surprise_name in {'predictive_w2', 'wasserstein', 'wasserstein2', 'w2'}:
-        surprise_type = 'planner_dependent_predictive_w2'
-        surprise_formula = (
-            'Wasserstein-2 distance between proposal/base planner predictive action distributions, '
-            'averaged across valid paired closed-loop steps'
-        )
-    elif surprise_name == 'action_kl':
-        surprise_type = 'planner_action_kl'
-        surprise_formula = 'Action-level KL between proposal/base ego action traces over valid paired steps'
-    else:
-        surprise_type = 'planner_dependent_predictive_kl'
-        surprise_formula = (
-            'KL( p_pi(a|state_delta) || p_pi(a|state_base) ) estimated by Monte Carlo '
-            'on planner diagonal-GMM action distributions'
-        )
+    surprise_name = str(getattr(cfg, 'planner_surprise_name', 'predictive_seq_w2')).strip().lower()
+    surprise_type = 'counterfactual_composite'
+    surprise_formula = (
+        'S(delta)=log(1+B)*log(1+P)*R, '
+        'B from predictive belief-shift statistics (step_moment_kl_*), '
+        'P from predictive policy-shift statistics (step_w2_*/step_logit_l1_*, action_kl fallback), '
+        f'R=clip(effect_l2_mean/delta_l2_budget,0,1); base divergence metric hint={surprise_name}'
+    )
 
     carry_forward_config = {
         'experiment_track': 'closed_loop_simulation_only',

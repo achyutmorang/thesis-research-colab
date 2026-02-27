@@ -19,7 +19,14 @@ from .planner_backends import (
     make_closed_loop_components,
     project_delta_vec,
 )
-from .metrics import compute_risk_metrics, planner_action_surprise_kl, risk_kwargs_from_cfg, robust_scale
+from .metrics import (
+    compute_counterfactual_surprise_score,
+    compute_risk_metrics,
+    planner_action_surprise_kl,
+    risk_kwargs_from_cfg,
+    robust_scale,
+    trajectory_effect_l2_mean,
+)
 
 SURPRISE_COL_CANDIDATES: Tuple[str, ...] = ('delta_surprise', 'delta_surprise_pd', 'surprise_pd')
 
@@ -265,36 +272,6 @@ def make_sensitivity_grid_proposals(
     return np.asarray(proposals, dtype=float)
 
 
-def trajectory_effect_l2_mean(
-    base_xy: np.ndarray,
-    base_valid: np.ndarray,
-    prop_xy: np.ndarray,
-    prop_valid: np.ndarray,
-) -> float:
-    xb = np.asarray(base_xy, dtype=float)
-    xp = np.asarray(prop_xy, dtype=float)
-    vb = np.asarray(base_valid, dtype=bool)
-    vp = np.asarray(prop_valid, dtype=bool)
-
-    if xb.ndim != 3 or xp.ndim != 3:
-        return float('nan')
-
-    n_obj = int(min(xb.shape[0], xp.shape[0], vb.shape[0], vp.shape[0]))
-    n_t = int(min(xb.shape[1], xp.shape[1], vb.shape[1], vp.shape[1]))
-    if n_obj <= 0 or n_t <= 0:
-        return float('nan')
-
-    xb = xb[:n_obj, :n_t, :]
-    xp = xp[:n_obj, :n_t, :]
-    vb = vb[:n_obj, :n_t]
-    vp = vp[:n_obj, :n_t]
-    diff_l2 = np.linalg.norm(xp - xb, axis=-1)
-    mask = vb & vp
-    if np.any(mask):
-        return float(np.nanmean(diff_l2[mask]))
-    return float(np.nanmean(diff_l2))
-
-
 def proposal_realization_ok(
     cfg: ClosedLoopConfig,
     effect_l2_mean: float,
@@ -402,7 +379,8 @@ def calibrate_closed_loop_thresholds(
                 prop_action_valid: np.ndarray,
                 prop_dist_trace: List[Optional[Dict[str, np.ndarray]]],
                 seed_offset: int,
-            ) -> Tuple[float, Dict[str, float], Dict[str, float], str]:
+            ) -> Tuple[float, float, Dict[str, float], Dict[str, float], str]:
+                action_surprise = np.nan
                 if planner_bundle['planner_type'] == 'latentdriver':
                     surprise_val, belief_diag = latent_belief_kl_from_dist_trace(
                         trace=prop_dist_trace,
@@ -445,6 +423,7 @@ def calibrate_closed_loop_thresholds(
                         base_action_valid,
                         sigma=0.25,
                     )
+                    action_surprise = float(surprise_val) if np.isfinite(surprise_val) else np.nan
                     prop_dist_diag = {
                         'dist_non_null_steps': np.nan,
                         'dist_non_null_ratio': np.nan,
@@ -493,7 +472,9 @@ def calibrate_closed_loop_thresholds(
                         'step_logit_l1_all_nonzero_ratio': np.nan,
                     }
                     source = 'action_kl'
-                return float(surprise_val), prop_dist_diag, trace_diag, source
+                surprise_val = float(surprise_val) if np.isfinite(surprise_val) else np.nan
+                action_surprise = float(action_surprise) if np.isfinite(action_surprise) else np.nan
+                return surprise_val, action_surprise, prop_dist_diag, trace_diag, source
 
             if (int(sid) in scan_sid_set) and (len(sensitivity_grid) > 0):
                 for g, grid_prop in enumerate(sensitivity_grid):
@@ -506,7 +487,7 @@ def calibrate_closed_loop_thresholds(
                         planner_bundle=planner_bundle,
                         seed=cfg.global_seed + int(sid) + 50000 + int(g),
                     )
-                    s_surprise_abs, _, s_trace_change_diag, s_source = _compute_surprise_and_diags(
+                    s_surprise_abs, s_action_div, _, s_trace_change_diag, _ = _compute_surprise_and_diags(
                         prop_actions=s_actions,
                         prop_action_valid=s_action_valid,
                         prop_dist_trace=s_dist_trace,
@@ -518,12 +499,18 @@ def calibrate_closed_loop_thresholds(
                         effect_l2_mean=float(s_effect_l2),
                         trace_change_diag=s_trace_change_diag,
                     )
-                    if not s_realized:
-                        s_surprise_abs = np.nan
-                    s_surprise = (
-                        float(s_surprise_abs - base_surprise_abs)
-                        if np.isfinite(s_surprise_abs)
-                        else np.nan
+                    s_surprise, s_score_diag = compute_counterfactual_surprise_score(
+                        trace_change_diag=s_trace_change_diag,
+                        effect_l2_mean=float(s_effect_l2),
+                        effect_l2_budget=float(search_cfg.delta_l2_budget),
+                        base_surprise_abs=float(base_surprise_abs),
+                        proposal_surprise_abs=float(s_surprise_abs) if np.isfinite(s_surprise_abs) else np.nan,
+                        action_divergence=float(s_action_div) if np.isfinite(s_action_div) else np.nan,
+                    )
+                    s_source = (
+                        'counterfactual_composite:'
+                        f"{s_score_diag.get('surprise_belief_source', 'none')}"
+                        f"+{s_score_diag.get('surprise_policy_source', 'none')}"
                     )
                     sensitivity_rows.append({
                         'scenario_id': int(sid),
@@ -538,6 +525,12 @@ def calibrate_closed_loop_thresholds(
                         'effect_l2_mean': float(s_effect_l2),
                         'effect_ok': int(s_realized),
                         'realization_reason': str(s_realize_reason),
+                        'surprise_belief_shift': float(s_score_diag.get('surprise_belief_shift', 0.0)),
+                        'surprise_policy_shift': float(s_score_diag.get('surprise_policy_shift', 0.0)),
+                        'surprise_realization_ratio': float(s_score_diag.get('surprise_realization_ratio', 0.0)),
+                        'surprise_belief_term': float(s_score_diag.get('surprise_belief_term', 0.0)),
+                        'surprise_policy_term': float(s_score_diag.get('surprise_policy_term', 0.0)),
+                        'surprise_action_divergence': float(s_score_diag.get('surprise_action_divergence', 0.0)),
                         'rollout_feasible': int(s_feasible),
                         'step_mean_l2_mean': float(s_trace_change_diag.get('step_mean_l2_mean', np.nan)),
                         'step_std_l2_mean': float(s_trace_change_diag.get('step_std_l2_mean', np.nan)),
@@ -571,7 +564,7 @@ def calibrate_closed_loop_thresholds(
                         seed=cfg.global_seed + int(sid) + seed_offset,
                     )
                     p_risk = compute_risk_metrics(p_xy, p_valid, **risk_kwargs_from_cfg(cfg))
-                    p_surprise_abs, p_dist_diag, trace_change_diag, surprise_source = _compute_surprise_and_diags(
+                    p_surprise_abs, p_action_div, p_dist_diag, trace_change_diag, _ = _compute_surprise_and_diags(
                         prop_actions=p_actions,
                         prop_action_valid=p_action_valid,
                         prop_dist_trace=p_dist_trace,
@@ -584,12 +577,18 @@ def calibrate_closed_loop_thresholds(
                         effect_l2_mean=float(effect_l2_mean),
                         trace_change_diag=trace_change_diag,
                     )
-                    if not realized_ok:
-                        p_surprise_abs = np.nan
-                    p_surprise = (
-                        float(p_surprise_abs - base_surprise_abs)
-                        if np.isfinite(p_surprise_abs)
-                        else np.nan
+                    p_surprise, p_score_diag = compute_counterfactual_surprise_score(
+                        trace_change_diag=trace_change_diag,
+                        effect_l2_mean=float(effect_l2_mean),
+                        effect_l2_budget=float(search_cfg.delta_l2_budget),
+                        base_surprise_abs=float(base_surprise_abs),
+                        proposal_surprise_abs=float(p_surprise_abs) if np.isfinite(p_surprise_abs) else np.nan,
+                        action_divergence=float(p_action_div) if np.isfinite(p_action_div) else np.nan,
+                    )
+                    surprise_source = (
+                        'counterfactual_composite:'
+                        f"{p_score_diag.get('surprise_belief_source', 'none')}"
+                        f"+{p_score_diag.get('surprise_policy_source', 'none')}"
                     )
 
                     candidate_row = {
@@ -600,6 +599,8 @@ def calibrate_closed_loop_thresholds(
                         'p_dist_diag': p_dist_diag,
                         'trace_change_diag': trace_change_diag,
                         'surprise_source': surprise_source,
+                        'surprise_score_diag': p_score_diag,
+                        'p_action_divergence': float(p_action_div) if np.isfinite(p_action_div) else np.nan,
                         'effect_l2_mean': effect_l2_mean,
                         'realized_ok': realized_ok,
                         'realize_reason': realize_reason,
@@ -621,6 +622,7 @@ def calibrate_closed_loop_thresholds(
                 p_dist_diag = best_row['p_dist_diag']
                 trace_change_diag = best_row['trace_change_diag']
                 surprise_source = str(best_row['surprise_source'])
+                p_score_diag = dict(best_row.get('surprise_score_diag', {}))
                 effect_l2_mean = float(best_row['effect_l2_mean'])
                 effect_ok = bool(best_row['realized_ok'])
                 realize_reason = str(best_row['realize_reason'])
@@ -628,6 +630,7 @@ def calibrate_closed_loop_thresholds(
                 p_note = str(best_row['p_note'])
                 proposal_attempts = int(best_row['attempt'])
                 prop_meta = dict(best_row.get('prop_meta', {}))
+                p_action_divergence = float(best_row.get('p_action_divergence', np.nan))
 
                 rows.append({
                     'scenario_id': int(sid),
@@ -645,6 +648,12 @@ def calibrate_closed_loop_thresholds(
                     'proposal_effect_l2_mean': float(effect_l2_mean),
                     'proposal_effect_valid': int(effect_ok),
                     'proposal_realized': int(effect_ok),
+                    'surprise_belief_shift': float(p_score_diag.get('surprise_belief_shift', np.nan)),
+                    'surprise_policy_shift': float(p_score_diag.get('surprise_policy_shift', np.nan)),
+                    'surprise_realization_ratio': float(p_score_diag.get('surprise_realization_ratio', np.nan)),
+                    'surprise_belief_term': float(p_score_diag.get('surprise_belief_term', np.nan)),
+                    'surprise_policy_term': float(p_score_diag.get('surprise_policy_term', np.nan)),
+                    'surprise_action_divergence': float(p_score_diag.get('surprise_action_divergence', p_action_divergence)),
                     'proposal_attempts': int(proposal_attempts),
                     'proposal_realization_reason': str(realize_reason),
                     'proposal_kind': str(prop_meta.get('proposal_kind', 'unknown')),
@@ -718,6 +727,12 @@ def calibrate_closed_loop_thresholds(
                 'base_surprise_source': 'error',
                 'proposal_effect_l2_mean': np.nan,
                 'proposal_effect_valid': 0,
+                'surprise_belief_shift': np.nan,
+                'surprise_policy_shift': np.nan,
+                'surprise_realization_ratio': np.nan,
+                'surprise_belief_term': np.nan,
+                'surprise_policy_term': np.nan,
+                'surprise_action_divergence': np.nan,
                 'base_failure_proxy': np.nan,
                 'proposal_failure_proxy': np.nan,
                 'base_rollout_feasible': 0,
@@ -813,14 +828,13 @@ def calibrate_closed_loop_thresholds(
 
     surprise_col = _resolve_surprise_col(calib_df)
     usable_mask = np.isfinite(calib_df['base_risk_sks']) & np.isfinite(calib_df[surprise_col])
-    if 'proposal_effect_valid' in calib_df.columns:
-        usable_mask = usable_mask & (np.asarray(calib_df['proposal_effect_valid'], dtype=float) > 0.5)
     usable = calib_df[usable_mask].copy()
 
     if len(usable) >= 20:
         thresholds = {
             'source': 'closed_loop_random_calibration',
-            'surprise_metric_name': cfg.planner_surprise_name,
+            'surprise_metric_name': 'counterfactual_composite',
+            'surprise_metric_base': cfg.planner_surprise_name,
             'risk_high_threshold': float(usable['base_risk_sks'].quantile(cfg.high_quantile)),
             'risk_low_threshold': float(usable['base_risk_sks'].quantile(1.0 - cfg.high_quantile)),
             'surprise_high_threshold': float(usable[surprise_col].quantile(cfg.high_quantile)),
@@ -837,7 +851,8 @@ def calibrate_closed_loop_thresholds(
         )
         thresholds = {
             'source': 'open_loop_risk_fallback',
-            'surprise_metric_name': cfg.planner_surprise_name,
+            'surprise_metric_name': 'counterfactual_composite',
+            'surprise_metric_base': cfg.planner_surprise_name,
             'risk_high_threshold': float(np.quantile(fallback_risk, cfg.high_quantile)),
             'risk_low_threshold': float(np.quantile(fallback_risk, 1.0 - cfg.high_quantile)),
             'surprise_high_threshold': float(np.quantile(usable[surprise_col].to_numpy(), cfg.high_quantile)) if len(usable) > 0 else 0.0,
@@ -866,8 +881,6 @@ def build_calibration_diagnostics(calib_df: pd.DataFrame, thresholds: Dict[str, 
     calib_df = _ensure_surprise_alias_columns(calib_df.copy())
     surprise_col = _resolve_surprise_col(calib_df)
     usable_mask = np.isfinite(calib_df['base_risk_sks']) & np.isfinite(calib_df[surprise_col])
-    if 'proposal_effect_valid' in calib_df.columns:
-        usable_mask = usable_mask & (np.asarray(calib_df['proposal_effect_valid'], dtype=float) > 0.5)
     usable = calib_df[usable_mask].copy()
 
     summary = pd.DataFrame([{
@@ -886,6 +899,9 @@ def build_calibration_diagnostics(calib_df: pd.DataFrame, thresholds: Dict[str, 
         'proposal_dist_source_proxy_ratio_mean': float(np.nanmean(usable['proposal_dist_source_proxy_ratio'])) if ('proposal_dist_source_proxy_ratio' in usable and len(usable) > 0) else np.nan,
         'proposal_effect_l2_mean': float(np.nanmean(usable['proposal_effect_l2_mean'])) if ('proposal_effect_l2_mean' in usable and len(usable) > 0) else np.nan,
         'proposal_effect_valid_fraction': float(np.nanmean(usable['proposal_effect_valid'])) if ('proposal_effect_valid' in usable and len(usable) > 0) else np.nan,
+        'surprise_belief_shift_mean': float(np.nanmean(usable['surprise_belief_shift'])) if ('surprise_belief_shift' in usable and len(usable) > 0) else np.nan,
+        'surprise_policy_shift_mean': float(np.nanmean(usable['surprise_policy_shift'])) if ('surprise_policy_shift' in usable and len(usable) > 0) else np.nan,
+        'surprise_realization_ratio_mean': float(np.nanmean(usable['surprise_realization_ratio'])) if ('surprise_realization_ratio' in usable and len(usable) > 0) else np.nan,
         'step_mean_l2_mean': float(np.nanmean(usable['step_mean_l2_mean'])) if ('step_mean_l2_mean' in usable and len(usable) > 0) else np.nan,
         'step_mean_l2_all_mean': float(np.nanmean(usable['step_mean_l2_all_mean'])) if ('step_mean_l2_all_mean' in usable and len(usable) > 0) else np.nan,
         'step_w2_mean': float(np.nanmean(usable['step_w2_mean'])) if ('step_w2_mean' in usable and len(usable) > 0) else np.nan,
@@ -954,8 +970,6 @@ def run_surprise_quality_gate(
     usable_mask = (
         np.isfinite(raw_calib['base_risk_sks']) & np.isfinite(raw_calib[surprise_col])
     ) if len(raw_calib) > 0 else np.asarray([], dtype=bool)
-    if ('proposal_effect_valid' in raw_calib.columns):
-        usable_mask = usable_mask & (np.asarray(raw_calib['proposal_effect_valid'], dtype=float) > 0.5)
     usable_calib = raw_calib[usable_mask].copy() if len(raw_calib) > 0 else pd.DataFrame()
 
     if len(usable_calib) == 0:

@@ -8,10 +8,17 @@ from .config import SearchConfig, ClosedLoopConfig
 from .planner_backends import (
     closed_loop_rollout_selected,
     latent_belief_kl_from_dist_trace,
+    dist_trace_change_stats,
     dist_trace_diagnostics,
     project_delta_vec,
 )
-from .metrics import compute_risk_metrics, planner_action_surprise_kl, risk_kwargs_from_cfg
+from .metrics import (
+    compute_counterfactual_surprise_score,
+    compute_risk_metrics,
+    planner_action_surprise_kl,
+    risk_kwargs_from_cfg,
+    trajectory_effect_l2_mean,
+)
 
 def evaluate_delta_closed_loop(
     rec: Dict[str, Any],
@@ -43,6 +50,13 @@ def evaluate_delta_closed_loop(
 
     base_surprise_abs = float(base_metrics.get('base_surprise', 0.0))
     proposal_surprise_abs = np.nan
+    action_surprise = planner_action_surprise_kl(
+        actions,
+        action_valid,
+        base_metrics['base_actions'],
+        base_metrics['base_action_valid'],
+        sigma=0.25,
+    )
 
     if planner_bundle['planner_type'] == 'latentdriver':
         proposal_surprise_abs, belief_diag = latent_belief_kl_from_dist_trace(
@@ -51,29 +65,17 @@ def evaluate_delta_closed_loop(
         )
         dist_diag = dist_trace_diagnostics(dist_trace)
         dist_diag.update(belief_diag)
-        surprise_source = 'latent_belief_kl'
+        trace_change_diag = dist_trace_change_stats(dist_trace, base_metrics['base_dist_trace'])
+        surprise_source = 'latent_belief_kl_raw'
         if (not np.isfinite(proposal_surprise_abs)) or (float(proposal_surprise_abs) <= 1e-12):
-            action_surprise = planner_action_surprise_kl(
-                actions,
-                action_valid,
-                base_metrics['base_actions'],
-                base_metrics['base_action_valid'],
-                sigma=0.25,
-            )
             if np.isfinite(action_surprise) and float(action_surprise) > 1e-12:
                 proposal_surprise_abs = float(action_surprise)
                 if float(belief_diag.get('belief_kl_step_count', 0.0)) > 0.0:
-                    surprise_source = 'action_kl_fallback'
+                    surprise_source = 'action_kl_fallback_raw'
                 else:
-                    surprise_source = 'action_kl_no_belief_pairs'
+                    surprise_source = 'action_kl_no_belief_pairs_raw'
     else:
-        proposal_surprise_abs = planner_action_surprise_kl(
-            actions,
-            action_valid,
-            base_metrics['base_actions'],
-            base_metrics['base_action_valid'],
-            sigma=0.25,
-        )
+        proposal_surprise_abs = float(action_surprise) if np.isfinite(action_surprise) else np.nan
         dist_diag = {
             'dist_non_null_steps': np.nan,
             'dist_non_null_ratio': np.nan,
@@ -83,12 +85,39 @@ def evaluate_delta_closed_loop(
             'dist_max_std': np.nan,
             'dist_finite_ratio': np.nan,
         }
-        surprise_source = 'action_kl'
+        trace_change_diag = {
+            'trace_pair_ratio': np.nan,
+            'trace_pair_ratio_all': np.nan,
+            'step_mean_l2_mean': np.nan,
+            'step_mean_l2_all_mean': np.nan,
+            'step_w2_mean': np.nan,
+            'step_w2_all_mean': np.nan,
+            'step_moment_kl_mean': np.nan,
+            'step_moment_kl_all_mean': np.nan,
+            'step_logit_l1_mean': np.nan,
+            'step_logit_l1_all_mean': np.nan,
+        }
+        surprise_source = 'action_kl_raw'
 
-    if np.isfinite(proposal_surprise_abs):
-        delta_surprise = float(proposal_surprise_abs - base_surprise_abs)
-    else:
-        delta_surprise = np.nan
+    effect_l2_mean = trajectory_effect_l2_mean(
+        base_metrics['base_xy'],
+        base_metrics['base_valid'],
+        xy,
+        valid,
+    )
+    delta_surprise, surprise_components = compute_counterfactual_surprise_score(
+        trace_change_diag=trace_change_diag,
+        effect_l2_mean=float(effect_l2_mean),
+        effect_l2_budget=float(search_cfg.delta_l2_budget),
+        base_surprise_abs=float(base_surprise_abs),
+        proposal_surprise_abs=float(proposal_surprise_abs) if np.isfinite(proposal_surprise_abs) else np.nan,
+        action_divergence=float(action_surprise) if np.isfinite(action_surprise) else np.nan,
+    )
+    surprise_source = (
+        f"counterfactual_composite:"
+        f"{surprise_components.get('surprise_belief_source', 'none')}"
+        f"+{surprise_components.get('surprise_policy_source', 'none')}"
+    )
 
     delta_risk = float(risk['risk_sks'] - base_metrics['base_risk'])
 
@@ -119,9 +148,17 @@ def evaluate_delta_closed_loop(
         'surprise_pd': float(delta_surprise),
         'surprise_kl': float(delta_surprise),
         'surprise_source': str(surprise_source),
-        'surprise_metric': cfg.planner_surprise_name,
+        'surprise_metric': 'counterfactual_composite',
+        'surprise_metric_base': cfg.planner_surprise_name,
         'base_surprise_pd': float(base_surprise_abs),
         'proposal_surprise_pd': float(proposal_surprise_abs) if np.isfinite(proposal_surprise_abs) else np.nan,
+        'proposal_effect_l2_mean': float(effect_l2_mean),
+        'surprise_belief_shift': float(surprise_components.get('surprise_belief_shift', 0.0)),
+        'surprise_policy_shift': float(surprise_components.get('surprise_policy_shift', 0.0)),
+        'surprise_realization_ratio': float(surprise_components.get('surprise_realization_ratio', 0.0)),
+        'surprise_belief_term': float(surprise_components.get('surprise_belief_term', 0.0)),
+        'surprise_policy_term': float(surprise_components.get('surprise_policy_term', 0.0)),
+        'surprise_action_divergence': float(surprise_components.get('surprise_action_divergence', 0.0)),
         'delta_risk': float(delta_risk),
         'failure_proxy': float(risk['failure_extended_proxy']),
         'failure_strict_proxy': float(risk['failure_strict_proxy']),
@@ -145,6 +182,7 @@ def evaluate_delta_closed_loop(
         'surprise_finite': int(np.isfinite(delta_surprise)),
         'counterfactual_family': str(getattr(cfg, 'counterfactual_family', '')),
         **dist_diag,
+        **trace_change_diag,
     }
 
 def method_weights(method: str, cfg_opt: SearchConfig) -> Tuple[float, float]:
@@ -213,6 +251,8 @@ def optimize_method_closed_loop(
     base_metrics = {
         'base_risk': float(base_risk['risk_sks']),
         'base_surprise': float(base_surprise_abs),
+        'base_xy': np.asarray(base_xy, dtype=np.float32),
+        'base_valid': np.asarray(base_valid, dtype=bool),
         'base_actions': np.asarray(base_actions, dtype=np.float32),
         'base_action_valid': np.asarray(base_action_valid, dtype=bool),
         'base_dist_trace': base_dist_trace,
@@ -316,6 +356,7 @@ def optimize_method_closed_loop(
                 target_idx=target_idx,
                 delta_xy=prop,
                 cfg=cfg,
+                search_cfg=search_cfg,
                 thresholds=thresholds,
                 base_metrics=base_metrics,
                 w_r=w_r,
@@ -366,6 +407,7 @@ def optimize_method_closed_loop(
                 target_idx=target_idx,
                 delta_xy=prop,
                 cfg=cfg,
+                search_cfg=search_cfg,
                 thresholds=thresholds,
                 base_metrics=base_metrics,
                 w_r=w_r,
