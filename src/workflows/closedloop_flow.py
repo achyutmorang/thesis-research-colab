@@ -114,7 +114,10 @@ class QuickProbeBundle:
     quick_probe_df: pd.DataFrame = field(default_factory=pd.DataFrame)
     quick_probe_summary_df: pd.DataFrame = field(default_factory=pd.DataFrame)
     quick_probe_attempts_df: pd.DataFrame = field(default_factory=pd.DataFrame)
+    quick_probe_feasibility_df: pd.DataFrame = field(default_factory=pd.DataFrame)
     final_collapsed: bool = True
+    signal_feasible: bool = False
+    signal_failure_reasons: str = ""
     applied_tuning: bool = False
     dataset_config: Any = None
     data_iter: Optional[Iterable[Any]] = None
@@ -569,16 +572,92 @@ def initialize_run_context(
     )
 
 
-def _probe_collapse_stats(probe_summary_df: pd.DataFrame) -> Tuple[bool, int, float, float, float]:
+def _probe_collapse_stats(
+    probe_summary_df: pd.DataFrame,
+    min_nonzero_surprise_fraction: float = 0.01,
+    min_realized_fraction: float = 0.10,
+    min_effect_l2_mean: float = 0.05,
+    min_belief_shift_mean: float = 1e-8,
+    min_policy_shift_mean: float = 1e-8,
+    min_realization_ratio_mean: float = 0.05,
+    require_belief_and_policy: bool = True,
+) -> Tuple[bool, Dict[str, float], List[str], pd.DataFrame]:
     if len(probe_summary_df) == 0:
-        return True, 0, 0.0, 0.0, 0.0
-    row = probe_summary_df.iloc[0]
-    n_finite = int(max(0, _float_or_default(row.get("n_finite_surprise"), 0.0)))
-    nonzero = _float_or_default(row.get("nonzero_surprise_fraction"), 0.0)
-    realized = _float_or_default(row.get("proposal_realized_fraction"), 0.0)
-    effect_l2 = _float_or_default(row.get("proposal_effect_l2_mean"), 0.0)
-    collapsed = bool((n_finite <= 0) or (nonzero <= 0.0) or (realized <= 0.0) or (effect_l2 <= 1e-9))
-    return collapsed, n_finite, nonzero, realized, effect_l2
+        metrics = {
+            "n_finite_surprise": 0.0,
+            "nonzero_surprise_fraction": 0.0,
+            "proposal_realized_fraction": 0.0,
+            "proposal_effect_l2_mean": 0.0,
+            "surprise_belief_shift_mean": 0.0,
+            "surprise_policy_shift_mean": 0.0,
+            "surprise_realization_ratio_mean": 0.0,
+        }
+        reasons = ["quick_probe_summary_empty"]
+    else:
+        row = probe_summary_df.iloc[0]
+        metrics = {
+            "n_finite_surprise": float(max(0.0, _float_or_default(row.get("n_finite_surprise"), 0.0))),
+            "nonzero_surprise_fraction": _float_or_default(row.get("nonzero_surprise_fraction"), 0.0),
+            "proposal_realized_fraction": _float_or_default(row.get("proposal_realized_fraction"), 0.0),
+            "proposal_effect_l2_mean": _float_or_default(row.get("proposal_effect_l2_mean"), 0.0),
+            "surprise_belief_shift_mean": _float_or_default(row.get("surprise_belief_shift_mean"), 0.0),
+            "surprise_policy_shift_mean": _float_or_default(row.get("surprise_policy_shift_mean"), 0.0),
+            "surprise_realization_ratio_mean": _float_or_default(row.get("surprise_realization_ratio_mean"), 0.0),
+        }
+        reasons = []
+
+    checks = [
+        ("finite_surprise_rows", metrics["n_finite_surprise"] > 0.0, "n_finite_surprise<=0"),
+        (
+            "nonzero_surprise_fraction",
+            metrics["nonzero_surprise_fraction"] >= float(min_nonzero_surprise_fraction),
+            f"nonzero_surprise_fraction<{float(min_nonzero_surprise_fraction):.4f}",
+        ),
+        (
+            "proposal_realized_fraction",
+            metrics["proposal_realized_fraction"] >= float(min_realized_fraction),
+            f"proposal_realized_fraction<{float(min_realized_fraction):.4f}",
+        ),
+        (
+            "proposal_effect_l2_mean",
+            metrics["proposal_effect_l2_mean"] >= float(min_effect_l2_mean),
+            f"proposal_effect_l2_mean<{float(min_effect_l2_mean):.4f}",
+        ),
+        (
+            "surprise_realization_ratio_mean",
+            metrics["surprise_realization_ratio_mean"] >= float(min_realization_ratio_mean),
+            f"surprise_realization_ratio_mean<{float(min_realization_ratio_mean):.4f}",
+        ),
+    ]
+
+    belief_ok = bool(metrics["surprise_belief_shift_mean"] >= float(min_belief_shift_mean))
+    policy_ok = bool(metrics["surprise_policy_shift_mean"] >= float(min_policy_shift_mean))
+    if bool(require_belief_and_policy):
+        bp_ok = bool(belief_ok and policy_ok)
+        bp_reason = (
+            f"belief_or_policy_shift_too_small(belief<{float(min_belief_shift_mean):.2e},"
+            f"policy<{float(min_policy_shift_mean):.2e})"
+        )
+    else:
+        bp_ok = bool(belief_ok or policy_ok)
+        bp_reason = (
+            f"belief_and_policy_shift_too_small(belief<{float(min_belief_shift_mean):.2e},"
+            f"policy<{float(min_policy_shift_mean):.2e})"
+        )
+    checks.append(("belief_policy_shift", bp_ok, bp_reason))
+
+    for _, ok, reason in checks:
+        if not bool(ok):
+            reasons.append(str(reason))
+
+    collapsed = bool(len(reasons) > 0)
+    feasibility_df = pd.DataFrame(
+        [
+            {"check": str(name), "pass": bool(ok), "detail": str(reason_if_fail)}
+            for name, ok, reason_if_fail in checks
+        ]
+    )
+    return collapsed, metrics, reasons, feasibility_df
 
 
 def build_full_simulation_context(
@@ -632,6 +711,13 @@ def run_quick_probe_with_auto_escalation(
     probe_delta_l2_multipliers: Sequence[float] = (1.0, 1.2, 1.4),
     probe_delta_clip_multipliers: Sequence[float] = (1.0, 1.1, 1.2),
     probe_budget_bump_per_escalation: int = 2,
+    probe_min_nonzero_surprise_fraction: float = 0.01,
+    probe_min_realized_fraction: float = 0.10,
+    probe_min_effect_l2_mean: float = 0.05,
+    probe_min_belief_shift_mean: float = 1e-8,
+    probe_min_policy_shift_mean: float = 1e-8,
+    probe_min_realization_ratio_mean: float = 0.05,
+    probe_require_belief_and_policy: bool = True,
     apply_successful_probe_tuning: bool = True,
     build_simulation_context: bool = True,
 ) -> QuickProbeBundle:
@@ -643,8 +729,11 @@ def run_quick_probe_with_auto_escalation(
     selected_search_cfg = search_cfg
     selected_probe_df = pd.DataFrame()
     selected_probe_summary_df = pd.DataFrame()
+    selected_probe_feasibility_df = pd.DataFrame()
+    selected_failure_reasons: List[str] = []
     attempt_rows = []
     final_collapsed = False
+    signal_feasible = False
     applied_tuning = False
 
     if bool(run_quick_surprise_probe_enabled):
@@ -677,7 +766,16 @@ def run_quick_probe_with_auto_escalation(
                 data_iter=probe_data_iter,
                 dataset_config=probe_dataset_config,
             )
-            collapsed, n_finite, nonzero, realized, effect_l2 = _probe_collapse_stats(probe_summary_df)
+            collapsed, probe_metrics, failure_reasons, feasibility_df = _probe_collapse_stats(
+                probe_summary_df=probe_summary_df,
+                min_nonzero_surprise_fraction=float(probe_min_nonzero_surprise_fraction),
+                min_realized_fraction=float(probe_min_realized_fraction),
+                min_effect_l2_mean=float(probe_min_effect_l2_mean),
+                min_belief_shift_mean=float(probe_min_belief_shift_mean),
+                min_policy_shift_mean=float(probe_min_policy_shift_mean),
+                min_realization_ratio_mean=float(probe_min_realization_ratio_mean),
+                require_belief_and_policy=bool(probe_require_belief_and_policy),
+            )
 
             attempt_rows.append(
                 {
@@ -687,15 +785,22 @@ def run_quick_probe_with_auto_escalation(
                     "delta_l2_budget": float(search_trial.delta_l2_budget),
                     "delta_clip": float(search_trial.delta_clip),
                     "budget_evals": int(search_trial.budget_evals),
-                    "n_finite_surprise": int(n_finite),
-                    "nonzero_surprise_fraction": float(nonzero),
-                    "proposal_realized_fraction": float(realized),
-                    "proposal_effect_l2_mean": float(effect_l2),
+                    "n_finite_surprise": int(probe_metrics.get("n_finite_surprise", 0.0)),
+                    "nonzero_surprise_fraction": float(probe_metrics.get("nonzero_surprise_fraction", 0.0)),
+                    "proposal_realized_fraction": float(probe_metrics.get("proposal_realized_fraction", 0.0)),
+                    "proposal_effect_l2_mean": float(probe_metrics.get("proposal_effect_l2_mean", 0.0)),
+                    "surprise_belief_shift_mean": float(probe_metrics.get("surprise_belief_shift_mean", 0.0)),
+                    "surprise_policy_shift_mean": float(probe_metrics.get("surprise_policy_shift_mean", 0.0)),
+                    "surprise_realization_ratio_mean": float(probe_metrics.get("surprise_realization_ratio_mean", 0.0)),
+                    "failure_reasons": "|".join(str(x) for x in failure_reasons),
                 }
             )
             selected_probe_df = probe_df.copy()
             selected_probe_summary_df = probe_summary_df.copy()
+            selected_probe_feasibility_df = feasibility_df.copy()
+            selected_failure_reasons = list(failure_reasons)
             final_collapsed = bool(collapsed)
+            signal_feasible = bool(not collapsed)
 
             if not collapsed:
                 selected_cfg = cfg_trial
@@ -708,7 +813,13 @@ def run_quick_probe_with_auto_escalation(
             applied_tuning = True
 
         if final_collapsed and bool(stop_if_quick_probe_collapsed):
-            raise RuntimeError("Quick surprise probe collapsed after escalation attempts. Stop before full run.")
+            reasons = ", ".join(selected_failure_reasons) if selected_failure_reasons else "unknown"
+            raise RuntimeError(
+                "Quick surprise probe collapsed after escalation attempts. "
+                f"Composite signal checks failed: {reasons}"
+            )
+    else:
+        selected_failure_reasons = ["quick_probe_skipped"]
 
     quick_probe_attempts_df = pd.DataFrame(attempt_rows)
     if selected_cfg is None:
@@ -730,7 +841,10 @@ def run_quick_probe_with_auto_escalation(
         quick_probe_df=selected_probe_df,
         quick_probe_summary_df=selected_probe_summary_df,
         quick_probe_attempts_df=quick_probe_attempts_df,
+        quick_probe_feasibility_df=selected_probe_feasibility_df,
         final_collapsed=bool(final_collapsed),
+        signal_feasible=bool(signal_feasible),
+        signal_failure_reasons=", ".join(selected_failure_reasons),
         applied_tuning=bool(applied_tuning),
         dataset_config=context_bundle.dataset_config,
         data_iter=context_bundle.data_iter,
@@ -871,8 +985,14 @@ def report_quick_probe_bundle(
             display_fn(bundle.quick_probe_attempts_df)
         if len(bundle.quick_probe_summary_df):
             display_fn(bundle.quick_probe_summary_df)
+        if len(bundle.quick_probe_feasibility_df):
+            display_fn(bundle.quick_probe_feasibility_df)
         if len(bundle.quick_probe_df):
             display_fn(bundle.quick_probe_df.head(int(max(1, probe_preview_rows))))
+
+    print(f"[probe] composite-signal feasibility = {bool(bundle.signal_feasible)}")
+    if (not bool(bundle.signal_feasible)) and str(bundle.signal_failure_reasons).strip():
+        print(f"[probe] failed checks: {bundle.signal_failure_reasons}")
 
     if bundle.applied_tuning:
         print("[probe] applied tuned search settings from successful attempt.")
