@@ -77,6 +77,10 @@ class ClosedLoopConfig:
     latentdriver_auto_align_token_count: bool = True
     latentdriver_expected_token_count: int = 0
     latentdriver_preflight_max_fallback_ratio: float = 0.95
+    latentdriver_use_all_vehicle_tokens: bool = True
+    latentdriver_vehicle_token_cap: int = 128
+    latentdriver_encode_in_ego_frame: bool = True
+    latentdriver_encode_yaw_degrees: bool = True
     # Perturbation injection controls:
     # apply at current simulator timestep and optionally persist for a short window.
     perturb_from_current_timestep: bool = True

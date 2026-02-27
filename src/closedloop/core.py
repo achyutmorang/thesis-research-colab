@@ -29,6 +29,7 @@ from .config import (
 from .latentdriver import (
     _choose_target_non_ego,
     closed_loop_rollout_selected,
+    perturb_initial_state,
     predictive_divergence_from_dist_traces,
     dist_trace_change_stats,
     dist_trace_diagnostics,
@@ -663,6 +664,23 @@ def run_quick_surprise_probe(
                     chosen_attempts = 0
                     chosen_meta = {}
 
+                token_shift_l2 = np.nan
+                if planner_bundle['planner_type'] == 'latentdriver':
+                    try:
+                        ld_adapter = planner_bundle['ld_adapter']
+                        base_tok = np.asarray(ld_adapter.encode_tokens(rec['state'], selected_idx), dtype=float)
+                        pert_state = perturb_initial_state(
+                            base_state=rec['state'],
+                            target_obj_idx=int(target_idx),
+                            delta_xy=np.asarray(chosen_prop, dtype=float),
+                            cfg=cfg,
+                        )
+                        prop_tok = np.asarray(ld_adapter.encode_tokens(pert_state, selected_idx), dtype=float)
+                        if base_tok.shape == prop_tok.shape and base_tok.size > 0:
+                            token_shift_l2 = float(np.linalg.norm(prop_tok - base_tok))
+                    except Exception:
+                        token_shift_l2 = np.nan
+
                 for repeat_id in range(repeat_seeds):
                     seed_offset = int(1000 + k * 101 + repeat_id * 10007)
                     p_xy, p_valid, p_actions, p_action_valid, p_dist_trace, p_feasible, p_note = closed_loop_rollout_selected(
@@ -722,6 +740,7 @@ def run_quick_surprise_probe(
                         'proposal_primitive': str(chosen_meta.get('primitive', '')),
                         'proposal_primitive_scale': float(chosen_meta.get('primitive_scale', np.nan)),
                         'proposal_primitive_gain': float(chosen_meta.get('primitive_gain', np.nan)),
+                        'token_shift_l2': float(token_shift_l2) if np.isfinite(token_shift_l2) else np.nan,
                         'base_dist_fallback_ratio': float(base_dist_diag.get('dist_fallback_ratio', np.nan)),
                         'base_dist_actor_fallback_ratio': float(base_dist_diag.get('dist_actor_fallback_ratio', np.nan)),
                         'base_dist_source_model_ratio': float(base_dist_diag.get('dist_source_model_ratio', np.nan)),
@@ -755,6 +774,7 @@ def run_quick_surprise_probe(
                 'proposal_primitive': '',
                 'proposal_primitive_scale': np.nan,
                 'proposal_primitive_gain': np.nan,
+                'token_shift_l2': np.nan,
                 'proposal_dist_fallback_ratio': np.nan,
                 'proposal_dist_actor_fallback_ratio': np.nan,
                 'proposal_dist_source_model_ratio': np.nan,
@@ -834,6 +854,8 @@ def run_quick_surprise_probe(
             'step_mean_l2_all_mean': np.nan,
             'step_w2_all_mean': np.nan,
             'step_logit_l1_all_mean': np.nan,
+            'token_shift_l2_mean': np.nan,
+            'token_shift_nonzero_fraction': np.nan,
             'proposal_realized_fraction': np.nan,
             'proposal_attempts_mean': np.nan,
             'base_infeasible_reason_counts': '{}',
@@ -878,6 +900,8 @@ def run_quick_surprise_probe(
         'step_mean_l2_all_mean': _safe_col_nanmean(probe_df, 'step_mean_l2_all_mean'),
         'step_w2_all_mean': _safe_col_nanmean(probe_df, 'step_w2_all_mean'),
         'step_logit_l1_all_mean': _safe_col_nanmean(probe_df, 'step_logit_l1_all_mean'),
+        'token_shift_l2_mean': _safe_col_nanmean(probe_df, 'token_shift_l2'),
+        'token_shift_nonzero_fraction': float(np.nanmean(np.asarray(probe_df.get('token_shift_l2', np.nan), dtype=float) > 1e-8)) if len(probe_df) > 0 else np.nan,
         'proposal_realized_fraction': _safe_col_nanmean(probe_df, 'proposal_realized'),
         'proposal_attempts_mean': _safe_col_nanmean(probe_df, 'proposal_attempts'),
         'base_infeasible_reason_counts': json.dumps(_reason_counts(probe_df, 'base_rollout_feasible', 'base_rollout_note')),
@@ -890,6 +914,17 @@ def run_quick_surprise_probe(
         'n_probe_errors': int(np.sum(probe_df.get('probe_error', '').astype(str).str.len() > 0)),
         'surprise_source_counts': json.dumps(source_counts),
     }])
+    try:
+        token_shift_nonzero = float(summary_df['token_shift_nonzero_fraction'].iloc[0])
+        step_w2_mean = float(summary_df['step_w2_all_mean'].iloc[0])
+        if np.isfinite(token_shift_nonzero) and token_shift_nonzero > 0.0:
+            if (not np.isfinite(step_w2_mean)) or (step_w2_mean <= 1e-8):
+                print(
+                    '[probe] warning: planner input tokens changed, but predictive divergence remained ~0. '
+                    'This suggests LatentDriver invariance under current perturbation family.'
+                )
+    except Exception:
+        pass
     return probe_df, summary_df
 
 def run_closed_loop(

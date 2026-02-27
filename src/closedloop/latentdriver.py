@@ -44,45 +44,60 @@ def squeeze_xy_valid_from_current(traj: Any) -> Tuple[jnp.ndarray, jnp.ndarray]:
     xy = np.asarray(traj.xy)
     valid = np.asarray(traj.valid)
 
-    # Remove leading singleton batch dims if present.
+    # Preferred path matches Waymax observation usage:
+    # current_sim_trajectory.{xy,valid} have time on the penultimate axis.
+    try:
+        if xy.ndim >= 3 and xy.shape[-1] >= 2:
+            xy0 = np.asarray(xy[..., 0, :], dtype=np.float32)
+            if xy0.ndim == 1:
+                xy0 = xy0.reshape(1, -1)
+            xy0 = xy0.reshape(-1, xy0.shape[-1])
+            if xy0.shape[1] < 2:
+                xy0 = np.pad(xy0, ((0, 0), (0, 2 - xy0.shape[1])), mode='constant')
+            xy0 = xy0[:, :2]
+
+            if valid.ndim >= 2:
+                valid0 = np.asarray(valid[..., 0], dtype=bool).reshape(-1)
+            else:
+                valid0 = np.asarray(valid, dtype=bool).reshape(-1)
+
+            n_obj = int(xy0.shape[0])
+            if valid0.shape[0] < n_obj:
+                valid0 = np.concatenate([valid0, np.zeros((n_obj - valid0.shape[0],), dtype=bool)], axis=0)
+            elif valid0.shape[0] > n_obj:
+                valid0 = valid0[:n_obj]
+
+            return jnp.asarray(xy0, dtype=jnp.float32), jnp.asarray(valid0, dtype=jnp.bool_)
+    except Exception:
+        pass
+
+    # Fallback path for unexpected schemas.
     while xy.ndim > 3 and xy.shape[0] == 1:
         xy = np.squeeze(xy, axis=0)
     while valid.ndim > 2 and valid.shape[0] == 1:
         valid = np.squeeze(valid, axis=0)
-
-    # Remove common singleton dims around time/channel.
     if xy.ndim >= 3 and xy.shape[-2] == 1:
         xy = np.squeeze(xy, axis=-2)
     if valid.ndim >= 2 and valid.shape[-1] == 1:
         valid = np.squeeze(valid, axis=-1)
-
-    # Canonicalize to [num_obj, 2].
     if xy.ndim == 1:
-        if xy.size % 2 == 0:
-            xy = xy.reshape(-1, 2)
-        else:
-            xy = np.pad(xy.reshape(-1, 1), ((0, 0), (0, 1)), mode='constant')
+        xy = xy.reshape(-1, 2) if (xy.size % 2 == 0) else np.pad(xy.reshape(-1, 1), ((0, 0), (0, 1)), mode='constant')
     elif xy.ndim >= 3 and xy.shape[-1] >= 2:
         xy = xy.reshape(xy.shape[0], -1, xy.shape[-1])[:, 0, :2]
     elif xy.ndim == 2 and xy.shape[1] < 2:
         xy = np.pad(xy, ((0, 0), (0, 2 - xy.shape[1])), mode='constant')
     elif xy.ndim != 2:
         xy = np.zeros((0, 2), dtype=np.float32)
-
-    # Canonicalize valid to [num_obj].
     if valid.ndim == 0:
         valid = np.asarray([bool(valid)], dtype=bool)
     elif valid.ndim >= 2:
         valid = valid.reshape(valid.shape[0], -1)[:, 0]
     valid = valid.astype(bool).reshape(-1)
-
     n_obj = int(xy.shape[0]) if xy.ndim == 2 else 0
     if valid.shape[0] < n_obj:
-        pad = np.zeros((n_obj - valid.shape[0],), dtype=bool)
-        valid = np.concatenate([valid, pad], axis=0)
+        valid = np.concatenate([valid, np.zeros((n_obj - valid.shape[0],), dtype=bool)], axis=0)
     elif valid.shape[0] > n_obj:
         valid = valid[:n_obj]
-
     return jnp.asarray(xy, dtype=jnp.float32), jnp.asarray(valid, dtype=jnp.bool_)
 
 def _squeeze_feature(arr: Any) -> np.ndarray:
@@ -1287,10 +1302,23 @@ class LatentDriverPredictiveKLAdapter:
         xy_j, valid_j = squeeze_xy_valid_from_current(cur)
         xy = np.asarray(xy_j)
         valid = np.asarray(valid_j).astype(bool).reshape(-1)
-        speed = cur.speed
-        yaw = cur.yaw
-        width = cur.width
-        length = cur.length
+        speed_raw = np.asarray(cur.speed)
+        yaw_raw = np.asarray(cur.yaw)
+        width_raw = np.asarray(cur.width)
+        length_raw = np.asarray(cur.length)
+
+        def _cur_feature_vector(raw: np.ndarray) -> np.ndarray:
+            a = np.asarray(raw)
+            if a.ndim >= 2:
+                a = np.asarray(a[..., 0])
+            while a.ndim > 1 and a.shape[0] == 1:
+                a = np.squeeze(a, axis=0)
+            return np.asarray(a, dtype=float).reshape(-1)
+
+        speed_vec = _cur_feature_vector(speed_raw)
+        yaw_vec = _cur_feature_vector(yaw_raw)
+        width_vec = _cur_feature_vector(width_raw)
+        length_vec = _cur_feature_vector(length_raw)
 
         is_sdc_raw = np.asarray(state.object_metadata.is_sdc).astype(bool).reshape(-1)
         n_obj = int(xy.shape[0]) if xy.ndim == 2 else valid.shape[0]
@@ -1302,15 +1330,49 @@ class LatentDriverPredictiveKLAdapter:
         else:
             is_sdc = is_sdc_raw[:n_obj]
 
+        sdc_idx = int(np.argmax(is_sdc)) if is_sdc.size > 0 else 0
+        sdc_xy = np.asarray([0.0, 0.0], dtype=float)
+        if 0 <= sdc_idx < n_obj and xy.ndim == 2 and sdc_idx < xy.shape[0]:
+            sdc_xy = np.asarray(xy[sdc_idx, :2], dtype=float)
+        sdc_yaw = float(yaw_vec[sdc_idx]) if (0 <= sdc_idx < yaw_vec.shape[0]) else 0.0
+        cos_h = float(np.cos(-sdc_yaw))
+        sin_h = float(np.sin(-sdc_yaw))
+
+        token_idx_list: List[int]
+        if bool(getattr(self.cfg, 'latentdriver_use_all_vehicle_tokens', True)):
+            cap = int(max(1, getattr(self.cfg, 'latentdriver_vehicle_token_cap', 128)))
+            token_idx_list = list(range(min(n_obj, cap)))
+        else:
+            token_idx_list = [int(i) for i in np.asarray(selected_idx, dtype=np.int32).reshape(-1).tolist() if 0 <= int(i) < n_obj]
+            if len(token_idx_list) == 0:
+                token_idx_list = list(range(min(n_obj, int(max(1, getattr(self.cfg, 'latentdriver_vehicle_token_cap', 128))))))
+        if sdc_idx not in token_idx_list and (0 <= sdc_idx < n_obj):
+            token_idx_list = [sdc_idx] + token_idx_list
+
         tokens = []
-        for obj_idx in selected_idx.tolist():
+        for obj_idx in token_idx_list:
             obj_idx = int(obj_idx)
             v = bool(obj_idx < valid.shape[0] and valid[obj_idx])
-            x, y = _xy_for_object(xy, obj_idx) if v else (0.0, 0.0)
-            w = _feature_value_for_object(width, obj_idx, 0.0) if v else 0.0
-            l = _feature_value_for_object(length, obj_idx, 0.0) if v else 0.0
-            ya = _feature_value_for_object(yaw, obj_idx, 0.0) if v else 0.0
-            sp = _feature_value_for_object(speed, obj_idx, 0.0) if v else 0.0
+            if v and xy.ndim == 2 and obj_idx < xy.shape[0]:
+                x, y = float(xy[obj_idx, 0]), float(xy[obj_idx, 1])
+            else:
+                x, y = 0.0, 0.0
+            w = float(width_vec[obj_idx]) if v and (obj_idx < width_vec.shape[0]) else 0.0
+            l = float(length_vec[obj_idx]) if v and (obj_idx < length_vec.shape[0]) else 0.0
+            yaw_obj = float(yaw_vec[obj_idx]) if v and (obj_idx < yaw_vec.shape[0]) else 0.0
+            sp = float(speed_vec[obj_idx]) if v and (obj_idx < speed_vec.shape[0]) else 0.0
+
+            if bool(getattr(self.cfg, 'latentdriver_encode_in_ego_frame', True)):
+                dx = float(x - sdc_xy[0])
+                dy = float(y - sdc_xy[1])
+                x = cos_h * dx - sin_h * dy
+                y = sin_h * dx + cos_h * dy
+                yaw_obj = float(np.arctan2(np.sin(yaw_obj - sdc_yaw), np.cos(yaw_obj - sdc_yaw)))
+
+            if bool(getattr(self.cfg, 'latentdriver_encode_yaw_degrees', True)):
+                ya = float(np.degrees(yaw_obj))
+            else:
+                ya = float(yaw_obj)
 
             type_id = 4.0 if (obj_idx < is_sdc.shape[0] and bool(is_sdc[obj_idx])) else 2.0
             if not v:
@@ -1323,6 +1385,7 @@ class LatentDriverPredictiveKLAdapter:
             'finite': bool(np.isfinite(tok).all()) if tok.size > 0 else True,
             'type_id_min': float(tok[:, 0].min()) if tok.ndim == 2 and tok.shape[0] > 0 else np.nan,
             'type_id_max': float(tok[:, 0].max()) if tok.ndim == 2 and tok.shape[0] > 0 else np.nan,
+            'xy_abs_mean': float(np.nanmean(np.abs(tok[:, 1:3]))) if tok.ndim == 2 and tok.shape[0] > 0 else np.nan,
             'token_count_expected': int(self._expected_token_count),
             'token_count_expected_source': str(self._expected_token_count_source),
         }
