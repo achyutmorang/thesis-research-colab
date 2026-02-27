@@ -22,6 +22,29 @@ from .signal_analysis import (
 ARTIFACT_SCHEMA_VERSION = '1.0.0'
 RESULTS_REQUIRED_COLUMNS = ['scenario_id', 'method']
 TRACE_REQUIRED_COLUMNS = ['scenario_id', 'method', 'eval_index']
+SURPRISE_COL_CANDIDATES = ('delta_surprise', 'delta_surprise_pd', 'surprise_pd')
+
+
+def _resolve_surprise_col(df: pd.DataFrame) -> str:
+    for col in SURPRISE_COL_CANDIDATES:
+        if isinstance(df, pd.DataFrame) and (col in df.columns):
+            return col
+    return 'delta_surprise'
+
+
+def _ensure_surprise_alias_columns(df: pd.DataFrame) -> pd.DataFrame:
+    if not isinstance(df, pd.DataFrame) or len(df.columns) == 0:
+        return df
+    if 'delta_surprise' not in df.columns:
+        if 'delta_surprise_pd' in df.columns:
+            df['delta_surprise'] = df['delta_surprise_pd']
+        elif 'surprise_pd' in df.columns:
+            df['delta_surprise'] = df['surprise_pd']
+    if ('delta_surprise_pd' not in df.columns) and ('delta_surprise' in df.columns):
+        df['delta_surprise_pd'] = df['delta_surprise']
+    if ('surprise_pd' not in df.columns) and ('delta_surprise' in df.columns):
+        df['surprise_pd'] = df['delta_surprise']
+    return df
 
 
 def _artifact_schema_manifest_path(run_prefix: str) -> str:
@@ -162,17 +185,18 @@ def _safe_float_dict(d: Dict[str, Any]) -> Dict[str, Any]:
 
 def _compute_progress_tables(df: pd.DataFrame, trace_df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     methods = ['random', 'risk_only', 'surprise_only', 'joint']
-    usable = df[df['method'].isin(methods)].copy()
+    usable = _ensure_surprise_alias_columns(df[df['method'].isin(methods)].copy())
 
     if len(usable) == 0:
         return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
+    surprise_col = _resolve_surprise_col(usable)
 
     quick_summary = (
         usable.groupby('method', as_index=False)
         .agg(
             n=('scenario_id', 'size'),
             mean_risk=('risk_sks', 'mean'),
-            mean_surprise=('surprise_pd', 'mean'),
+            mean_surprise=(surprise_col, 'mean'),
             failure_rate=('failure_proxy', 'mean'),
             feasibility_violation_rate=('feasibility_violation', 'mean'),
             q1_rate=('q1_hit', 'mean'),
@@ -335,16 +359,17 @@ def _write_progress_artifacts(
             obj.to_csv(out_path, index=False)
 
 def summarize_method_outputs(closedloop_results_df: pd.DataFrame, closedloop_trace_df: pd.DataFrame):
-    usable_df = closedloop_results_df[
+    usable_df = _ensure_surprise_alias_columns(closedloop_results_df[
         closedloop_results_df['method'].isin(['random', 'risk_only', 'surprise_only', 'joint'])
-    ].copy()
+    ].copy())
+    surprise_col = _resolve_surprise_col(usable_df)
 
     quick_summary_df = (
         usable_df.groupby('method', as_index=False)
         .agg(
             n=('scenario_id', 'size'),
             mean_risk=('risk_sks', 'mean'),
-            mean_surprise=('surprise_pd', 'mean'),
+            mean_surprise=(surprise_col, 'mean'),
             failure_rate=('failure_proxy', 'mean'),
             feasibility_violation_rate=('feasibility_violation', 'mean'),
             q1_rate=('q1_hit', 'mean'),

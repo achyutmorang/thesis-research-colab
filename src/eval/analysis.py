@@ -6,6 +6,27 @@ import numpy as np
 import pandas as pd
 
 METHODS: List[str] = ["random", "risk_only", "surprise_only", "joint"]
+SURPRISE_COL_CANDIDATES: Tuple[str, ...] = ("delta_surprise", "delta_surprise_pd", "surprise_pd")
+
+
+def _resolve_surprise_col(df: pd.DataFrame) -> str:
+    for col in SURPRISE_COL_CANDIDATES:
+        if col in df.columns:
+            return col
+    return "delta_surprise"
+
+
+def _ensure_surprise_alias_columns(df: pd.DataFrame) -> pd.DataFrame:
+    if "delta_surprise" not in df.columns:
+        if "delta_surprise_pd" in df.columns:
+            df["delta_surprise"] = df["delta_surprise_pd"]
+        elif "surprise_pd" in df.columns:
+            df["delta_surprise"] = df["surprise_pd"]
+    if ("delta_surprise_pd" not in df.columns) and ("delta_surprise" in df.columns):
+        df["delta_surprise_pd"] = df["delta_surprise"]
+    if ("surprise_pd" not in df.columns) and ("delta_surprise" in df.columns):
+        df["surprise_pd"] = df["delta_surprise"]
+    return df
 
 
 def _subset_methods(df: pd.DataFrame, methods: Optional[Sequence[str]] = None) -> pd.DataFrame:
@@ -16,9 +37,10 @@ def _subset_methods(df: pd.DataFrame, methods: Optional[Sequence[str]] = None) -
 
 
 def method_summary(results_df: pd.DataFrame, methods: Optional[Sequence[str]] = None) -> pd.DataFrame:
-    sub = _subset_methods(results_df, methods=methods)
+    sub = _ensure_surprise_alias_columns(_subset_methods(results_df, methods=methods))
     if sub.empty:
         return pd.DataFrame()
+    surprise_col = _resolve_surprise_col(sub)
 
     out = (
         sub.groupby("method", as_index=False)
@@ -26,7 +48,7 @@ def method_summary(results_df: pd.DataFrame, methods: Optional[Sequence[str]] = 
             n=("scenario_id", "nunique"),
             rows=("scenario_id", "size"),
             mean_risk=("risk_sks", "mean"),
-            mean_surprise=("surprise_pd", "mean"),
+            mean_surprise=(surprise_col, "mean"),
             failure_rate=("failure_proxy", "mean"),
             q1_rate=("q1_hit", "mean"),
             q4_rate=("q4_hit", "mean"),
@@ -441,9 +463,12 @@ def compute_trace_event_flags(
     trace_df: pd.DataFrame,
     thresholds: Dict[str, Any],
     risk_col: str = "risk_sks",
-    surprise_col: str = "surprise_pd",
+    surprise_col: Optional[str] = None,
     failure_col: str = "failure_proxy",
 ) -> pd.DataFrame:
+    trace_df = _ensure_surprise_alias_columns(trace_df.copy())
+    if surprise_col is None:
+        surprise_col = _resolve_surprise_col(trace_df)
     required = ["scenario_id", "method", "eval_index", risk_col, surprise_col, failure_col]
     missing = [c for c in required if c not in trace_df.columns]
     if missing:

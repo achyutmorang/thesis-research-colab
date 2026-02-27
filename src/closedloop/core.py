@@ -47,6 +47,30 @@ from .resume_io import (
 )
 from .search import optimize_method_closed_loop
 
+SURPRISE_COL_CANDIDATES: Tuple[str, ...] = ('delta_surprise', 'delta_surprise_pd', 'surprise_pd')
+
+
+def _resolve_surprise_col(df: pd.DataFrame) -> str:
+    for col in SURPRISE_COL_CANDIDATES:
+        if isinstance(df, pd.DataFrame) and (col in df.columns):
+            return col
+    return 'delta_surprise'
+
+
+def _ensure_surprise_alias_columns(df: pd.DataFrame) -> pd.DataFrame:
+    if not isinstance(df, pd.DataFrame) or len(df.columns) == 0:
+        return df
+    if ('delta_surprise' not in df.columns):
+        if 'delta_surprise_pd' in df.columns:
+            df['delta_surprise'] = df['delta_surprise_pd']
+        elif 'surprise_pd' in df.columns:
+            df['delta_surprise'] = df['surprise_pd']
+    if ('delta_surprise_pd' not in df.columns) and ('delta_surprise' in df.columns):
+        df['delta_surprise_pd'] = df['delta_surprise']
+    if ('surprise_pd' not in df.columns) and ('delta_surprise' in df.columns):
+        df['surprise_pd'] = df['delta_surprise']
+    return df
+
 
 def _validate_runtime_prereqs() -> None:
     try:
@@ -398,7 +422,8 @@ def _probe_ranking_stability(probe_df: pd.DataFrame, topk: int) -> Dict[str, flo
             'topk_jaccard_mean': np.nan,
             'topk_jaccard_min': np.nan,
         }
-    required = {'scenario_id', 'proposal_id', 'repeat_id', 'surprise_pd'}
+    surprise_col = _resolve_surprise_col(probe_df)
+    required = {'scenario_id', 'proposal_id', 'repeat_id', surprise_col}
     if not required.issubset(set(probe_df.columns)):
         return {
             'ranking_scenarios_count': 0.0,
@@ -412,13 +437,13 @@ def _probe_ranking_stability(probe_df: pd.DataFrame, topk: int) -> Dict[str, flo
     jaccard_vals: List[float] = []
     scenario_count = 0
 
-    base = probe_df[np.isfinite(probe_df['surprise_pd'].to_numpy(dtype=float))].copy()
+    base = probe_df[np.isfinite(probe_df[surprise_col].to_numpy(dtype=float))].copy()
     base = base[base['proposal_id'].astype(int) >= 0]
     for sid, grp in base.groupby('scenario_id'):
         piv = grp.pivot_table(
             index='proposal_id',
             columns='repeat_id',
-            values='surprise_pd',
+            values=surprise_col,
             aggfunc='mean',
         )
         if (0 not in piv.columns) or (piv.shape[0] < 2) or (piv.shape[1] < 2):
@@ -743,6 +768,8 @@ def run_quick_surprise_probe(
                         'delta_x': float(chosen_prop[0]),
                         'delta_y': float(chosen_prop[1]),
                         'delta_l2': float(np.linalg.norm(chosen_prop)),
+                        'delta_surprise': float(p_surprise),
+                        'delta_surprise_pd': float(p_surprise),
                         'surprise_pd': float(p_surprise),
                         'base_surprise_pd': float(base_rollouts[repeat_id].get('base_surprise_abs', 0.0)),
                         'proposal_surprise_pd': float(p_surprise_abs) if np.isfinite(p_surprise_abs) else np.nan,
@@ -780,6 +807,8 @@ def run_quick_surprise_probe(
                 'scenario_id': int(sid),
                 'proposal_id': -1,
                 'repeat_id': 0,
+                'delta_surprise': np.nan,
+                'delta_surprise_pd': np.nan,
                 'surprise_pd': np.nan,
                 'base_surprise_pd': np.nan,
                 'proposal_surprise_pd': np.nan,
@@ -818,7 +847,7 @@ def run_quick_surprise_probe(
             f"skipped_base_infeasible={n_scenarios_skipped_base_infeasible}."
         )
 
-    probe_df = pd.DataFrame(rows)
+    probe_df = _ensure_surprise_alias_columns(pd.DataFrame(rows))
 
     skipped_base_note_counts = (
         pd.Series(skipped_base_infeasible_notes, dtype='object')
@@ -889,7 +918,8 @@ def run_quick_surprise_probe(
         }])
         return probe_df, summary_df
 
-    finite_mask = np.isfinite(probe_df['surprise_pd'].to_numpy(dtype=float))
+    surprise_col = _resolve_surprise_col(probe_df)
+    finite_mask = np.isfinite(probe_df[surprise_col].to_numpy(dtype=float))
     finite_df = probe_df[finite_mask].copy()
     source_counts = (
         probe_df['surprise_source'].fillna('unknown').astype(str).value_counts(dropna=False).to_dict()
@@ -907,8 +937,8 @@ def run_quick_surprise_probe(
         'skipped_base_infeasible_reason_counts': json.dumps(skipped_base_note_counts_dict),
         'n_finite_surprise': int(np.sum(finite_mask)),
         'finite_surprise_rate': float(np.mean(finite_mask)),
-        'nonzero_surprise_fraction': float(np.mean(finite_df['surprise_pd'].to_numpy(dtype=float) > 1e-9)) if len(finite_df) > 0 else 0.0,
-        'surprise_std': float(np.nanstd(finite_df['surprise_pd'].to_numpy(dtype=float))) if len(finite_df) > 1 else np.nan,
+        'nonzero_surprise_fraction': float(np.mean(finite_df[surprise_col].to_numpy(dtype=float) > 1e-9)) if len(finite_df) > 0 else 0.0,
+        'surprise_std': float(np.nanstd(finite_df[surprise_col].to_numpy(dtype=float))) if len(finite_df) > 1 else np.nan,
         'proposal_effect_l2_mean': _safe_col_nanmean(probe_df, 'proposal_effect_l2_mean'),
         'proposal_fallback_ratio_mean': _safe_col_nanmean(probe_df, 'proposal_dist_fallback_ratio'),
         'proposal_actor_fallback_ratio_mean': _safe_col_nanmean(probe_df, 'proposal_dist_actor_fallback_ratio'),
@@ -1088,6 +1118,8 @@ def run_closed_loop(
                     'planner': cfg.planner_name,
                     'objective': np.nan,
                     'risk_sks': np.nan,
+                    'delta_surprise': np.nan,
+                    'delta_surprise_pd': np.nan,
                     'surprise_pd': np.nan,
                     'surprise_kl': np.nan,
                     'failure_proxy': np.nan,
@@ -1098,7 +1130,6 @@ def run_closed_loop(
                     'max_acc': np.nan,
                     'max_jerk': np.nan,
                     'delta_risk': np.nan,
-                    'delta_surprise': np.nan,
                     'objective_start': np.nan,
                     'objective_gain': np.nan,
                     'delta_risk_start': np.nan,

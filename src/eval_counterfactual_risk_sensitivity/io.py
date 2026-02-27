@@ -8,6 +8,8 @@ import pandas as pd
 
 from src.eval.io import discover_run_prefixes, load_run_artifacts, select_default_run_prefix
 
+SURPRISE_COL_CANDIDATES = ("delta_surprise", "delta_surprise_pd", "surprise_pd")
+
 
 @dataclass
 class CounterfactualRunData:
@@ -71,19 +73,17 @@ def trace_to_intervention_table(
         return pd.DataFrame()
 
     id_cols = [c for c in ["scenario_id", "method", "eval_index", "seed_used"] if c in trace_df.columns]
-    value_cols = [
-        c
-        for c in [
-            "risk_sks",
-            "failure_proxy",
-            "surprise_pd",
-            "accepted",
-            "is_best_so_far",
-            "feasible",
-            "rollout_feasible",
+    surprise_col = next((c for c in SURPRISE_COL_CANDIDATES if c in trace_df.columns), None)
+    value_cols = [c for c in ["risk_sks", "failure_proxy"] if c in trace_df.columns]
+    if surprise_col is not None:
+        value_cols.append(surprise_col)
+    value_cols.extend(
+        [
+            c
+            for c in ["accepted", "is_best_so_far", "feasible", "rollout_feasible"]
+            if c in trace_df.columns
         ]
-        if c in trace_df.columns
-    ]
+    )
     long_df = trace_df[id_cols + value_cols + present_factors].melt(
         id_vars=id_cols + value_cols,
         value_vars=present_factors,

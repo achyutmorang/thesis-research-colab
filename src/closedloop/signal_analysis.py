@@ -8,6 +8,27 @@ import pandas as pd
 
 
 DEFAULT_METHODS: Tuple[str, ...] = ("random", "risk_only", "surprise_only", "joint")
+SURPRISE_COL_CANDIDATES: Tuple[str, ...] = ("delta_surprise", "delta_surprise_pd", "surprise_pd")
+
+
+def _resolve_surprise_col(df: pd.DataFrame) -> str:
+    for col in SURPRISE_COL_CANDIDATES:
+        if col in df.columns:
+            return col
+    return "delta_surprise"
+
+
+def _ensure_surprise_alias_columns(df: pd.DataFrame) -> pd.DataFrame:
+    if "delta_surprise" not in df.columns:
+        if "delta_surprise_pd" in df.columns:
+            df["delta_surprise"] = df["delta_surprise_pd"]
+        elif "surprise_pd" in df.columns:
+            df["delta_surprise"] = df["surprise_pd"]
+    if ("delta_surprise_pd" not in df.columns) and ("delta_surprise" in df.columns):
+        df["delta_surprise_pd"] = df["delta_surprise"]
+    if ("surprise_pd" not in df.columns) and ("delta_surprise" in df.columns):
+        df["surprise_pd"] = df["delta_surprise"]
+    return df
 
 
 def _corr_or_nan(x: np.ndarray, y: np.ndarray, method: str) -> float:
@@ -29,7 +50,9 @@ def analyze_surprise_signal_usefulness(
     scenario_min_points: int = 3,
 ) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     methods = tuple(methods) if methods is not None else DEFAULT_METHODS
-    required = {"scenario_id", "method", "surprise_pd", "delta_risk"}
+    closedloop_results_df = _ensure_surprise_alias_columns(closedloop_results_df.copy())
+    surprise_col = _resolve_surprise_col(closedloop_results_df)
+    required = {"scenario_id", "method", surprise_col, "delta_risk"}
     if not required.issubset(set(closedloop_results_df.columns)):
         missing = sorted(list(required.difference(set(closedloop_results_df.columns))))
         raise ValueError(
@@ -39,7 +62,7 @@ def analyze_surprise_signal_usefulness(
 
     base = closedloop_results_df[closedloop_results_df["method"].isin(methods)].copy()
     usable = base[
-        np.isfinite(base["surprise_pd"].to_numpy(dtype=float))
+        np.isfinite(base[surprise_col].to_numpy(dtype=float))
         & np.isfinite(base["delta_risk"].to_numpy(dtype=float))
     ].copy()
 
@@ -73,7 +96,7 @@ def analyze_surprise_signal_usefulness(
         )
         return summary, empty, empty, empty, empty
 
-    signal = usable["surprise_pd"].to_numpy(dtype=float)
+    signal = usable[surprise_col].to_numpy(dtype=float)
     outcome = usable["delta_risk"].to_numpy(dtype=float)
 
     corr_pearson = _corr_or_nan(signal, outcome, "pearson")
@@ -82,7 +105,7 @@ def analyze_surprise_signal_usefulness(
 
     method_rows = []
     for method_name, g in usable.groupby("method", as_index=False):
-        s = g["surprise_pd"].to_numpy(dtype=float)
+        s = g[surprise_col].to_numpy(dtype=float)
         y = g["delta_risk"].to_numpy(dtype=float)
         method_rows.append(
             {
@@ -98,13 +121,13 @@ def analyze_surprise_signal_usefulness(
         )
     method_corr_df = pd.DataFrame(method_rows).sort_values("method").reset_index(drop=True)
 
-    usable = usable.sort_values("surprise_pd").reset_index(drop=True)
+    usable = usable.sort_values(surprise_col).reset_index(drop=True)
     uniq_signal = int(np.unique(signal).size)
     q = int(max(1, min(int(n_bins), uniq_signal)))
     if q <= 1:
         bin_codes = pd.Series(np.zeros((len(usable),), dtype=int))
     else:
-        ranked = usable["surprise_pd"].rank(method="average")
+        ranked = usable[surprise_col].rank(method="average")
         binned = pd.qcut(ranked, q=q, labels=False, duplicates="drop")
         if binned.isna().all():
             bin_codes = pd.Series(np.zeros((len(usable),), dtype=int))
@@ -117,9 +140,9 @@ def analyze_surprise_signal_usefulness(
         bdf.groupby("signal_bin", as_index=False)
         .agg(
             n=("delta_risk", "size"),
-            signal_min=("surprise_pd", "min"),
-            signal_max=("surprise_pd", "max"),
-            signal_mean=("surprise_pd", "mean"),
+            signal_min=(surprise_col, "min"),
+            signal_max=(surprise_col, "max"),
+            signal_mean=(surprise_col, "mean"),
             delta_risk_mean=("delta_risk", "mean"),
             delta_risk_p50=("delta_risk", "median"),
             delta_risk_positive_rate=("delta_risk", lambda x: float(np.mean(np.asarray(x, dtype=float) > 0.0))),
@@ -153,8 +176,8 @@ def analyze_surprise_signal_usefulness(
         if (not np.isfinite(frac)) or frac <= 0.0 or frac >= 1.0:
             continue
         k = int(max(1, np.ceil(frac * n)))
-        top = usable.nlargest(k, "surprise_pd")
-        bottom = usable.nsmallest(k, "surprise_pd")
+        top = usable.nlargest(k, surprise_col)
+        bottom = usable.nsmallest(k, surprise_col)
         top_mean = float(np.mean(top["delta_risk"].to_numpy(dtype=float)))
         bottom_mean = float(np.mean(bottom["delta_risk"].to_numpy(dtype=float)))
         top_pos_rate = float(np.mean(top["delta_risk"].to_numpy(dtype=float) > 0.0))
@@ -181,7 +204,7 @@ def analyze_surprise_signal_usefulness(
     for scenario_id, g in usable.groupby("scenario_id", as_index=False):
         if len(g) < int(max(2, scenario_min_points)):
             continue
-        s = g["surprise_pd"].to_numpy(dtype=float)
+        s = g[surprise_col].to_numpy(dtype=float)
         y = g["delta_risk"].to_numpy(dtype=float)
         if np.unique(s).size < 2 or np.unique(y).size < 2:
             continue

@@ -21,6 +21,31 @@ from .planner_backends import (
 )
 from .metrics import compute_risk_metrics, planner_action_surprise_kl, risk_kwargs_from_cfg, robust_scale
 
+SURPRISE_COL_CANDIDATES: Tuple[str, ...] = ('delta_surprise', 'delta_surprise_pd', 'surprise_pd')
+
+
+def _resolve_surprise_col(df: pd.DataFrame) -> str:
+    for c in SURPRISE_COL_CANDIDATES:
+        if isinstance(df, pd.DataFrame) and (c in df.columns):
+            return c
+    return 'delta_surprise'
+
+
+def _ensure_surprise_alias_columns(df: pd.DataFrame) -> pd.DataFrame:
+    if not isinstance(df, pd.DataFrame) or len(df.columns) == 0:
+        return df
+    if ('delta_surprise' not in df.columns):
+        if 'delta_surprise_pd' in df.columns:
+            df['delta_surprise'] = df['delta_surprise_pd']
+        elif 'surprise_pd' in df.columns:
+            df['delta_surprise'] = df['surprise_pd']
+    if ('delta_surprise_pd' not in df.columns) and ('delta_surprise' in df.columns):
+        df['delta_surprise_pd'] = df['delta_surprise']
+    if ('surprise_pd' not in df.columns) and ('delta_surprise' in df.columns):
+        df['surprise_pd'] = df['delta_surprise']
+    return df
+
+
 def run_closedloop_preflight_checks(runner: Any, cfg: ClosedLoopConfig, eval_idx: np.ndarray) -> pd.DataFrame:
     checks: List[Dict[str, Any]] = []
 
@@ -504,6 +529,8 @@ def calibrate_closed_loop_thresholds(
                         'scenario_id': int(sid),
                         'grid_id': int(g),
                         'delta_l2': float(np.linalg.norm(grid_prop)),
+                        'delta_surprise': float(s_surprise),
+                        'delta_surprise_pd': float(s_surprise),
                         'surprise_pd': float(s_surprise),
                         'base_surprise_pd': float(base_surprise_abs),
                         'proposal_surprise_pd': float(s_surprise_abs) if np.isfinite(s_surprise_abs) else np.nan,
@@ -608,6 +635,8 @@ def calibrate_closed_loop_thresholds(
                     'proposal_id': int(k),
                     'base_risk_sks': float(base_risk['risk_sks']),
                     'proposal_risk_sks': float(p_risk['risk_sks']),
+                    'delta_surprise': float(p_surprise),
+                    'delta_surprise_pd': float(p_surprise),
                     'surprise_pd': float(p_surprise),
                     'base_surprise_pd': float(base_surprise_abs),
                     'proposal_surprise_pd': float(p_surprise_abs) if np.isfinite(p_surprise_abs) else np.nan,
@@ -680,6 +709,8 @@ def calibrate_closed_loop_thresholds(
                 'proposal_id': -1,
                 'base_risk_sks': np.nan,
                 'proposal_risk_sks': np.nan,
+                'delta_surprise': np.nan,
+                'delta_surprise_pd': np.nan,
                 'surprise_pd': np.nan,
                 'base_surprise_pd': np.nan,
                 'proposal_surprise_pd': np.nan,
@@ -739,19 +770,20 @@ def calibrate_closed_loop_thresholds(
                 'trace_fallback_pair_ratio': np.nan,
             })
 
-    calib_df = pd.DataFrame(rows)
+    calib_df = _ensure_surprise_alias_columns(pd.DataFrame(rows))
 
     if len(sensitivity_rows) > 0:
-        sensitivity_df = pd.DataFrame(sensitivity_rows)
+        sensitivity_df = _ensure_surprise_alias_columns(pd.DataFrame(sensitivity_rows))
+        sensitivity_surprise_col = _resolve_surprise_col(sensitivity_df)
         sid_summary = (
             sensitivity_df.groupby('scenario_id')
             .agg(
-                sensitivity_surprise_std=('surprise_pd', lambda x: float(np.nanstd(np.asarray(x, dtype=float)))),
-                sensitivity_nonzero_fraction=('surprise_pd', lambda x: float(np.nanmean(np.asarray(x, dtype=float) > 1e-9))),
+                sensitivity_surprise_std=(sensitivity_surprise_col, lambda x: float(np.nanstd(np.asarray(x, dtype=float)))),
+                sensitivity_nonzero_fraction=(sensitivity_surprise_col, lambda x: float(np.nanmean(np.asarray(x, dtype=float) > 1e-9))),
                 sensitivity_effect_l2_mean=('effect_l2_mean', lambda x: float(np.nanmean(np.asarray(x, dtype=float)))),
                 sensitivity_w2_mean=('step_w2_mean', lambda x: float(np.nanmean(np.asarray(x, dtype=float)))),
                 sensitivity_logit_l1_mean=('step_logit_l1_mean', lambda x: float(np.nanmean(np.asarray(x, dtype=float)))),
-                sensitivity_rows=('surprise_pd', 'size'),
+                sensitivity_rows=(sensitivity_surprise_col, 'size'),
             )
             .reset_index()
         )
@@ -764,10 +796,10 @@ def calibrate_closed_loop_thresholds(
             calib_df['sensitivity_scan_rows'] = float(len(sensitivity_df))
             calib_df['sensitivity_scan_scenarios'] = float(sid_summary['scenario_id'].nunique())
             calib_df['sensitivity_scan_surprise_std'] = float(
-                np.nanstd(np.asarray(sensitivity_df['surprise_pd'], dtype=float))
+                np.nanstd(np.asarray(sensitivity_df[sensitivity_surprise_col], dtype=float))
             )
             calib_df['sensitivity_scan_nonzero_fraction'] = float(
-                np.nanmean(np.asarray(sensitivity_df['surprise_pd'], dtype=float) > 1e-9)
+                np.nanmean(np.asarray(sensitivity_df[sensitivity_surprise_col], dtype=float) > 1e-9)
             )
             calib_df['sensitivity_scan_flat_scenario_fraction'] = float(
                 np.nanmean(np.asarray(sid_summary['sensitivity_flat'], dtype=float))
@@ -779,7 +811,8 @@ def calibrate_closed_loop_thresholds(
         calib_df['sensitivity_scan_nonzero_fraction'] = np.nan
         calib_df['sensitivity_scan_flat_scenario_fraction'] = np.nan
 
-    usable_mask = np.isfinite(calib_df['base_risk_sks']) & np.isfinite(calib_df['surprise_pd'])
+    surprise_col = _resolve_surprise_col(calib_df)
+    usable_mask = np.isfinite(calib_df['base_risk_sks']) & np.isfinite(calib_df[surprise_col])
     if 'proposal_effect_valid' in calib_df.columns:
         usable_mask = usable_mask & (np.asarray(calib_df['proposal_effect_valid'], dtype=float) > 0.5)
     usable = calib_df[usable_mask].copy()
@@ -790,9 +823,9 @@ def calibrate_closed_loop_thresholds(
             'surprise_metric_name': cfg.planner_surprise_name,
             'risk_high_threshold': float(usable['base_risk_sks'].quantile(cfg.high_quantile)),
             'risk_low_threshold': float(usable['base_risk_sks'].quantile(1.0 - cfg.high_quantile)),
-            'surprise_high_threshold': float(usable['surprise_pd'].quantile(cfg.high_quantile)),
+            'surprise_high_threshold': float(usable[surprise_col].quantile(cfg.high_quantile)),
             'risk_scale': float(robust_scale(usable['base_risk_sks'].to_numpy(), min_scale=search_cfg.min_scale)),
-            'surprise_scale': float(robust_scale(usable['surprise_pd'].to_numpy(), min_scale=search_cfg.min_scale)),
+            'surprise_scale': float(robust_scale(usable[surprise_col].to_numpy(), min_scale=search_cfg.min_scale)),
             'high_quantile': float(cfg.high_quantile),
             'n_calibration_used': int(len(usable)),
         }
@@ -807,9 +840,9 @@ def calibrate_closed_loop_thresholds(
             'surprise_metric_name': cfg.planner_surprise_name,
             'risk_high_threshold': float(np.quantile(fallback_risk, cfg.high_quantile)),
             'risk_low_threshold': float(np.quantile(fallback_risk, 1.0 - cfg.high_quantile)),
-            'surprise_high_threshold': float(np.quantile(usable['surprise_pd'].to_numpy(), cfg.high_quantile)) if len(usable) > 0 else 0.0,
+            'surprise_high_threshold': float(np.quantile(usable[surprise_col].to_numpy(), cfg.high_quantile)) if len(usable) > 0 else 0.0,
             'risk_scale': float(robust_scale(fallback_risk, min_scale=search_cfg.min_scale)),
-            'surprise_scale': float(robust_scale(usable['surprise_pd'].to_numpy(), min_scale=search_cfg.min_scale)) if len(usable) > 0 else 1.0,
+            'surprise_scale': float(robust_scale(usable[surprise_col].to_numpy(), min_scale=search_cfg.min_scale)) if len(usable) > 0 else 1.0,
             'high_quantile': float(cfg.high_quantile),
             'n_calibration_used': int(len(usable)),
         }
@@ -830,7 +863,9 @@ def build_calibration_diagnostics(calib_df: pd.DataFrame, thresholds: Dict[str, 
         }])
         return summary, pd.DataFrame()
 
-    usable_mask = np.isfinite(calib_df['base_risk_sks']) & np.isfinite(calib_df['surprise_pd'])
+    calib_df = _ensure_surprise_alias_columns(calib_df.copy())
+    surprise_col = _resolve_surprise_col(calib_df)
+    usable_mask = np.isfinite(calib_df['base_risk_sks']) & np.isfinite(calib_df[surprise_col])
     if 'proposal_effect_valid' in calib_df.columns:
         usable_mask = usable_mask & (np.asarray(calib_df['proposal_effect_valid'], dtype=float) > 0.5)
     usable = calib_df[usable_mask].copy()
@@ -841,8 +876,8 @@ def build_calibration_diagnostics(calib_df: pd.DataFrame, thresholds: Dict[str, 
         'usable_rate': float(len(usable) / max(len(calib_df), 1)),
         'base_feasible_rate': float(calib_df['base_rollout_feasible'].mean()) if 'base_rollout_feasible' in calib_df else np.nan,
         'proposal_feasible_rate': float(calib_df['proposal_rollout_feasible'].mean()) if 'proposal_rollout_feasible' in calib_df else np.nan,
-        'surprise_std': float(np.std(usable['surprise_pd'])) if len(usable) > 1 else np.nan,
-        'nonzero_surprise_fraction': float(np.mean(np.asarray(usable['surprise_pd']) > 1e-9)) if len(usable) > 0 else 0.0,
+        'surprise_std': float(np.std(usable[surprise_col])) if len(usable) > 1 else np.nan,
+        'nonzero_surprise_fraction': float(np.mean(np.asarray(usable[surprise_col]) > 1e-9)) if len(usable) > 0 else 0.0,
         'risk_std': float(np.std(usable['base_risk_sks'])) if len(usable) > 1 else np.nan,
         'proposal_dist_fallback_ratio_mean': float(np.nanmean(usable['proposal_dist_fallback_ratio'])) if ('proposal_dist_fallback_ratio' in usable and len(usable) > 0) else np.nan,
         'proposal_dist_actor_fallback_ratio_mean': float(np.nanmean(usable['proposal_dist_actor_fallback_ratio'])) if ('proposal_dist_actor_fallback_ratio' in usable and len(usable) > 0) else np.nan,
@@ -880,13 +915,13 @@ def build_calibration_diagnostics(calib_df: pd.DataFrame, thresholds: Dict[str, 
     }])
 
     quant = pd.DataFrame({
-        'metric': ['base_risk_sks', 'surprise_pd'],
+        'metric': ['base_risk_sks', surprise_col],
         'q05': [float(usable['base_risk_sks'].quantile(0.05)) if len(usable) else np.nan,
-                float(usable['surprise_pd'].quantile(0.05)) if len(usable) else np.nan],
+                float(usable[surprise_col].quantile(0.05)) if len(usable) else np.nan],
         'q50': [float(usable['base_risk_sks'].quantile(0.50)) if len(usable) else np.nan,
-                float(usable['surprise_pd'].quantile(0.50)) if len(usable) else np.nan],
+                float(usable[surprise_col].quantile(0.50)) if len(usable) else np.nan],
         'q95': [float(usable['base_risk_sks'].quantile(0.95)) if len(usable) else np.nan,
-                float(usable['surprise_pd'].quantile(0.95)) if len(usable) else np.nan],
+                float(usable[surprise_col].quantile(0.95)) if len(usable) else np.nan],
     })
 
     return summary, quant
@@ -903,10 +938,11 @@ def run_surprise_quality_gate(
     surprise_max_flat_sensitivity_fraction: float = 0.80,
     surprise_min_model_source_ratio: float = 0.01,
 ):
-    raw_calib = closedloop_calib_df.copy() if isinstance(closedloop_calib_df, pd.DataFrame) else pd.DataFrame()
+    raw_calib = _ensure_surprise_alias_columns(closedloop_calib_df.copy()) if isinstance(closedloop_calib_df, pd.DataFrame) else pd.DataFrame()
+    surprise_col = _resolve_surprise_col(raw_calib)
 
     raw_finite_mask = (
-        np.isfinite(raw_calib['base_risk_sks']) & np.isfinite(raw_calib['surprise_pd'])
+        np.isfinite(raw_calib['base_risk_sks']) & np.isfinite(raw_calib[surprise_col])
     ) if len(raw_calib) > 0 else np.asarray([], dtype=bool)
     raw_finite_rows = int(np.sum(raw_finite_mask)) if raw_finite_mask.size > 0 else 0
     raw_effect_valid_rows = (
@@ -916,11 +952,11 @@ def run_surprise_quality_gate(
     )
 
     usable_mask = (
-        np.isfinite(closedloop_calib_df['base_risk_sks']) & np.isfinite(closedloop_calib_df['surprise_pd'])
-    ) if isinstance(closedloop_calib_df, pd.DataFrame) and len(closedloop_calib_df) > 0 else np.asarray([], dtype=bool)
-    if isinstance(closedloop_calib_df, pd.DataFrame) and ('proposal_effect_valid' in closedloop_calib_df.columns):
-        usable_mask = usable_mask & (np.asarray(closedloop_calib_df['proposal_effect_valid'], dtype=float) > 0.5)
-    usable_calib = closedloop_calib_df[usable_mask].copy() if isinstance(closedloop_calib_df, pd.DataFrame) and len(closedloop_calib_df) > 0 else pd.DataFrame()
+        np.isfinite(raw_calib['base_risk_sks']) & np.isfinite(raw_calib[surprise_col])
+    ) if len(raw_calib) > 0 else np.asarray([], dtype=bool)
+    if ('proposal_effect_valid' in raw_calib.columns):
+        usable_mask = usable_mask & (np.asarray(raw_calib['proposal_effect_valid'], dtype=float) > 0.5)
+    usable_calib = raw_calib[usable_mask].copy() if len(raw_calib) > 0 else pd.DataFrame()
 
     if len(usable_calib) == 0:
         gate_summary = pd.DataFrame([{
@@ -1001,8 +1037,8 @@ def run_surprise_quality_gate(
             return float('nan')
         return float(np.quantile(arr, q))
 
-    surprise_std = float(np.nanstd(usable_calib['surprise_pd'].to_numpy(dtype=float)))
-    nonzero_surprise_fraction = float(np.mean(usable_calib['surprise_pd'].to_numpy(dtype=float) > 1e-9))
+    surprise_std = float(np.nanstd(usable_calib[surprise_col].to_numpy(dtype=float)))
+    nonzero_surprise_fraction = float(np.mean(usable_calib[surprise_col].to_numpy(dtype=float) > 1e-9))
     fallback_usage_rate = _col_mean(usable_calib, 'proposal_dist_fallback_ratio')
     actor_fallback_usage_rate = _col_mean(usable_calib, 'proposal_dist_actor_fallback_ratio')
     proposal_effect_l2_mean = _col_mean(usable_calib, 'proposal_effect_l2_mean')
@@ -1147,14 +1183,15 @@ def diagnose_surprise_root_cause(
             return float('nan')
         return float(np.mean(arr > float(thr)))
 
-    raw = closedloop_calib_df.copy() if isinstance(closedloop_calib_df, pd.DataFrame) else pd.DataFrame()
+    raw = _ensure_surprise_alias_columns(closedloop_calib_df.copy()) if isinstance(closedloop_calib_df, pd.DataFrame) else pd.DataFrame()
+    surprise_col = _resolve_surprise_col(raw)
     usable = raw.copy()
     if len(usable) > 0 and 'proposal_effect_valid' in usable.columns:
         usable = usable[np.asarray(usable['proposal_effect_valid'], dtype=float) > 0.5].copy()
 
     raw_finite_surprise_rows = (
-        int(np.sum(np.isfinite(raw['surprise_pd'].to_numpy(dtype=float))))
-        if (len(raw) > 0 and 'surprise_pd' in raw.columns)
+        int(np.sum(np.isfinite(raw[surprise_col].to_numpy(dtype=float))))
+        if (len(raw) > 0 and surprise_col in raw.columns)
         else 0
     )
     raw_effect_valid_rows = (
@@ -1162,11 +1199,11 @@ def diagnose_surprise_root_cause(
         if (len(raw) > 0 and 'proposal_effect_valid' in raw.columns)
         else 0
     )
-    raw_surprise_nonzero_fraction = _safe_rate(raw, 'surprise_pd', thr=1e-9)
+    raw_surprise_nonzero_fraction = _safe_rate(raw, surprise_col, thr=1e-9)
     raw_fallback_ratio = _safe_mean(raw, 'proposal_dist_fallback_ratio')
     raw_trace_pair_ratio = _safe_mean(raw, 'trace_pair_ratio')
 
-    surprise_nonzero_fraction = _safe_rate(usable, 'surprise_pd', thr=1e-9)
+    surprise_nonzero_fraction = _safe_rate(usable, surprise_col, thr=1e-9)
     fallback_ratio = _safe_mean(usable, 'proposal_dist_fallback_ratio')
     actor_fallback_ratio = _safe_mean(usable, 'proposal_dist_actor_fallback_ratio')
     model_source_ratio = _safe_mean(usable, 'proposal_dist_source_model_ratio')

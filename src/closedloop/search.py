@@ -86,12 +86,11 @@ def evaluate_delta_closed_loop(
         surprise_source = 'action_kl'
 
     if np.isfinite(proposal_surprise_abs):
-        surprise_pd = float(proposal_surprise_abs - base_surprise_abs)
+        delta_surprise = float(proposal_surprise_abs - base_surprise_abs)
     else:
-        surprise_pd = np.nan
+        delta_surprise = np.nan
 
     delta_risk = float(risk['risk_sks'] - base_metrics['base_risk'])
-    delta_surprise = float(surprise_pd) if np.isfinite(surprise_pd) else np.nan
 
     norm_delta_risk = delta_risk / max(float(thresholds['risk_scale']), search_cfg.min_scale)
     norm_delta_surprise = delta_surprise / max(float(thresholds['surprise_scale']), search_cfg.min_scale)
@@ -106,21 +105,24 @@ def evaluate_delta_closed_loop(
     l2_ok = bool(l2_norm <= (search_cfg.delta_l2_budget + 1e-8))
     feasible = int(bool(finite_delta and clip_ok and l2_ok and rollout_feasible))
 
-    q1_hit = int((risk['risk_sks'] >= thresholds['risk_high_threshold']) and (surprise_pd >= thresholds['surprise_high_threshold']))
-    q4_hit = int((risk['risk_sks'] <= thresholds['risk_low_threshold']) and (surprise_pd >= thresholds['surprise_high_threshold']))
-    blind_spot_proxy_hit = int((risk['failure_extended_proxy'] > 0.0) and (surprise_pd >= thresholds['surprise_high_threshold']))
+    q1_hit = int((risk['risk_sks'] >= thresholds['risk_high_threshold']) and (delta_surprise >= thresholds['surprise_high_threshold']))
+    q4_hit = int((risk['risk_sks'] <= thresholds['risk_low_threshold']) and (delta_surprise >= thresholds['surprise_high_threshold']))
+    blind_spot_proxy_hit = int((risk['failure_extended_proxy'] > 0.0) and (delta_surprise >= thresholds['surprise_high_threshold']))
 
     return {
         'objective': objective,
         'risk_sks': float(risk['risk_sks']),
-        'surprise_pd': float(surprise_pd),
-        'surprise_kl': float(surprise_pd),
+        # Canonical counterfactual surprise score (proposal - base).
+        'delta_surprise': float(delta_surprise),
+        # Backward-compatible aliases used by older analysis code.
+        'delta_surprise_pd': float(delta_surprise),
+        'surprise_pd': float(delta_surprise),
+        'surprise_kl': float(delta_surprise),
         'surprise_source': str(surprise_source),
         'surprise_metric': cfg.planner_surprise_name,
         'base_surprise_pd': float(base_surprise_abs),
         'proposal_surprise_pd': float(proposal_surprise_abs) if np.isfinite(proposal_surprise_abs) else np.nan,
         'delta_risk': float(delta_risk),
-        'delta_surprise': float(delta_surprise),
         'failure_proxy': float(risk['failure_extended_proxy']),
         'failure_strict_proxy': float(risk['failure_strict_proxy']),
         'collision': float(risk['collision']),
@@ -140,7 +142,7 @@ def evaluate_delta_closed_loop(
         'q1_hit': q1_hit,
         'q4_hit': q4_hit,
         'blind_spot_proxy_hit': blind_spot_proxy_hit,
-        'surprise_finite': int(np.isfinite(surprise_pd)),
+        'surprise_finite': int(np.isfinite(delta_surprise)),
         **dist_diag,
     }
 
@@ -248,6 +250,12 @@ def optimize_method_closed_loop(
         is_best: int,
         step_scale: float,
     ) -> None:
+        delta_surprise = float(
+            stats.get(
+                'delta_surprise',
+                stats.get('delta_surprise_pd', stats.get('surprise_pd', np.nan)),
+            )
+        )
         eval_trace.append({
             'eval_index': int(eval_index),
             'stage': stage,
@@ -257,7 +265,9 @@ def optimize_method_closed_loop(
             'delta_l2': float(np.linalg.norm(delta_vec)),
             'objective': float(stats.get('objective', np.nan)),
             'risk_sks': float(stats.get('risk_sks', np.nan)),
-            'surprise_pd': float(stats.get('surprise_pd', np.nan)),
+            'delta_surprise': delta_surprise,
+            'delta_surprise_pd': delta_surprise,
+            'surprise_pd': delta_surprise,
             'failure_proxy': float(stats.get('failure_proxy', np.nan)),
             'feasible': int(stats.get('feasible', 0)),
             'rollout_feasible': int(stats.get('rollout_feasible', 0)),
