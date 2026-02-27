@@ -304,14 +304,14 @@ def _state_xy_at_time(state: Any, target_obj_idx: int, time_index: int) -> Optio
     return None
 
 
-def _pre_reset_perturb_l2(base_state: Any, perturbed_state: Any, target_obj_idx: int, time_index: int) -> float:
-    base_xy = _state_xy_at_time(base_state, int(target_obj_idx), int(time_index))
-    pert_xy = _state_xy_at_time(perturbed_state, int(target_obj_idx), int(time_index))
-    if base_xy is None or pert_xy is None:
+def _state_pair_shift_l2(state_a: Any, state_b: Any, target_obj_idx: int, time_index: int) -> float:
+    a_xy = _state_xy_at_time(state_a, int(target_obj_idx), int(time_index))
+    b_xy = _state_xy_at_time(state_b, int(target_obj_idx), int(time_index))
+    if a_xy is None or b_xy is None:
         return float("nan")
-    if base_xy.shape[0] < 2 or pert_xy.shape[0] < 2:
+    if a_xy.shape[0] < 2 or b_xy.shape[0] < 2:
         return float("nan")
-    diff = np.asarray(pert_xy[:2], dtype=float) - np.asarray(base_xy[:2], dtype=float)
+    diff = np.asarray(b_xy[:2], dtype=float) - np.asarray(a_xy[:2], dtype=float)
     val = float(np.linalg.norm(diff))
     return val if np.isfinite(val) else float("nan")
 
@@ -1490,9 +1490,12 @@ def closed_loop_rollout_selected(
         perturbed = perturb_initial_state(base_state, target_obj_idx, delta_xy, cfg=cfg)
         delta_norm = float(np.linalg.norm(np.asarray(delta_xy, dtype=float).reshape(-1)[:2])) if np.asarray(delta_xy).size > 0 else 0.0
         start_time = _safe_state_timestep(base_state)
-        pre_reset_shift_l2 = _pre_reset_perturb_l2(base_state, perturbed, int(target_obj_idx), int(start_time))
+        pre_reset_shift_l2 = _state_pair_shift_l2(base_state, perturbed, int(target_obj_idx), int(start_time))
         perturb_noop = bool((delta_norm > 1e-9) and np.isfinite(pre_reset_shift_l2) and (pre_reset_shift_l2 <= 1e-8))
         state = env.reset(perturbed)
+        post_reset_time = _safe_state_timestep(state)
+        post_reset_shift_l2 = _state_pair_shift_l2(base_state, state, int(target_obj_idx), int(post_reset_time))
+        perturb_noop_post_reset = bool((delta_norm > 1e-9) and np.isfinite(post_reset_shift_l2) and (post_reset_shift_l2 <= 1e-8))
 
         rng = jax.random.PRNGKey(int(seed))
         k1, step_key = jax.random.split(rng, 2)
@@ -1633,8 +1636,12 @@ def closed_loop_rollout_selected(
             note_parts.append('non_finite_or_all_invalid_rollout_or_action')
         if perturb_noop:
             note_parts.append('perturbation_noop_pre_reset')
+        if perturb_noop_post_reset:
+            note_parts.append('perturbation_noop_post_reset')
         if np.isfinite(pre_reset_shift_l2):
             note_parts.append(f'pre_reset_shift_l2={pre_reset_shift_l2:.6f}')
+        if np.isfinite(post_reset_shift_l2):
+            note_parts.append(f'post_reset_shift_l2={post_reset_shift_l2:.6f}')
         note = '|'.join(note_parts)
         return xy, valid, planner_actions, planner_action_valid, dist_trace, rollout_feasible, note
 
