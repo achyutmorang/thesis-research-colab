@@ -55,7 +55,7 @@ class ClosedLoopConfig:
     planner_name: str = 'latentdriver_waypoint_sdc'
 
     # Planner-dependent surprise settings
-    planner_surprise_name: str = 'predictive_kl'  # predictive_kl | predictive_w2 | action_kl
+    planner_surprise_name: str = 'predictive_kl'  # predictive_kl | predictive_w2 | predictive_seq_kl | predictive_seq_w2 | action_kl
     predictive_kl_estimator: str = 'mixture_mc'  # 'mixture_mc' or 'moment_match'
     predictive_kl_mc_samples: int = 192
     predictive_kl_mc_seed: int = 12345

@@ -542,7 +542,19 @@ def export_closedloop_artifacts(
         )
 
     surprise_name = str(getattr(cfg, 'planner_surprise_name', 'predictive_kl')).strip().lower()
-    if surprise_name in {'predictive_w2', 'wasserstein', 'wasserstein2', 'w2'}:
+    if surprise_name in {'predictive_seq_w2', 'sequence_w2', 'seq_w2'}:
+        surprise_type = 'planner_dependent_predictive_seq_w2'
+        surprise_formula = (
+            'Sequence-level Wasserstein-2 distance between proposal/base planner predictive action distributions '
+            '(block-diagonal moment-matched rollout Gaussian)'
+        )
+    elif surprise_name in {'predictive_seq_kl', 'sequence_kl', 'seq_kl'}:
+        surprise_type = 'planner_dependent_predictive_seq_kl'
+        surprise_formula = (
+            'Sequence-level symmetric KL between proposal/base planner predictive action distributions '
+            '(block-diagonal moment-matched rollout Gaussian)'
+        )
+    elif surprise_name in {'predictive_w2', 'wasserstein', 'wasserstein2', 'w2'}:
         surprise_type = 'planner_dependent_predictive_w2'
         surprise_formula = (
             'Wasserstein-2 distance between proposal/base planner predictive action distributions, '

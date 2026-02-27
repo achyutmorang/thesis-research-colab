@@ -1070,6 +1070,109 @@ def predictive_w2_from_dist_traces(
     return float(np.mean(vals))
 
 
+def _block_diag_np(mats: List[np.ndarray]) -> np.ndarray:
+    if len(mats) <= 0:
+        return np.zeros((0, 0), dtype=float)
+    total_dim = int(sum(int(np.asarray(m).shape[0]) for m in mats))
+    out = np.zeros((total_dim, total_dim), dtype=float)
+    start = 0
+    for m in mats:
+        mm = np.asarray(m, dtype=float)
+        d = int(mm.shape[0])
+        out[start : start + d, start : start + d] = mm
+        start += d
+    return out
+
+
+def _sequence_moment_pairs_from_traces(
+    trace_p: List[Optional[Dict[str, np.ndarray]]],
+    trace_q: List[Optional[Dict[str, np.ndarray]]],
+    skip_fallback_steps: bool = True,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, int]:
+    n = int(min(len(trace_p), len(trace_q)))
+    if n <= 0:
+        return (
+            np.zeros((0,), dtype=float),
+            np.zeros((0, 0), dtype=float),
+            np.zeros((0,), dtype=float),
+            np.zeros((0, 0), dtype=float),
+            0,
+        )
+
+    mu_blocks_p: List[np.ndarray] = []
+    mu_blocks_q: List[np.ndarray] = []
+    cov_blocks_p: List[np.ndarray] = []
+    cov_blocks_q: List[np.ndarray] = []
+
+    for i in range(n):
+        dp = trace_p[i]
+        dq = trace_q[i]
+        if dp is None or dq is None:
+            continue
+        if bool(skip_fallback_steps) and (_trace_step_is_fallback(dp) or _trace_step_is_fallback(dq)):
+            continue
+        mu_p, cov_p = _moment_match_diag_gmm(dp)
+        mu_q, cov_q = _moment_match_diag_gmm(dq)
+        d = int(min(mu_p.shape[0], mu_q.shape[0], cov_p.shape[0], cov_q.shape[0]))
+        if d <= 0:
+            continue
+        mu_blocks_p.append(np.asarray(mu_p[:d], dtype=float).reshape(-1))
+        mu_blocks_q.append(np.asarray(mu_q[:d], dtype=float).reshape(-1))
+        cov_blocks_p.append(np.asarray(cov_p[:d, :d], dtype=float))
+        cov_blocks_q.append(np.asarray(cov_q[:d, :d], dtype=float))
+
+    if len(mu_blocks_p) <= 0:
+        return (
+            np.zeros((0,), dtype=float),
+            np.zeros((0, 0), dtype=float),
+            np.zeros((0,), dtype=float),
+            np.zeros((0, 0), dtype=float),
+            0,
+        )
+
+    mu_seq_p = np.concatenate(mu_blocks_p, axis=0)
+    mu_seq_q = np.concatenate(mu_blocks_q, axis=0)
+    cov_seq_p = _block_diag_np(cov_blocks_p)
+    cov_seq_q = _block_diag_np(cov_blocks_q)
+    paired_steps = int(len(mu_blocks_p))
+    return mu_seq_p, cov_seq_p, mu_seq_q, cov_seq_q, paired_steps
+
+
+def predictive_seq_w2_from_dist_traces(
+    trace_p: List[Optional[Dict[str, np.ndarray]]],
+    trace_q: List[Optional[Dict[str, np.ndarray]]],
+    skip_fallback_steps: bool = True,
+) -> float:
+    mu_p, cov_p, mu_q, cov_q, paired_steps = _sequence_moment_pairs_from_traces(
+        trace_p=trace_p,
+        trace_q=trace_q,
+        skip_fallback_steps=bool(skip_fallback_steps),
+    )
+    if paired_steps <= 0:
+        return 0.0
+    return float(_gaussian_w2(mu_p, cov_p, mu_q, cov_q))
+
+
+def predictive_seq_kl_from_dist_traces(
+    trace_p: List[Optional[Dict[str, np.ndarray]]],
+    trace_q: List[Optional[Dict[str, np.ndarray]]],
+    symmetric: bool = True,
+    skip_fallback_steps: bool = True,
+) -> float:
+    mu_p, cov_p, mu_q, cov_q, paired_steps = _sequence_moment_pairs_from_traces(
+        trace_p=trace_p,
+        trace_q=trace_q,
+        skip_fallback_steps=bool(skip_fallback_steps),
+    )
+    if paired_steps <= 0:
+        return 0.0
+    kl_pq = float(_gaussian_kl(mu_p, cov_p, mu_q, cov_q))
+    if bool(symmetric):
+        kl_qp = float(_gaussian_kl(mu_q, cov_q, mu_p, cov_p))
+        return float(0.5 * (kl_pq + kl_qp))
+    return float(kl_pq)
+
+
 def predictive_divergence_from_dist_traces(
     trace_p: List[Optional[Dict[str, np.ndarray]]],
     trace_q: List[Optional[Dict[str, np.ndarray]]],
@@ -1082,6 +1185,29 @@ def predictive_divergence_from_dist_traces(
     skip_fallback_steps: bool = True,
 ) -> Tuple[float, str]:
     metric_key = str(metric).strip().lower()
+    if metric_key in {'predictive_seq_w2', 'sequence_w2', 'seq_w2'}:
+        return (
+            float(
+                predictive_seq_w2_from_dist_traces(
+                    trace_p=trace_p,
+                    trace_q=trace_q,
+                    skip_fallback_steps=bool(skip_fallback_steps),
+                )
+            ),
+            'predictive_seq_w2',
+        )
+    if metric_key in {'predictive_seq_kl', 'sequence_kl', 'seq_kl'}:
+        return (
+            float(
+                predictive_seq_kl_from_dist_traces(
+                    trace_p=trace_p,
+                    trace_q=trace_q,
+                    symmetric=bool(symmetric),
+                    skip_fallback_steps=bool(skip_fallback_steps),
+                )
+            ),
+            'predictive_seq_kl',
+        )
     if metric_key in {'predictive_w2', 'wasserstein', 'wasserstein2', 'w2'}:
         return (
             float(
