@@ -1046,18 +1046,18 @@ def run_closed_loop(
                 n_props = int(max(0, search_cfg.budget_evals - 1))
                 if n_props > 0:
                     proposal_dirs: List[np.ndarray] = []
+                    proposal_meta_bank: List[Dict[str, Any]] = []
                     for k in range(n_props):
-                        prop = np.asarray(
-                            make_calibration_delta_proposal(
+                        prop_raw, prop_meta = make_calibration_delta_proposal(
                                 rng=scenario_rng,
                                 k=k,
                                 search_cfg=search_cfg,
                                 base_state=rec['state'],
                                 target_obj_idx=target_idx,
                                 cfg=cfg,
-                            ),
-                            dtype=float,
-                        ).reshape(-1)
+                                return_meta=True,
+                            )
+                        prop = np.asarray(prop_raw, dtype=float).reshape(-1)
                         if prop.size < 2:
                             prop = np.asarray([1.0, 0.0], dtype=float)
                         norm = float(np.linalg.norm(prop[:2]))
@@ -1066,9 +1066,13 @@ def run_closed_loop(
                         else:
                             direction = (prop[:2] / norm).astype(np.float32)
                         proposal_dirs.append(direction)
+                        meta = dict(prop_meta) if isinstance(prop_meta, dict) else {}
+                        meta.setdefault('counterfactual_family', str(getattr(cfg, 'counterfactual_family', '')))
+                        proposal_meta_bank.append(meta)
                     proposal_bank = np.asarray(proposal_dirs, dtype=np.float32)
                 else:
                     proposal_bank = np.zeros((0, 2), dtype=np.float32)
+                    proposal_meta_bank = []
                 rollout_seed_schedule = [
                     int(cfg.global_seed + sid * cfg.rollout_seed_stride + k)
                     for k in range(int(search_cfg.budget_evals) + 1)
@@ -1085,6 +1089,7 @@ def run_closed_loop(
                         thresholds=thresholds,
                         scenario_seed=scenario_seed,
                         proposal_bank=proposal_bank,
+                        proposal_meta_bank=proposal_meta_bank,
                         rollout_seed_schedule=rollout_seed_schedule,
                     )
                     eval_trace = stats.pop('eval_trace', [])

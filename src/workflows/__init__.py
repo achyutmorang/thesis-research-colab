@@ -25,6 +25,15 @@ from .closedloop_flow import (
     run_surprise_gate_with_policy,
     summarize_and_export_if_available,
 )
+from .surprise_potential_flow import (
+    SurprisePotentialRunBundle,
+    SurprisePotentialSweepBundle,
+    apply_paper_counterfactual_family_profile,
+    normalize_paper_counterfactual_family,
+    report_surprise_potential_sweep,
+    run_surprise_potential_metric_sweep,
+    run_surprise_potential_single_metric,
+)
 
 __all__ = [
     "ExportBundle",
@@ -52,4 +61,11 @@ __all__ = [
     "run_quick_probe_with_auto_escalation",
     "run_surprise_gate_with_policy",
     "summarize_and_export_if_available",
+    "SurprisePotentialRunBundle",
+    "SurprisePotentialSweepBundle",
+    "apply_paper_counterfactual_family_profile",
+    "normalize_paper_counterfactual_family",
+    "report_surprise_potential_sweep",
+    "run_surprise_potential_metric_sweep",
+    "run_surprise_potential_single_metric",
 ]

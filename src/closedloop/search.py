@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
@@ -143,6 +143,7 @@ def evaluate_delta_closed_loop(
         'q4_hit': q4_hit,
         'blind_spot_proxy_hit': blind_spot_proxy_hit,
         'surprise_finite': int(np.isfinite(delta_surprise)),
+        'counterfactual_family': str(getattr(cfg, 'counterfactual_family', '')),
         **dist_diag,
     }
 
@@ -179,6 +180,7 @@ def optimize_method_closed_loop(
     thresholds: Dict[str, float],
     scenario_seed: int,
     proposal_bank: np.ndarray,
+    proposal_meta_bank: Optional[List[Dict[str, Any]]],
     rollout_seed_schedule: List[int],
 ) -> Dict[str, Any]:
     w_r, w_s = method_weights(method, search_cfg)
@@ -249,7 +251,9 @@ def optimize_method_closed_loop(
         accepted: int,
         is_best: int,
         step_scale: float,
+        proposal_meta: Optional[Dict[str, Any]] = None,
     ) -> None:
+        meta = dict(proposal_meta) if isinstance(proposal_meta, dict) else {}
         delta_surprise = float(
             stats.get(
                 'delta_surprise',
@@ -280,6 +284,11 @@ def optimize_method_closed_loop(
             'accepted': int(accepted),
             'is_best_so_far': int(is_best),
             'step_scale': float(step_scale),
+            'proposal_kind': str(meta.get('proposal_kind', '')),
+            'proposal_primitive': str(meta.get('primitive', '')),
+            'proposal_primitive_scale': float(meta.get('primitive_scale', np.nan)),
+            'proposal_primitive_gain': float(meta.get('primitive_gain', np.nan)),
+            'proposal_counterfactual_family': str(meta.get('counterfactual_family', getattr(cfg, 'counterfactual_family', ''))),
         })
 
     _append_eval_trace(
@@ -295,6 +304,9 @@ def optimize_method_closed_loop(
     if method == 'random':
         while evals_used < search_cfg.budget_evals:
             proposal_vec = np.asarray(proposal_bank[evals_used - 1], dtype=float)
+            proposal_meta = None
+            if isinstance(proposal_meta_bank, list) and (evals_used - 1) < len(proposal_meta_bank):
+                proposal_meta = proposal_meta_bank[evals_used - 1]
             proposal_scale = proposal_scale_for_eval(search_cfg, evals_used)
             prop = project_delta_vec(proposal_scale * proposal_vec, search_cfg.delta_clip, search_cfg.delta_l2_budget)
 
@@ -329,12 +341,16 @@ def optimize_method_closed_loop(
                 accepted=int(improved),
                 is_best=int(improved),
                 step_scale=float(proposal_scale),
+                proposal_meta=proposal_meta,
             )
 
     else:
         step_scale = float(search_cfg.step_scale_init)
         while evals_used < search_cfg.budget_evals:
             proposal_vec = np.asarray(proposal_bank[evals_used - 1], dtype=float)
+            proposal_meta = None
+            if isinstance(proposal_meta_bank, list) and (evals_used - 1) < len(proposal_meta_bank):
+                proposal_meta = proposal_meta_bank[evals_used - 1]
             norm = float(np.linalg.norm(proposal_vec))
             if norm < 1e-12:
                 proposal_vec = np.array([1.0, 0.0], dtype=float)
@@ -379,6 +395,7 @@ def optimize_method_closed_loop(
                 accepted=int(accepted),
                 is_best=int(improved_best),
                 step_scale=float(step_scale),
+                proposal_meta=proposal_meta,
             )
             step_scale *= search_cfg.step_scale_decay
             step_scale = max(step_scale, 0.02)
@@ -402,6 +419,7 @@ def optimize_method_closed_loop(
         'surprise_estimator': cfg.predictive_kl_estimator,
         'surprise_mc_samples': int(cfg.predictive_kl_mc_samples),
         'surprise_eps': float(cfg.predictive_kl_eps),
+        'counterfactual_family': str(getattr(cfg, 'counterfactual_family', '')),
         'eval_trace': eval_trace,
     }
     out['delta_x'] = float(best_delta[0])

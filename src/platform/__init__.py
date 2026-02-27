@@ -11,6 +11,7 @@ from .colab_runtime import (
     prepare_repo_imports,
     run_cached_deterministic_setup,
 )
+from .runtime_profiles import surprise_potential_colab_runtime_config
 
 __all__ = [
     "ColabRuntimeConfig",
@@ -24,4 +25,5 @@ __all__ = [
     "ensure_repo_checkout",
     "prepare_repo_imports",
     "run_cached_deterministic_setup",
+    "surprise_potential_colab_runtime_config",
 ]

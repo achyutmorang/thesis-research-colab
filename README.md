@@ -11,6 +11,7 @@ This codebase is intentionally experimental.
 
 ## Open In Colab
 - Closed-loop simulation notebook: [notebooks/closedloop_simulation_colab.ipynb](https://colab.research.google.com/github/achyutmorang/waymax-simulation-experiments/blob/main/notebooks/closedloop_simulation_colab.ipynb)
+- Surprise-potential closed-loop sweep notebook: [notebooks/surprise_potential_closedloop_colab.ipynb](https://colab.research.google.com/github/achyutmorang/waymax-simulation-experiments/blob/main/notebooks/surprise_potential_closedloop_colab.ipynb)
 - Closed-loop evaluation notebook: [notebooks/closedloop_evaluation_colab.ipynb](https://colab.research.google.com/github/achyutmorang/waymax-simulation-experiments/blob/main/notebooks/closedloop_evaluation_colab.ipynb)
 - Compute-normalized discovery notebook: [notebooks/compute_normalized_blindspot_discovery_colab.ipynb](https://colab.research.google.com/github/achyutmorang/waymax-simulation-experiments/blob/main/notebooks/compute_normalized_blindspot_discovery_colab.ipynb)
 - Counterfactual sensitivity notebook: [notebooks/counterfactual_risk_sensitivity_atlas_colab.ipynb](https://colab.research.google.com/github/achyutmorang/waymax-simulation-experiments/blob/main/notebooks/counterfactual_risk_sensitivity_atlas_colab.ipynb)
@@ -19,12 +20,13 @@ This codebase is intentionally experimental.
 - Closed-loop search under fixed compute budget.
 - Calibration + quality gates before expensive runs.
 - Surprise-signal usefulness diagnostics for ranking quality.
+- Paper-style counterfactual-family sweeps (`hist_prim`, `fut_prim`, `hist_rmv`, etc.) in closed loop.
 - Counterfactual and compute-normalized post-hoc evaluation.
 
 ## Repository Layout
 - `notebooks/`: thin Colab notebooks for orchestration, diagnostics, and reporting.
 - `src/closedloop/`: domain logic (planner integration, calibration, search, metrics, artifact IO).
-- `src/workflows/`: notebook workflow orchestration (`closedloop_flow.py`).
+- `src/workflows/`: notebook workflow orchestration (`closedloop_flow.py`, `surprise_potential_flow.py`).
 - `src/platform/`: Colab/runtime bootstrap (repo sync, Drive checks, deterministic setup, hot reload).
 - `scripts/`: setup and utility scripts.
 
