@@ -77,6 +77,12 @@ from .experiment_flow import (
     list_experiment_pack_table,
     load_experiment_config,
 )
+from .living_report import (
+    update_living_report_from_miscalibration_probe,
+    update_living_report_from_paper_export,
+    update_living_report_from_risk_training,
+    update_living_report_from_uq_benchmark,
+)
 from .notebook_contract import (
     load_notebook_contract_manifest,
     manifest_has_stage,
@@ -161,6 +167,10 @@ __all__ = [
     "bootstrap_experiment_pack",
     "load_experiment_config",
     "list_experiment_pack_table",
+    "update_living_report_from_miscalibration_probe",
+    "update_living_report_from_paper_export",
+    "update_living_report_from_risk_training",
+    "update_living_report_from_uq_benchmark",
     "load_notebook_contract_manifest",
     "manifest_has_stage",
     "run_risk_training_notebook_gates",

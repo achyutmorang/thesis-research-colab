@@ -11,6 +11,10 @@ import pandas as pd
 from src.closedloop.risk_benchmark import BenchmarkBundle, binary_auroc, run_uq_benchmark
 from src.risk_model.artifacts import save_risk_evaluation_artifacts
 from .risk_training_flow import build_risk_dataset_from_runner, load_existing_risk_dataset_artifact
+try:
+    from .living_report import update_living_report_from_miscalibration_probe
+except ImportError:  # pragma: no cover - supports direct module loading in tests
+    from src.workflows.living_report import update_living_report_from_miscalibration_probe
 
 
 @dataclass
@@ -496,7 +500,20 @@ def run_miscalibration_probe_flow(
     run_prefix = run_prefix or cfg.run_prefix
 
     if bool((mode in {'auto', 'resume'}) and (not force_rerun) and has_existing_miscalibration_probe_artifacts(run_prefix)):
-        return load_existing_miscalibration_probe_bundle(run_prefix)
+        existing = load_existing_miscalibration_probe_bundle(run_prefix)
+        existing.artifact_paths.update(
+            update_living_report_from_miscalibration_probe(
+                cfg=cfg,
+                run_prefix=run_prefix,
+                summary_df=existing.benchmark_bundle.summary_df,
+                per_shift_df=existing.benchmark_bundle.per_shift_df,
+                threshold_df=existing.threshold_df,
+                leakage_df=existing.leakage_df,
+                class_balance_df=existing.class_balance_df,
+                artifact_paths=existing.artifact_paths,
+            )
+        )
+        return existing
 
     source_df = dataset_df.copy() if isinstance(dataset_df, pd.DataFrame) else pd.DataFrame()
     if source_df.empty:
@@ -569,6 +586,18 @@ def run_miscalibration_probe_flow(
             'miscalibration_probe_proxy_calibration': proxy_calibration_df,
             'miscalibration_probe_predictions': pred_df,
         },
+    )
+    artifact_paths.update(
+        update_living_report_from_miscalibration_probe(
+            cfg=cfg,
+            run_prefix=run_prefix,
+            summary_df=benchmark_bundle.summary_df,
+            per_shift_df=benchmark_bundle.per_shift_df,
+            threshold_df=threshold_df,
+            leakage_df=leakage_df,
+            class_balance_df=class_balance_df,
+            artifact_paths=artifact_paths,
+        )
     )
     return MiscalibrationProbeBundle(
         predictions_df=pred_df,
