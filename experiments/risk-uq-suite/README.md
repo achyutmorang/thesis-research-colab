@@ -89,15 +89,17 @@ Research feasibility:
 
 ## Notebooks
 - `experiments/risk-uq-suite/notebooks/miscalibration_probe_colab.ipynb`
+- `experiments/risk-uq-suite/notebooks/miscalibration_interpretation_colab.ipynb`
 - `experiments/risk-uq-suite/notebooks/risk_model_training_colab.ipynb`
 - `experiments/risk-uq-suite/notebooks/uq_benchmark_colab.ipynb`
 - `experiments/risk-uq-suite/notebooks/paper_tables_figures_colab.ipynb`
 
 ## Suggested Run Order
 1. `miscalibration_probe_colab.ipynb`
-2. `risk_model_training_colab.ipynb`
-3. `uq_benchmark_colab.ipynb`
-4. `paper_tables_figures_colab.ipynb`
+2. `miscalibration_interpretation_colab.ipynb`
+3. `risk_model_training_colab.ipynb`
+4. `uq_benchmark_colab.ipynb`
+5. `paper_tables_figures_colab.ipynb`
 
 ## Experiment Config
 - `configs/experiments/risk-uq-suite.json`

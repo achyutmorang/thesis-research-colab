@@ -57,6 +57,8 @@ _PACKS: Sequence[ExperimentPack] = (
         title='Risk And Uncertainty Suite',
         objective='Train calibrated risk models and benchmark robustness/calibration with publication exports.',
         notebooks=(
+            'experiments/risk-uq-suite/notebooks/miscalibration_probe_colab.ipynb',
+            'experiments/risk-uq-suite/notebooks/miscalibration_interpretation_colab.ipynb',
             'experiments/risk-uq-suite/notebooks/risk_model_training_colab.ipynb',
             'experiments/risk-uq-suite/notebooks/uq_benchmark_colab.ipynb',
             'experiments/risk-uq-suite/notebooks/paper_tables_figures_colab.ipynb',

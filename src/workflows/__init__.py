@@ -67,6 +67,12 @@ from .miscalibration_probe_flow import (
     load_existing_miscalibration_probe_bundle,
     run_miscalibration_probe_flow,
 )
+from .miscalibration_interpretation_flow import (
+    MiscalibrationInterpretationBundle,
+    analyze_miscalibration_probe_bundle,
+    discover_probe_run_prefixes,
+    load_and_analyze_miscalibration_probe,
+)
 from .paper_export_flow import (
     PaperExportBundle,
     export_paper_tables_and_figures,
@@ -169,6 +175,10 @@ __all__ = [
     "has_existing_miscalibration_probe_artifacts",
     "load_existing_miscalibration_probe_bundle",
     "run_miscalibration_probe_flow",
+    "MiscalibrationInterpretationBundle",
+    "discover_probe_run_prefixes",
+    "analyze_miscalibration_probe_bundle",
+    "load_and_analyze_miscalibration_probe",
     "PaperExportBundle",
     "export_paper_tables_and_figures",
     "ExperimentBootstrapBundle",
