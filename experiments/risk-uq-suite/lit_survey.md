@@ -1,148 +1,253 @@
-# Risk-UQ Suite: Targeted Literature Survey
+# Risk-UQ Suite: Comprehensive Literature Survey (Planner Uncertainty, Calibration, Risk Decisions, Closed-Loop AV)
 
-This survey is curated to justify the framing of the `risk-uq-suite` track:
-1. Uncertainty use in planning/decision-making
-2. Calibration of probabilistic outputs
-3. Risk/safety decisions under thresholds or budgets
-4. Closed-loop AV benchmark design
+This update expands the survey specifically for your question:
+- Do strong prior papers use uncertainty or risk proxies for planner decision-making?
+- What is known about uncertainty-aware / risk-based planning in AVs?
+- Have proxies been used before?
 
-Local PDFs are stored in `experiments/risk-uq-suite/references/pdfs/`.
+Short answer: **yes**. Prior work uses uncertainty and surrogate risk signals (e.g., confidence/entropy, RSS margins, TTC/reachability proxies, chance constraints) to guide planning decisions, but robust calibration-to-control evaluation in closed-loop AV settings remains less standardized.
 
-## Paper Index (15 papers)
+Local PDFs are in `experiments/risk-uq-suite/references/pdfs/`.
 
-| Title | Year | Area | Why relevant to risk-uq-suite |
+## What We Can Defend From Prior Art
+
+1. **Uncertainty-informed planning is established**: belief-space/POMDP, game-theoretic, robust MPC, and chance-constrained planners explicitly use predictive uncertainty.
+2. **Risk proxies are common in practice**: RSS safety margins, TTC-like or reachability surrogates, and proxy confidence thresholds are used to control acceptance/rejection and fallback behavior.
+3. **Calibration is necessary before using probabilities in decisions**: many papers show raw confidence is miscalibrated, especially under shift.
+4. **Closed-loop benchmark rigor is increasingly expected**: Waymax, WOSAC, nuPlan support standardized safety/progress tradeoff reporting.
+
+## Master Table (25 papers)
+
+| Title | Year | Area | Why relevant to our questions |
 |---|---:|---|---|
-| Simple and Scalable Predictive Uncertainty Estimation using Deep Ensembles | 2017 | Uncertainty | Strong practical baseline for predictive uncertainty quality. |
-| Deep Reinforcement Learning in a Handful of Trials using Probabilistic Dynamics Models (PETS) | 2018 | Uncertainty + Planning | Demonstrates uncertainty-aware planning with ensemble dynamics + MPC. |
-| MultiPath: Multiple Probabilistic Anchor Trajectory Hypotheses for Behavior Prediction | 2020 | AV Uncertainty | AV-specific probabilistic trajectory outputs used for downstream decisions. |
-| On Calibration of Modern Neural Networks | 2017 | Calibration | Canonical evidence of overconfidence and effectiveness of temperature scaling. |
-| Predicting Good Probabilities with Supervised Learning | 2005/2012 | Calibration | Classic comparative study of Platt scaling and isotonic calibration. |
-| Beyond Temperature Scaling: Dirichlet Calibration | 2019 | Calibration | Strong multiclass post-hoc calibration baseline beyond simple temperature. |
-| Can You Trust Your Model’s Uncertainty? Under Dataset Shift | 2019 | Calibration under Shift | Shows calibration degrades under shift; motivates shift-suite evaluation. |
-| Selective Classification for Deep Neural Networks | 2017 | Threshold decisions | Formal risk-coverage tradeoff under confidence thresholds. |
-| Constrained Policy Optimization | 2017 | Budgeted safety control | Constrained optimization view for safety budgets in decision policies. |
-| Distribution-Free, Risk-Controlling Prediction Sets | 2021 | Risk control | Distribution-free control of task-defined risk levels. |
-| Conformal Risk Control | 2022 | Risk control | Finite-sample conformal guarantees for risk-controlled decisions. |
-| Multi-Agent Reachability Calibration with Conformal Prediction | 2023 | AV Safety + Conformal | AV-tailored calibration plus safety reachability constraints. |
-| Waymax: Accelerated Data-Driven Simulator for AV Research | 2023 | Closed-loop benchmark infra | Simulation substrate used directly by this project. |
-| The Waymo Open Sim Agents Challenge | 2023 | Closed-loop benchmark | Standardized interactive closed-loop AV benchmark and metrics. |
-| nuPlan: A Closed-Loop ML-Based Planning Benchmark for AVs | 2021 | Closed-loop benchmark | Strong closed-loop planning benchmark with realistic scenario taxonomy. |
+| MultiPath: Multiple Probabilistic Anchor Trajectory Hypotheses for Behavior Prediction | 2020 | AV uncertainty prediction | Canonical multimodal uncertainty output used downstream in AV stacks. |
+| On a Formal Model of Safe and Scalable Self-driving Cars | 2017 | Safety proxies / AV policy | Defines RSS safety rules as decision-grade safety surrogates. |
+| PORCA: Modeling and Planning for Autonomous Driving among Many Pedestrians | 2018 | Uncertainty-aware AV planning | Probabilistic model for interaction uncertainty in planning. |
+| Hierarchical Game-Theoretic Planning for Autonomous Vehicles | 2018 | Interactive AV planning | Uncertainty-aware interaction planning through game-theoretic reasoning. |
+| Constrained Iterative LQG for Real-Time Chance-Constrained Gaussian Belief Space Planning | 2021 | Belief-space planning | Chance constraints directly map uncertainty to safety budgets. |
+| Game-Theoretic Planning for Autonomous Driving among Risk-Aware Human Drivers | 2022 | Risk-aware interaction planning | Explicit risk-aware human models influence AV planner decisions. |
+| Potential risk assessment for safe driving of autonomous vehicles under occluded vision | 2022 | Risk proxy under occlusion | Uses risk proxy estimation under partial observability. |
+| Occlusion-aware Risk Assessment and Driving Strategy for AVs Using Simplified Reachability Quantification | 2023 | Reachability risk proxy | Reachability-based risk surrogate for occluded interaction. |
+| Predictive Control for Autonomous Driving with Uncertain, Multi-modal Predictions | 2023 | MPC with uncertainty | Integrates multimodal predictive uncertainty in control optimization. |
+| Recursively Feasible Chance-constrained MPC under Gaussian Mixture Model Uncertainty | 2024 | Risk-constrained MPC | Safety constraints under multimodal/GMM uncertainty. |
+| RACP: Risk-Aware Contingency Planning with Multi-Modal Predictions | 2024 | Contingency planning | Planner switches/hedges using predicted risk contingencies. |
+| Uncertainty-Aware Prediction and Application in Planning for AV: Definitions, Methods, and Comparison | 2024 | Survey | Consolidates uncertainty-use patterns in AV planning pipelines. |
+| Simple and Scalable Predictive Uncertainty Estimation using Deep Ensembles | 2017 | UQ baseline | Strong practical uncertainty baseline for downstream risk estimation. |
+| On Calibration of Modern Neural Networks | 2017 | Calibration | Canonical evidence + temperature scaling baseline. |
+| Predicting Good Probabilities with Supervised Learning | 2005/2012 | Calibration | Classic Platt/isotonic calibration comparison. |
+| Beyond Temperature Scaling: Dirichlet Calibration | 2019 | Calibration | Strong post-hoc multiclass calibration alternative. |
+| Can You Trust Your Model’s Uncertainty? Under Dataset Shift | 2019 | Calibration under shift | In-domain calibration can fail under shift. |
+| Selective Classification for Deep Neural Networks | 2017 | Threshold decisions | Formal risk-coverage decision tradeoff under confidence thresholds. |
+| Constrained Policy Optimization | 2017 | Budgeted safety control | Optimization with explicit constraints/budgets. |
+| Distribution-Free, Risk-Controlling Prediction Sets | 2021 | Risk control | Distribution-free risk control framework. |
+| Conformal Risk Control | 2022 | Risk control | Conformal finite-sample risk guarantees. |
+| Multi-Agent Reachability Calibration with Conformal Prediction | 2023 | AV safety calibration | AV-specific bridge between calibration and safety control. |
+| Waymax: An Accelerated, Data-Driven Simulator for Large-Scale AV Research | 2023 | Closed-loop benchmark infra | Direct simulator foundation for this project. |
+| The Waymo Open Sim Agents Challenge | 2023 | Closed-loop benchmark | Standardized interactive simulation benchmark. |
+| nuPlan: A Closed-Loop ML-Based Planning Benchmark for AVs | 2021 | Closed-loop benchmark | Strong closed-loop planning benchmark with realistic scenarios. |
 
-## 1) Uncertainty in Planning / Decision-Making
+---
 
-- **Simple and Scalable Predictive Uncertainty Estimation using Deep Ensembles** (Lakshminarayanan et al., NeurIPS 2017)  
-  Links: [paper](https://papers.neurips.cc/paper/2017/hash/9ef2ed4b7fd2c810847ffa5fa85bce38-Abstract.html), [pdf](https://arxiv.org/pdf/1612.01474.pdf), [local pdf](references/pdfs/deep_ensembles_2017.pdf)
-  - Problem: Obtain useful uncertainty estimates from deep models without Bayesian complexity.
-  - Method: Train multiple independently initialized models; use ensemble mean/variance.
-  - Key result: Strong uncertainty quality and robustness vs single-model confidence.
-  - Relation to our work: Supports our use of ensemble-style uncertainty as a practical baseline for decision-time risk signals.
+## A) Uncertainty-Aware / Risk-Based Planning in AV (and direct proxy usage)
 
-- **Deep Reinforcement Learning in a Handful of Trials using Probabilistic Dynamics Models (PETS)** (Chua et al., NeurIPS 2018)  
-  Links: [paper](https://papers.nips.cc/paper/2018/hash/3de568f8597b94bda53149c7d7f5958c-Abstract.html), [pdf](https://arxiv.org/pdf/1805.12114.pdf), [local pdf](references/pdfs/pets_2018.pdf)
-  - Problem: Sample-efficient control/planning under model uncertainty.
-  - Method: Probabilistic ensemble dynamics + trajectory sampling MPC.
-  - Key result: Competitive performance with high sample efficiency on control tasks.
-  - Relation to our work: Reinforces uncertainty-aware candidate evaluation in a planning loop (our case: Waymax closed-loop candidate actions).
-
-- **MultiPath: Multiple Probabilistic Anchor Trajectory Hypotheses for Behavior Prediction** (Chai et al., CoRL 2020)  
+- **MultiPath** (Chai et al., 2020, CoRL)  
   Links: [paper](https://proceedings.mlr.press/v100/chai20a.html), [pdf](https://proceedings.mlr.press/v100/chai20a/chai20a.pdf), [local pdf](references/pdfs/multipath_2020.pdf)
-  - Problem: Multi-modal trajectory uncertainty for AV behavior prediction.
-  - Method: Anchor-based multimodal trajectory heads with probabilistic outputs.
-  - Key result: Strong trajectory prediction quality on large-scale AV data.
-  - Relation to our work: Supports modeling/using uncertainty from multimodal predictive distributions for AV decisions.
+  - Problem: Predicting multimodal future trajectories for interactive AV planning.
+  - Method: Anchor-based probabilistic multimodal trajectory prediction.
+  - Key result: Strong multimodal prediction quality on AV datasets.
+  - Relation: Supports our use of multimodal uncertainty signals before decision rules.
 
-## 2) Calibration of Probabilities
+- **On a Formal Model of Safe and Scalable Self-driving Cars (RSS)** (Shalev-Shwartz et al., 2017)  
+  Links: [paper](https://arxiv.org/abs/1708.06374), [pdf](https://arxiv.org/pdf/1708.06374.pdf), [local pdf](references/pdfs/rss_2017.pdf)
+  - Problem: Formalizing AV safety decision rules.
+  - Method: Responsibility-Sensitive Safety (distance/time-margin style safety constraints).
+  - Key result: Formal policy-level safety model widely referenced in AV safety discussions.
+  - Relation: Explicit evidence that **risk proxies/safety surrogates** are used in planning policies.
+
+- **PORCA: Modeling and Planning for Autonomous Driving among Many Pedestrians** (Luber et al., 2018)  
+  Links: [paper](https://arxiv.org/abs/1805.11833), [pdf](https://arxiv.org/pdf/1805.11833.pdf), [local pdf](references/pdfs/porca_2018.pdf)
+  - Problem: Planning in highly interactive pedestrian-rich settings under uncertainty.
+  - Method: Probabilistic ORCA extension for interaction-aware planning.
+  - Key result: Improved behavior in crowded scenarios with uncertain human motion.
+  - Relation: Shows uncertainty-aware planning with tractable surrogate interaction models.
+
+- **Hierarchical Game-Theoretic Planning for Autonomous Vehicles** (Fisac et al., 2018)  
+  Links: [paper](https://arxiv.org/abs/1810.05766), [pdf](https://arxiv.org/pdf/1810.05766.pdf), [local pdf](references/pdfs/hierarchical_game_theoretic_planning_2018.pdf)
+  - Problem: Interactive planning with strategic uncertainty about other agents.
+  - Method: Hierarchical game-theoretic planning over interaction models.
+  - Key result: Better interactive decision quality than non-interactive baselines.
+  - Relation: Supports decision-making driven by uncertainty over other-agent responses.
+
+- **Constrained Iterative LQG for Real-Time Chance-Constrained Gaussian Belief Space Planning** (Heiden et al., 2021)  
+  Links: [paper](https://arxiv.org/abs/2108.06533), [pdf](https://arxiv.org/pdf/2108.06533.pdf), [local pdf](references/pdfs/cilqg_2021.pdf)
+  - Problem: Real-time planning with uncertainty and strict probabilistic safety constraints.
+  - Method: Belief-space iterative LQG with chance constraints.
+  - Key result: Real-time feasible chance-constrained planning in uncertain domains.
+  - Relation: Theoretical and algorithmic precedent for threshold/budget constraints on risk.
+
+- **Game-Theoretic Planning for AVs among Risk-Aware Human Drivers** (Chandra et al., 2022)  
+  Links: [paper](https://arxiv.org/abs/2205.00562), [pdf](https://arxiv.org/pdf/2205.00562.pdf), [local pdf](references/pdfs/risk_aware_human_drivers_2022.pdf)
+  - Problem: Human drivers exhibit heterogeneous risk attitudes, affecting AV safety.
+  - Method: Game-theoretic planner with risk-aware human behavior modeling.
+  - Key result: Better planning outcomes in mixed-risk interaction scenarios.
+  - Relation: Reinforces risk-aware decision criteria for planner action choices.
+
+- **Potential risk assessment for safe driving of AVs under occluded vision** (Yu et al., 2022, Scientific Reports)  
+  Links: [paper](https://www.nature.com/articles/s41598-022-08810-z), [pdf](https://www.nature.com/articles/s41598-022-08810-z.pdf), [local pdf](references/pdfs/potential_risk_occluded_vision_2022.pdf)
+  - Problem: Occlusion causes latent hazards that standard planner confidence can miss.
+  - Method: Potential-risk estimation under occluded visibility.
+  - Key result: Risk-aware behavior improves safety handling under occlusion.
+  - Relation: Direct example of **proxy risk signals** used for AV decisions.
+
+- **Occlusion-aware Risk Assessment and Driving Strategy via Reachability** (Huang et al., 2023)  
+  Links: [paper](https://arxiv.org/abs/2306.07004), [pdf](https://arxiv.org/pdf/2306.07004.pdf), [local pdf](references/pdfs/occlusion_reachability_risk_2023.pdf)
+  - Problem: Quantifying risk when key agents are partially/unobserved.
+  - Method: Simplified reachability-based risk quantification integrated with strategy.
+  - Key result: Safer strategy under occlusion compared with naive planning.
+  - Relation: Strong precedent for surrogate risk quantification driving planner strategy.
+
+- **Predictive Control for AV with Uncertain, Multi-modal Predictions** (Nair et al., 2023)  
+  Links: [paper](https://arxiv.org/abs/2310.20561), [pdf](https://arxiv.org/pdf/2310.20561.pdf), [local pdf](references/pdfs/predictive_control_multimodal_2023.pdf)
+  - Problem: MPC decisions degrade if predictive uncertainty is ignored.
+  - Method: MPC integrating multimodal uncertain forecasts.
+  - Key result: Better safety-performance tradeoffs in interactive scenarios.
+  - Relation: Very close to our framing: uncertainty estimate -> constrained/control decision.
+
+- **Recursively Feasible Chance-constrained MPC under GMM Uncertainty** (Koller et al., 2024)  
+  Links: [paper](https://arxiv.org/abs/2401.03799), [pdf](https://arxiv.org/pdf/2401.03799.pdf), [local pdf](references/pdfs/safe_ccmpc_gmm_2024.pdf)
+  - Problem: Maintaining feasibility/safety with multimodal uncertainty in control.
+  - Method: Chance-constrained MPC with Gaussian mixture uncertainty model.
+  - Key result: Recursive feasibility plus controlled risk under uncertainty.
+  - Relation: Connects multimodal uncertainty to explicit risk budgets similar to our thresholded controller logic.
+
+- **RACP: Risk-Aware Contingency Planning with Multi-Modal Predictions** (Rosen et al., 2024)  
+  Links: [paper](https://arxiv.org/abs/2402.17387), [pdf](https://arxiv.org/pdf/2402.17387.pdf), [local pdf](references/pdfs/racp_2024.pdf)
+  - Problem: Single-plan execution can fail under multimodal interaction uncertainty.
+  - Method: Risk-aware contingency planning over multiple candidate futures.
+  - Key result: Improved robustness in uncertain interactions.
+  - Relation: Strong support for candidate-level risk-guided reranking/selection ideas.
+
+- **Uncertainty-Aware Prediction and Application in Planning for AV: Definitions, Methods, and Comparison** (Liu et al., 2024)  
+  Links: [paper](https://arxiv.org/abs/2403.02297), [pdf](https://arxiv.org/pdf/2403.02297.pdf), [local pdf](references/pdfs/uap_planning_comparison_2024.pdf)
+  - Problem: Lack of unified understanding of uncertainty roles in AV prediction/planning.
+  - Method: Taxonomy and comparative study.
+  - Key result: Clarifies where uncertainty helps vs fails in planning pipelines.
+  - Relation: High-level support that our problem statement is meaningful and current.
+
+## B) Calibration and Uncertainty Quality
+
+- **Deep Ensembles** (Lakshminarayanan et al., NeurIPS 2017)  
+  Links: [paper](https://papers.neurips.cc/paper/2017/hash/9ef2ed4b7fd2c810847ffa5fa85bce38-Abstract.html), [pdf](https://arxiv.org/pdf/1612.01474.pdf), [local pdf](references/pdfs/deep_ensembles_2017.pdf)
+  - Problem: Practical predictive uncertainty from deep models.
+  - Method: Independent ensemble members + predictive variance.
+  - Key result: Strong and robust uncertainty baseline.
+  - Relation: Directly supports ensemble uncertainty features and epistemic terms.
 
 - **On Calibration of Modern Neural Networks** (Guo et al., ICML 2017)  
   Links: [paper](https://proceedings.mlr.press/v70/guo17a.html), [pdf](https://proceedings.mlr.press/v70/guo17a/guo17a.pdf), [local pdf](references/pdfs/guo_2017.pdf)
-  - Problem: Neural network probabilities are often overconfident and miscalibrated.
-  - Method: Empirical analysis + post-hoc temperature scaling.
-  - Key result: Temperature scaling is a strong simple baseline.
-  - Relation to our work: Core justification for post-hoc calibration before using probabilities in control constraints.
+  - Problem: Neural confidence miscalibration.
+  - Method: Post-hoc temperature scaling.
+  - Key result: Simple calibrator often works well in-domain.
+  - Relation: Core support for post-hoc calibration stage before control use.
 
-- **Predicting Good Probabilities with Supervised Learning** (Niculescu-Mizil & Caruana, ICML 2005; arXiv mirror 2012)  
+- **Predicting Good Probabilities with Supervised Learning** (Niculescu-Mizil & Caruana, ICML 2005 / arXiv mirror)  
   Links: [paper](https://www.cs.cornell.edu/~alexn/papers/calibration.icml05.crc.rev3.pdf), [pdf](https://arxiv.org/pdf/1207.1403.pdf), [local pdf](references/pdfs/obtaining_calibrated_probabilities_boosting_2012.pdf)
-  - Problem: Classifier scores are not necessarily calibrated probabilities.
-  - Method: Comparative study including Platt-style sigmoid and isotonic regression.
-  - Key result: Calibration methods can materially improve probability quality depending on model family.
-  - Relation to our work: Direct methodological support for simple post-hoc calibrators on risk scores/proxies.
+  - Problem: Raw model scores are not reliable probabilities.
+  - Method: Platt sigmoid and isotonic calibration comparisons.
+  - Key result: Calibration materially changes probability quality.
+  - Relation: Direct basis for our simple proxy calibrator baselines.
 
-- **Beyond Temperature Scaling: Obtaining Well-Calibrated Multiclass Probabilities with Dirichlet Calibration** (Kull et al., NeurIPS 2019)  
+- **Beyond Temperature Scaling: Dirichlet Calibration** (Kull et al., NeurIPS 2019)  
   Links: [paper](https://papers.nips.cc/paper/2019/hash/8ca01ea920679a0fe3728441494041b9-Abstract.html), [pdf](https://arxiv.org/pdf/1910.12656.pdf), [local pdf](references/pdfs/dirichlet_2019.pdf)
-  - Problem: Temperature scaling can be too limited for some multiclass outputs.
-  - Method: Dirichlet calibration (low-parameter post-hoc mapping).
-  - Key result: Better calibration than TS in several settings.
-  - Relation to our work: Useful ablation alternative if TS/Platt is insufficient under shift.
+  - Problem: TS may be too rigid for multiclass settings.
+  - Method: Dirichlet post-hoc mapping.
+  - Key result: Improved calibration over TS in multiple tasks.
+  - Relation: Strong alternative calibrator for ablations if needed.
 
-- **Can You Trust Your Model’s Uncertainty? Evaluating Predictive Uncertainty Under Dataset Shift** (Ovadia et al., NeurIPS 2019)  
+- **Can You Trust Your Model’s Uncertainty?** (Ovadia et al., NeurIPS 2019)  
   Links: [paper](https://papers.nips.cc/paper/2019/hash/8558cb408c1d76621371888657d2eb1d-Abstract.html), [pdf](https://arxiv.org/pdf/1906.02530.pdf), [local pdf](references/pdfs/ovadia_2019.pdf)
-  - Problem: Uncertainty and calibration methods often degrade under distribution shift.
-  - Method: Large benchmark across uncertainty methods and shift settings.
-  - Key result: In-domain gains do not guarantee robust OOD calibration.
-  - Relation to our work: Strong justification for our nominal + shift-suite calibration analysis in Waymax.
+  - Problem: UQ methods can fail under dataset shift.
+  - Method: Systematic large-scale shift benchmark.
+  - Key result: Calibration degrades OOD despite strong in-domain behavior.
+  - Relation: Justifies our shift-suite reliability and threshold diagnostics.
 
-## 3) Risk / Safety Decisions Under Thresholds or Budgets
+## C) Risk / Safety Decisions Under Thresholds or Budgets
 
 - **Selective Classification for Deep Neural Networks** (Geifman & El-Yaniv, NeurIPS 2017)  
   Links: [paper](https://papers.nips.cc/paper/2017/hash/4a8423d5e91fda00bb7e46540e2b0cf1-Abstract.html), [pdf](https://arxiv.org/pdf/1705.08500.pdf), [local pdf](references/pdfs/selective_classification_2017.pdf)
-  - Problem: Decide when to abstain to control decision risk.
-  - Method: Confidence-thresholded selective prediction with risk-coverage tradeoff.
-  - Key result: Explicit tradeoff curves for safety vs coverage.
-  - Relation to our work: Mirrors our threshold-budget framing (`accept` vs `reject/fallback`) and selective-risk analysis.
+  - Problem: Control risk by abstaining below confidence thresholds.
+  - Method: Selective prediction with risk-coverage metrics.
+  - Key result: Formal threshold tradeoff and guarantees.
+  - Relation: Mirrors our accept/reject budget diagnostics.
 
 - **Constrained Policy Optimization** (Achiam et al., ICML 2017)  
   Links: [paper](https://proceedings.mlr.press/v70/achiam17a.html), [pdf](https://arxiv.org/pdf/1705.10528.pdf), [local pdf](references/pdfs/cpo_2017.pdf)
-  - Problem: Optimize return while respecting explicit safety constraints.
-  - Method: Trust-region constrained updates with near-constraint satisfaction.
-  - Key result: Better safety-constraint handling than unconstrained policy updates.
-  - Relation to our work: Supports explicit budget-constrained decision rules instead of raw score optimization only.
+  - Problem: Optimize reward under explicit constraints.
+  - Method: Trust-region constrained updates.
+  - Key result: Better empirical constraint satisfaction.
+  - Relation: Supports budgeted safety constraints in control design.
 
-- **Distribution-Free, Risk-Controlling Prediction Sets** (Bates et al., 2021)  
+- **Distribution-Free, Risk-Controlling Prediction Sets (RCPS)** (Bates et al., 2021)  
   Links: [paper](https://arxiv.org/abs/2101.02703), [pdf](https://arxiv.org/pdf/2101.02703.pdf), [local pdf](references/pdfs/rcps_2021.pdf)
-  - Problem: Control task-level risk without distributional assumptions.
-  - Method: Distribution-free set construction controlling expected risk.
-  - Key result: Risk control guarantees with finite-sample validity.
-  - Relation to our work: Gives formal grounding for risk-budgeted decisions and coverage-risk diagnostics.
+  - Problem: Guarantee risk control without distribution assumptions.
+  - Method: Distribution-free risk-controlling sets.
+  - Key result: Finite-sample risk control properties.
+  - Relation: Conceptual basis for thresholded risk control with guarantees.
 
-- **Conformal Risk Control** (Angelopoulos et al., 2022/2023)  
+- **Conformal Risk Control (CRC)** (Angelopoulos et al., 2022/2023)  
   Links: [paper](https://arxiv.org/abs/2208.02814), [pdf](https://arxiv.org/pdf/2208.02814.pdf), [local pdf](references/pdfs/crc_2022.pdf)
-  - Problem: Guarantee user-specified risk levels with conformal methods.
-  - Method: Risk-controlling conformal wrappers for flexible tasks.
-  - Key result: Finite-sample risk guarantees under exchangeability.
-  - Relation to our work: Aligns with our threshold-budget objective and motivates conformal-style safety gating.
+  - Problem: Enforce user-defined risk levels with statistical validity.
+  - Method: Conformal wrappers with risk controls.
+  - Key result: Finite-sample validity under exchangeability assumptions.
+  - Relation: Relevant for robust risk-budget thresholding beyond simple calibration.
 
 - **Multi-Agent Reachability Calibration with Conformal Prediction** (Muthali et al., 2023)  
   Links: [paper](https://arxiv.org/abs/2304.00432), [pdf](https://arxiv.org/pdf/2304.00432.pdf), [local pdf](references/pdfs/marc_2023.pdf)
-  - Problem: Safety-critical AV interaction requires calibrated uncertainty tied to safety envelopes.
-  - Method: Conformal calibration integrated with multi-agent reachability reasoning.
-  - Key result: Improved safety-calibrated prediction in interactive settings.
-  - Relation to our work: Closest conceptual bridge to AV-specific calibrated risk decisions.
+  - Problem: Convert uncertain prediction into AV-relevant safety guarantees.
+  - Method: Conformal calibration + reachability constraints.
+  - Key result: Better calibrated safety envelopes in multi-agent settings.
+  - Relation: Closest direct precedent to calibration-to-safety-control bridge.
 
-## 4) Closed-Loop AV Benchmarks and Simulation
+## D) Closed-Loop AV Benchmarks / Evaluation Substrate
 
-- **Waymax: An Accelerated, Data-Driven Simulator for Large-Scale Autonomous Driving Research** (Gulino et al., 2023)  
+- **Waymax** (Gulino et al., 2023)  
   Links: [paper](https://arxiv.org/abs/2310.08710), [pdf](https://arxiv.org/pdf/2310.08710.pdf), [local pdf](references/pdfs/waymax_2023.pdf)
-  - Problem: Scalable closed-loop simulation infrastructure for AV research.
-  - Method: JAX-based simulator with WOMD integration and accelerated rollouts.
-  - Key result: Efficient, reproducible, large-scale simulation suitable for research workflows.
-  - Relation to our work: Direct platform basis for all experiments in this project.
+  - Problem: Scalable closed-loop AV simulation.
+  - Method: JAX-accelerated simulator + WOMD ecosystem.
+  - Key result: Efficient large-scale research runs.
+  - Relation: Core experimental substrate for this project.
 
-- **The Waymo Open Sim Agents Challenge** (Ettinger et al., NeurIPS Datasets & Benchmarks 2023)  
+- **Waymo Open Sim Agents Challenge (WOSAC)** (Ettinger et al., NeurIPS D&B 2023)  
   Links: [paper](https://papers.nips.cc/paper_files/paper/2023/hash/b96ce67b2f2d45e4ab315e13a6b5b9c5-Abstract-Datasets_and_Benchmarks.html), [pdf](https://proceedings.neurips.cc/paper_files/paper/2023/file/b96ce67b2f2d45e4ab315e13a6b5b9c5-Paper-Datasets_and_Benchmarks.pdf), [local pdf](references/pdfs/wosac_2023.pdf)
-  - Problem: Standardized evaluation for realistic interactive simulation agents.
-  - Method: Public benchmark with realism-focused metrics and challenge protocol.
-  - Key result: Common reference point for closed-loop simulation agent evaluation.
-  - Relation to our work: Supports benchmark-oriented evaluation design and reporting rigor.
+  - Problem: Standardized interactive simulator benchmark.
+  - Method: Challenge protocol + realism-oriented evaluation.
+  - Key result: Community benchmark for simulation quality/performance.
+  - Relation: External benchmark precedent for closed-loop reporting discipline.
 
-- **nuPlan: A Closed-Loop ML-Based Planning Benchmark for Autonomous Vehicles** (Caesar et al., 2021)  
+- **nuPlan** (Caesar et al., NeurIPS D&B 2021)  
   Links: [paper](https://arxiv.org/abs/2106.11810), [pdf](https://arxiv.org/pdf/2106.11810.pdf), [local pdf](references/pdfs/nuplan_2021.pdf)
-  - Problem: Realistic closed-loop planning benchmark with diverse driving scenarios.
-  - Method: Scenario taxonomy, simulation stack, and planner evaluation metrics.
-  - Key result: Establishes reproducible closed-loop planner evaluation at scale.
-  - Relation to our work: Provides external benchmark precedent for closed-loop safety/progress tradeoff reporting.
+  - Problem: Closed-loop planner benchmarking at scale.
+  - Method: Scenario-rich benchmark + planner metrics.
+  - Key result: Broad adoption for closed-loop planner evaluation.
+  - Relation: Supports our emphasis on closed-loop, not only offline calibration metrics.
 
-## Notes for our project framing
+---
 
-- This survey supports the claim that **uncertainty alone is not enough**; it must be **calibrated and evaluated under shift** before using it for thresholded safety decisions.
-- It also supports a paper story built around **risk-quality -> threshold decisions -> closed-loop outcomes**.
-- None of the papers requires our exact proxy design; they justify the framing and evaluation protocol choices.
+## Direct Answer to “Have others used proxies?”
+
+Yes. Prior AV and safety-control work commonly uses proxies/surrogates such as:
+- **Safety margin proxies**: RSS distance/time margins (Shalev-Shwartz et al., 2017).
+- **Reachability risk surrogates**: occlusion/reachability quantification (Huang et al., 2023; Muthali et al., 2023).
+- **Uncertainty/confidence surrogates**: multimodal distribution confidence/entropy as decision features (MultiPath, uncertainty-aware MPC papers).
+- **Threshold/coverage proxies**: confidence-threshold accept/reject with selective-risk tradeoffs (Geifman & El-Yaniv, 2017).
+
+This validates the core research question in `risk-uq-suite`: whether planner-derived uncertainty/risk proxies are calibrated enough to be decision-grade under thresholds and shift.
+
+## Research Gap Still Open (supports our project)
+
+- Many papers provide either uncertainty prediction, calibration methods, or risk-constrained planning, but fewer provide a **reproducible end-to-end closed-loop pipeline** that demonstrates:
+  1. miscalibration evidence,
+  2. calibration improvement,
+  3. decision-level threshold diagnostics,
+  4. closed-loop safety/progress impact under shift,
+all in one Waymax-native experimental track.
