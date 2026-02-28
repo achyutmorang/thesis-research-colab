@@ -23,20 +23,20 @@ Focus setting (explicitly narrow):
 Let `x` denote candidate-action context (scene state, candidate action, rollout features, uncertainty features).
 
 - True (latent) risk function:
-  $$
-  p(x) := \mathbb{P}(Y=1 \mid x),
-  $$
+  ```text
+  p(x) := P(Y = 1 | x)
+  ```
   where `Y=1` indicates failure event (collision/offroad/failure proxy at chosen horizon).
 
 - Model-predicted risk used by the controller:
-  $$
-  \hat p(x) := f_{\theta}(x).
-  $$
+  ```text
+  p_hat(x) := f_theta(x)
+  ```
 
 - Operational threshold decision operator:
-  $$
-  D(\hat p,\tau) = \mathbf{1}[\hat p \le \tau],
-  $$
+  ```text
+  D(p_hat, tau) = 1[p_hat <= tau]
+  ```
   where `D=1` means candidate is accepted as safe under budget `tau`.
 
 ### 1.2 Decision Correctness at Operating Threshold
@@ -44,23 +44,23 @@ Let `x` denote candidate-action context (scene state, candidate action, rollout 
 Key decision error rates:
 
 - False-safe violation:
-  $$
-  \mathrm{FS}_{\hat p}(\tau) := \mathbb{P}(Y=1 \mid \hat p \le \tau).
-  $$
+  ```text
+  FS_p_hat(tau) := P(Y = 1 | p_hat <= tau)
+  ```
 
 - Safe-reject rate:
-  $$
-  \mathrm{SR}_{\hat p}(\tau) := \mathbb{P}(Y=0 \mid \hat p > \tau).
-  $$
+  ```text
+  SR_p_hat(tau) := P(Y = 0 | p_hat > tau)
+  ```
 
 Target operating-point criterion (ideal threshold-consistency condition):
-$$
-\mathbb{P}(Y=1 \mid \hat p \le \tau) \le \tau.
-$$
+```text
+P(Y = 1 | p_hat <= tau) <= tau
+```
 
 This is a desirable operational target, not a guarantee implied by standard global calibration alone.
 In practice this is estimated with finite-sample uncertainty, so CI reporting is required.
-In practice, $\mathrm{FS}_{\hat p}(\tau)$ is the primary operating-point safety diagnostic.
+In practice, `FS_p_hat(tau)` is the primary operating-point safety diagnostic.
 
 ### 1.3 Global vs Local Calibration
 
@@ -197,9 +197,9 @@ All papers can be projected onto two objects:
 ### 6.2 Missing connection
 
 The under-tested link is:
-$$
-\text{quality of }\hat p(x) \;\Rightarrow\; \text{correctness of }D(\hat p,\tau) \;\Rightarrow\; \text{closed-loop outcomes under shift}.
-$$
+```text
+quality of p_hat(x) => correctness of D(p_hat, tau) => closed-loop outcomes under shift
+```
 
 ### 6.3 Decision Granularity Mismatch
 
