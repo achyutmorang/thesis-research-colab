@@ -183,6 +183,19 @@ def _bounded_log_squash(value: Any) -> float:
     return float(np.clip(1.0 - np.exp(-v), 0.0, 1.0))
 
 
+def _normalize_belief_source_mode(mode: Any) -> str:
+    key = str(mode).strip().lower()
+    if key in {"", "auto", "default"}:
+        return "auto"
+    if key in {"b1", "b1_only", "step_moment_kl_all_mean", "all_mean"}:
+        return "b1"
+    if key in {"b2", "b2_only", "step_moment_kl_mean", "mean"}:
+        return "b2"
+    if key in {"b3", "b3_only", "rollout_belief_delta", "belief_delta"}:
+        return "b3"
+    return "auto"
+
+
 def compute_counterfactual_surprise_score(
     trace_change_diag: Dict[str, float],
     effect_l2_mean: float,
@@ -191,6 +204,7 @@ def compute_counterfactual_surprise_score(
     proposal_surprise_abs: float = np.nan,
     action_divergence: float = np.nan,
     metric_hint: str = "predictive_seq_w2",
+    belief_source_mode: str = "auto",
     proposal_delta_l2: float = np.nan,
     perturb_floor_weight: float = 0.02,
     response_floor_weight: float = 0.35,
@@ -209,16 +223,27 @@ def compute_counterfactual_surprise_score(
     trace_change_diag = trace_change_diag if isinstance(trace_change_diag, dict) else {}
 
     metric_key = str(metric_hint).strip().lower()
-    belief_candidates = [
+    belief_mode = _normalize_belief_source_mode(belief_source_mode)
+    all_belief_candidates = [
         ("step_moment_kl_all_mean", _nonnegative_finite(trace_change_diag.get("step_moment_kl_all_mean", np.nan), default=np.nan)),
         ("step_moment_kl_mean", _nonnegative_finite(trace_change_diag.get("step_moment_kl_mean", np.nan), default=np.nan)),
     ]
     belief_delta = np.nan
     if np.isfinite(float(proposal_surprise_abs)) and np.isfinite(float(base_surprise_abs)):
         belief_delta = _nonnegative_finite(float(proposal_surprise_abs) - float(base_surprise_abs), default=np.nan)
-        belief_candidates.append(("rollout_belief_delta", belief_delta))
-    if metric_key in {"latent_belief_kl", "belief_kl"}:
-        belief_candidates = [belief_candidates[-1], *belief_candidates[:-1]]
+    all_belief_candidates.append(("rollout_belief_delta", belief_delta))
+
+    belief_by_key = {k: (k, v) for k, v in all_belief_candidates}
+    if belief_mode == "b1":
+        belief_candidates = [belief_by_key["step_moment_kl_all_mean"]]
+    elif belief_mode == "b2":
+        belief_candidates = [belief_by_key["step_moment_kl_mean"]]
+    elif belief_mode == "b3":
+        belief_candidates = [belief_by_key["rollout_belief_delta"]]
+    else:
+        belief_candidates = list(all_belief_candidates)
+        if metric_key in {"latent_belief_kl", "belief_kl"}:
+            belief_candidates = [belief_candidates[-1], *belief_candidates[:-1]]
 
     belief_shift_raw = 0.0
     belief_source = 'none'
@@ -323,6 +348,7 @@ def compute_counterfactual_surprise_score(
 
     diag = {
         'surprise_metric_hint': str(metric_key),
+        'surprise_belief_mode': str(belief_mode),
         'surprise_score_mode': str(score_mode),
         'surprise_belief_weight': float(belief_weight),
         'surprise_policy_weight': float(policy_weight),

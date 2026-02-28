@@ -56,6 +56,10 @@ class ClosedLoopConfig:
 
     # Planner-dependent surprise settings
     planner_surprise_name: str = 'latent_belief_kl'  # latent_belief_kl | predictive_kl | predictive_w2 | predictive_seq_kl | predictive_seq_w2 | action_kl
+    # Belief-source mode for the composite surprise term B_raw:
+    # auto | b1 | b2 | b3
+    # b1=step_moment_kl_all_mean, b2=step_moment_kl_mean, b3=rollout_belief_delta.
+    surprise_belief_source_mode: str = 'auto'
     predictive_kl_estimator: str = 'mixture_mc'  # 'mixture_mc' or 'moment_match'
     predictive_kl_mc_samples: int = 192
     predictive_kl_mc_seed: int = 12345

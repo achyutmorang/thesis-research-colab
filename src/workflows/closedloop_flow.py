@@ -120,6 +120,7 @@ class QuickProbeBundle:
     signal_feasible: bool = False
     signal_failure_reasons: str = ""
     selected_surprise_metric: str = ""
+    selected_belief_source_mode: str = "auto"
     applied_tuning: bool = False
     dataset_config: Any = None
     data_iter: Optional[Iterable[Any]] = None
@@ -725,6 +726,34 @@ def _normalize_probe_metrics(metrics: Optional[Sequence[str]], fallback: str) ->
     return out
 
 
+def _normalize_probe_belief_modes(modes: Optional[Sequence[str]], fallback: str) -> List[str]:
+    raw = list(modes) if modes is not None else [fallback]
+    out: List[str] = []
+    seen = set()
+    for m in raw:
+        key = str(m).strip().lower()
+        if key in {"", "default"}:
+            key = "auto"
+        alias = {
+            "step_moment_kl_all_mean": "b1",
+            "step_moment_kl_mean": "b2",
+            "rollout_belief_delta": "b3",
+            "b1_only": "b1",
+            "b2_only": "b2",
+            "b3_only": "b3",
+        }
+        key = alias.get(key, key)
+        if key not in {"auto", "b1", "b2", "b3"}:
+            key = "auto"
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(key)
+    if len(out) <= 0:
+        out = ["auto"]
+    return out
+
+
 def _probe_feasibility_score(metrics: Dict[str, float]) -> float:
     nonzero = max(0.0, float(metrics.get("nonzero_surprise_fraction", 0.0)))
     realized = max(0.0, float(metrics.get("proposal_realized_fraction", 0.0)))
@@ -810,6 +839,7 @@ def run_quick_probe_with_auto_escalation(
     probe_target_top_k: int = 3,
     probe_hist_prim_selector_mode: str = "interaction_band",
     probe_surprise_metrics: Optional[Sequence[str]] = None,
+    probe_belief_source_modes: Optional[Sequence[str]] = None,
     probe_metric_selection_policy: str = "first_feasible",  # first_feasible | best_feasible_score
     probe_min_nonzero_surprise_fraction: float = 0.01,
     probe_min_realized_fraction: float = 0.10,
@@ -839,6 +869,7 @@ def run_quick_probe_with_auto_escalation(
     selected_probe_feasibility_df = pd.DataFrame()
     selected_failure_reasons: List[str] = []
     selected_surprise_metric = str(getattr(cfg, "planner_surprise_name", "predictive_seq_w2")).strip().lower()
+    selected_belief_source_mode = str(getattr(cfg, "surprise_belief_source_mode", "auto")).strip().lower() or "auto"
     attempt_rows = []
     metric_summary_rows = []
     final_collapsed = False
@@ -856,6 +887,10 @@ def run_quick_probe_with_auto_escalation(
             probe_surprise_metrics,
             fallback=str(getattr(cfg, "planner_surprise_name", "predictive_seq_w2")),
         )
+        belief_mode_order = _normalize_probe_belief_modes(
+            probe_belief_source_modes,
+            fallback=str(getattr(cfg, "surprise_belief_source_mode", "auto")),
+        )
         selection_policy = str(probe_metric_selection_policy).strip().lower()
         if selection_policy not in {"first_feasible", "best_feasible_score"}:
             selection_policy = "first_feasible"
@@ -866,133 +901,140 @@ def run_quick_probe_with_auto_escalation(
         stop_metric_sweep = False
 
         for metric_name in metric_order:
-            metric_best_row: Optional[Dict[str, Any]] = None
-            metric_attempts = 0
             metric_any_feasible = False
+            for belief_mode in belief_mode_order:
+                metric_mode_best_row: Optional[Dict[str, Any]] = None
+                metric_mode_attempts = 0
+                metric_mode_feasible = False
 
-            for attempt in range(max_attempts):
-                metric_attempts += 1
-                scale_mult = float(scale_mults[min(attempt, len(scale_mults) - 1)])
-                l2_mult = float(l2_mults[min(attempt, len(l2_mults) - 1)])
-                clip_mult = float(clip_mults[min(attempt, len(clip_mults) - 1)])
-                persist_mult = float(persist_mults[min(attempt, len(persist_mults) - 1)])
-                interaction_mult = float(interaction_mults[min(attempt, len(interaction_mults) - 1)])
+                for attempt in range(max_attempts):
+                    metric_mode_attempts += 1
+                    scale_mult = float(scale_mults[min(attempt, len(scale_mults) - 1)])
+                    l2_mult = float(l2_mults[min(attempt, len(l2_mults) - 1)])
+                    clip_mult = float(clip_mults[min(attempt, len(clip_mults) - 1)])
+                    persist_mult = float(persist_mults[min(attempt, len(persist_mults) - 1)])
+                    interaction_mult = float(interaction_mults[min(attempt, len(interaction_mults) - 1)])
 
-                cfg_trial = copy.deepcopy(cfg)
-                cfg_trial.planner_surprise_name = str(metric_name)
-                if bool(probe_force_behavioral_preset):
-                    cfg_trial.perturb_use_behavioral_proposals = True
-                    cfg_trial.counterfactual_family = "hist_prim"
-                    cfg_trial.perturb_target_selection_mode = "highest_interaction"
-                    cfg_trial.perturb_target_top_k = int(max(int(getattr(cfg_trial, "perturb_target_top_k", 1)), int(probe_target_top_k)))
-                    cfg_trial.perturb_hist_prim_selector_mode = str(probe_hist_prim_selector_mode).strip().lower() or "interaction_band"
-                    base_persist_steps = int(max(1, int(getattr(cfg, "perturb_persist_steps", 3))))
-                    cfg_trial.perturb_persist_steps = int(max(1, round(float(base_persist_steps) * persist_mult)))
-                    base_interaction_gain = float(max(0.1, float(getattr(cfg, "perturb_behavioral_interaction_gain", 1.25))))
-                    base_longitudinal_gain = float(max(0.1, float(getattr(cfg, "perturb_behavioral_longitudinal_gain", 1.05))))
-                    base_lateral_gain = float(max(0.1, float(getattr(cfg, "perturb_behavioral_lateral_gain", 1.20))))
-                    cfg_trial.perturb_behavioral_interaction_gain = float(base_interaction_gain * interaction_mult)
-                    cfg_trial.perturb_behavioral_longitudinal_gain = float(base_longitudinal_gain * interaction_mult)
-                    cfg_trial.perturb_behavioral_lateral_gain = float(base_lateral_gain * interaction_mult)
-                search_trial = copy.deepcopy(search_cfg)
+                    cfg_trial = copy.deepcopy(cfg)
+                    cfg_trial.planner_surprise_name = str(metric_name)
+                    cfg_trial.surprise_belief_source_mode = str(belief_mode)
+                    if bool(probe_force_behavioral_preset):
+                        cfg_trial.perturb_use_behavioral_proposals = True
+                        cfg_trial.counterfactual_family = "hist_prim"
+                        cfg_trial.perturb_target_selection_mode = "highest_interaction"
+                        cfg_trial.perturb_target_top_k = int(max(int(getattr(cfg_trial, "perturb_target_top_k", 1)), int(probe_target_top_k)))
+                        cfg_trial.perturb_hist_prim_selector_mode = str(probe_hist_prim_selector_mode).strip().lower() or "interaction_band"
+                        base_persist_steps = int(max(1, int(getattr(cfg, "perturb_persist_steps", 3))))
+                        cfg_trial.perturb_persist_steps = int(max(1, round(float(base_persist_steps) * persist_mult)))
+                        base_interaction_gain = float(max(0.1, float(getattr(cfg, "perturb_behavioral_interaction_gain", 1.25))))
+                        base_longitudinal_gain = float(max(0.1, float(getattr(cfg, "perturb_behavioral_longitudinal_gain", 1.05))))
+                        base_lateral_gain = float(max(0.1, float(getattr(cfg, "perturb_behavioral_lateral_gain", 1.20))))
+                        cfg_trial.perturb_behavioral_interaction_gain = float(base_interaction_gain * interaction_mult)
+                        cfg_trial.perturb_behavioral_longitudinal_gain = float(base_longitudinal_gain * interaction_mult)
+                        cfg_trial.perturb_behavioral_lateral_gain = float(base_lateral_gain * interaction_mult)
+                    search_trial = copy.deepcopy(search_cfg)
 
-                search_trial.proposal_scale_ladder = tuple(float(x * scale_mult) for x in tuple(search_cfg.proposal_scale_ladder))
-                search_trial.random_scale = float(search_cfg.random_scale * scale_mult)
-                search_trial.delta_l2_budget = float(search_cfg.delta_l2_budget * l2_mult)
-                search_trial.delta_clip = float(search_cfg.delta_clip * clip_mult)
-                search_trial.budget_evals = int(search_cfg.budget_evals + attempt * int(probe_budget_bump_per_escalation))
+                    search_trial.proposal_scale_ladder = tuple(float(x * scale_mult) for x in tuple(search_cfg.proposal_scale_ladder))
+                    search_trial.random_scale = float(search_cfg.random_scale * scale_mult)
+                    search_trial.delta_l2_budget = float(search_cfg.delta_l2_budget * l2_mult)
+                    search_trial.delta_clip = float(search_cfg.delta_clip * clip_mult)
+                    search_trial.budget_evals = int(search_cfg.budget_evals + attempt * int(probe_budget_bump_per_escalation))
 
-                probe_dataset_config, probe_data_iter = make_waymax_data_iter(cfg_trial)
-                probe_df, probe_summary_df = run_quick_surprise_probe(
-                    cfg=cfg_trial,
-                    search_cfg=search_trial,
-                    n_probe_scenarios=int(quick_probe_scenarios),
-                    proposals_per_scenario=int(quick_probe_proposals_per_scenario),
-                    data_iter=probe_data_iter,
-                    dataset_config=probe_dataset_config,
-                )
-                collapsed, probe_metrics, failure_reasons, feasibility_df = _probe_collapse_stats(
-                    probe_summary_df=probe_summary_df,
-                    min_nonzero_surprise_fraction=float(probe_min_nonzero_surprise_fraction),
-                    min_realized_fraction=float(probe_min_realized_fraction),
-                    min_effect_l2_mean=float(probe_min_effect_l2_mean),
-                    min_belief_shift_mean=float(probe_min_belief_shift_mean),
-                    min_policy_shift_mean=float(probe_min_policy_shift_mean),
-                    min_realization_ratio_mean=float(probe_min_realization_ratio_mean),
-                    require_belief_and_policy=bool(probe_require_belief_and_policy),
-                    min_raw_belief_shift_mean=float(probe_min_raw_belief_shift_mean),
-                    min_raw_policy_shift_mean=float(probe_min_raw_policy_shift_mean),
-                    min_raw_fraction_of_total=float(probe_min_raw_fraction_of_total),
-                    require_raw_signal=bool(probe_require_raw_signal),
-                )
-                feasibility_score = _probe_feasibility_score(probe_metrics)
+                    probe_dataset_config, probe_data_iter = make_waymax_data_iter(cfg_trial)
+                    probe_df, probe_summary_df = run_quick_surprise_probe(
+                        cfg=cfg_trial,
+                        search_cfg=search_trial,
+                        n_probe_scenarios=int(quick_probe_scenarios),
+                        proposals_per_scenario=int(quick_probe_proposals_per_scenario),
+                        data_iter=probe_data_iter,
+                        dataset_config=probe_dataset_config,
+                    )
+                    collapsed, probe_metrics, failure_reasons, feasibility_df = _probe_collapse_stats(
+                        probe_summary_df=probe_summary_df,
+                        min_nonzero_surprise_fraction=float(probe_min_nonzero_surprise_fraction),
+                        min_realized_fraction=float(probe_min_realized_fraction),
+                        min_effect_l2_mean=float(probe_min_effect_l2_mean),
+                        min_belief_shift_mean=float(probe_min_belief_shift_mean),
+                        min_policy_shift_mean=float(probe_min_policy_shift_mean),
+                        min_realization_ratio_mean=float(probe_min_realization_ratio_mean),
+                        require_belief_and_policy=bool(probe_require_belief_and_policy),
+                        min_raw_belief_shift_mean=float(probe_min_raw_belief_shift_mean),
+                        min_raw_policy_shift_mean=float(probe_min_raw_policy_shift_mean),
+                        min_raw_fraction_of_total=float(probe_min_raw_fraction_of_total),
+                        require_raw_signal=bool(probe_require_raw_signal),
+                    )
+                    feasibility_score = _probe_feasibility_score(probe_metrics)
 
-                row = {
-                    "surprise_metric": str(metric_name),
-                    "attempt": int(attempt + 1),
-                    "collapsed": int(collapsed),
-                    "scale_mult": float(scale_mult),
-                    "delta_l2_budget": float(search_trial.delta_l2_budget),
-                    "delta_clip": float(search_trial.delta_clip),
-                    "budget_evals": int(search_trial.budget_evals),
-                    "probe_persist_steps": int(getattr(cfg_trial, "perturb_persist_steps", 0)),
-                    "probe_interaction_gain": float(getattr(cfg_trial, "perturb_behavioral_interaction_gain", np.nan)),
-                    "probe_hist_prim_selector_mode": str(getattr(cfg_trial, "perturb_hist_prim_selector_mode", "")),
-                    "n_finite_surprise": int(probe_metrics.get("n_finite_surprise", 0.0)),
-                    "nonzero_surprise_fraction": float(probe_metrics.get("nonzero_surprise_fraction", 0.0)),
-                    "proposal_realized_fraction": float(probe_metrics.get("proposal_realized_fraction", 0.0)),
-                    "proposal_effect_l2_mean": float(probe_metrics.get("proposal_effect_l2_mean", 0.0)),
-                    "surprise_belief_shift_mean": float(probe_metrics.get("surprise_belief_shift_mean", 0.0)),
-                    "surprise_belief_shift_raw_mean": float(probe_metrics.get("surprise_belief_shift_raw_mean", 0.0)),
-                    "surprise_policy_shift_mean": float(probe_metrics.get("surprise_policy_shift_mean", 0.0)),
-                    "surprise_policy_shift_raw_mean": float(probe_metrics.get("surprise_policy_shift_raw_mean", 0.0)),
-                    "surprise_belief_raw_fraction": float(probe_metrics.get("surprise_belief_raw_fraction", 0.0)),
-                    "surprise_policy_raw_fraction": float(probe_metrics.get("surprise_policy_raw_fraction", 0.0)),
-                    "surprise_realization_ratio_mean": float(probe_metrics.get("surprise_realization_ratio_mean", 0.0)),
-                    "surprise_realization_ratio_raw_mean": float(probe_metrics.get("surprise_realization_ratio_raw_mean", 0.0)),
-                    "feasibility_score": float(feasibility_score),
-                    "failure_reasons": "|".join(str(x) for x in failure_reasons),
-                }
-                attempt_rows.append(row)
-
-                candidate = {
-                    "row": row,
-                    "cfg": cfg_trial,
-                    "search_cfg": search_trial,
-                    "probe_df": probe_df.copy(),
-                    "probe_summary_df": probe_summary_df.copy(),
-                    "probe_feasibility_df": feasibility_df.copy(),
-                    "failure_reasons": list(failure_reasons),
-                    "collapsed": bool(collapsed),
-                    "score": float(feasibility_score),
-                    "metric": str(metric_name),
-                }
-                all_candidates.append(candidate)
-
-                if (metric_best_row is None) or (float(row["feasibility_score"]) > float(metric_best_row["feasibility_score"])):
-                    metric_best_row = dict(row)
-                if (best_candidate is None) or (float(candidate["score"]) > float(best_candidate["score"])):
-                    best_candidate = candidate
-
-                if not bool(collapsed):
-                    metric_any_feasible = True
-                    if selection_policy == "first_feasible":
-                        selected_candidate = candidate
-                        stop_metric_sweep = True
-                        break
-
-                if bool(metric_any_feasible):
-                    break
-
-            if metric_best_row is not None:
-                metric_summary_rows.append(
-                    {
+                    row = {
                         "surprise_metric": str(metric_name),
-                        "metric_feasible": int(metric_any_feasible),
-                        "attempts_tried": int(metric_attempts),
-                        **metric_best_row,
+                        "belief_source_mode": str(belief_mode),
+                        "attempt": int(attempt + 1),
+                        "collapsed": int(collapsed),
+                        "scale_mult": float(scale_mult),
+                        "delta_l2_budget": float(search_trial.delta_l2_budget),
+                        "delta_clip": float(search_trial.delta_clip),
+                        "budget_evals": int(search_trial.budget_evals),
+                        "probe_persist_steps": int(getattr(cfg_trial, "perturb_persist_steps", 0)),
+                        "probe_interaction_gain": float(getattr(cfg_trial, "perturb_behavioral_interaction_gain", np.nan)),
+                        "probe_hist_prim_selector_mode": str(getattr(cfg_trial, "perturb_hist_prim_selector_mode", "")),
+                        "n_finite_surprise": int(probe_metrics.get("n_finite_surprise", 0.0)),
+                        "nonzero_surprise_fraction": float(probe_metrics.get("nonzero_surprise_fraction", 0.0)),
+                        "proposal_realized_fraction": float(probe_metrics.get("proposal_realized_fraction", 0.0)),
+                        "proposal_effect_l2_mean": float(probe_metrics.get("proposal_effect_l2_mean", 0.0)),
+                        "surprise_belief_shift_mean": float(probe_metrics.get("surprise_belief_shift_mean", 0.0)),
+                        "surprise_belief_shift_raw_mean": float(probe_metrics.get("surprise_belief_shift_raw_mean", 0.0)),
+                        "surprise_policy_shift_mean": float(probe_metrics.get("surprise_policy_shift_mean", 0.0)),
+                        "surprise_policy_shift_raw_mean": float(probe_metrics.get("surprise_policy_shift_raw_mean", 0.0)),
+                        "surprise_belief_raw_fraction": float(probe_metrics.get("surprise_belief_raw_fraction", 0.0)),
+                        "surprise_policy_raw_fraction": float(probe_metrics.get("surprise_policy_raw_fraction", 0.0)),
+                        "surprise_realization_ratio_mean": float(probe_metrics.get("surprise_realization_ratio_mean", 0.0)),
+                        "surprise_realization_ratio_raw_mean": float(probe_metrics.get("surprise_realization_ratio_raw_mean", 0.0)),
+                        "feasibility_score": float(feasibility_score),
+                        "failure_reasons": "|".join(str(x) for x in failure_reasons),
                     }
-                )
+                    attempt_rows.append(row)
+
+                    candidate = {
+                        "row": row,
+                        "cfg": cfg_trial,
+                        "search_cfg": search_trial,
+                        "probe_df": probe_df.copy(),
+                        "probe_summary_df": probe_summary_df.copy(),
+                        "probe_feasibility_df": feasibility_df.copy(),
+                        "failure_reasons": list(failure_reasons),
+                        "collapsed": bool(collapsed),
+                        "score": float(feasibility_score),
+                        "metric": str(metric_name),
+                        "belief_mode": str(belief_mode),
+                    }
+                    all_candidates.append(candidate)
+
+                    if (metric_mode_best_row is None) or (float(row["feasibility_score"]) > float(metric_mode_best_row["feasibility_score"])):
+                        metric_mode_best_row = dict(row)
+                    if (best_candidate is None) or (float(candidate["score"]) > float(best_candidate["score"])):
+                        best_candidate = candidate
+
+                    if not bool(collapsed):
+                        metric_mode_feasible = True
+                        metric_any_feasible = True
+                        if selection_policy == "first_feasible":
+                            selected_candidate = candidate
+                            stop_metric_sweep = True
+                            break
+
+                if metric_mode_best_row is not None:
+                    metric_summary_rows.append(
+                        {
+                            "surprise_metric": str(metric_name),
+                            "belief_source_mode": str(belief_mode),
+                            "metric_feasible": int(metric_mode_feasible),
+                            "attempts_tried": int(metric_mode_attempts),
+                            **metric_mode_best_row,
+                        }
+                    )
+
+                if stop_metric_sweep:
+                    break
 
             if stop_metric_sweep:
                 break
@@ -1014,6 +1056,7 @@ def run_quick_probe_with_auto_escalation(
             selected_probe_feasibility_df = selected_candidate["probe_feasibility_df"]
             selected_failure_reasons = list(selected_candidate["failure_reasons"])
             selected_surprise_metric = str(selected_candidate["metric"])
+            selected_belief_source_mode = str(selected_candidate.get("belief_mode", "auto"))
             final_collapsed = bool(selected_candidate["collapsed"])
             signal_feasible = bool(not final_collapsed)
         else:
@@ -1062,6 +1105,7 @@ def run_quick_probe_with_auto_escalation(
         signal_feasible=bool(signal_feasible),
         signal_failure_reasons=", ".join(selected_failure_reasons),
         selected_surprise_metric=str(selected_surprise_metric),
+        selected_belief_source_mode=str(selected_belief_source_mode),
         applied_tuning=bool(applied_tuning),
         dataset_config=context_bundle.dataset_config,
         data_iter=context_bundle.data_iter,
@@ -1222,6 +1266,8 @@ def report_quick_probe_bundle(
 
     if str(bundle.selected_surprise_metric).strip():
         print(f"[probe] selected surprise instantiation = {bundle.selected_surprise_metric}")
+    if str(bundle.selected_belief_source_mode).strip():
+        print(f"[probe] selected belief source mode = {bundle.selected_belief_source_mode}")
     print(f"[probe] composite-signal feasibility = {bool(bundle.signal_feasible)}")
     if (not bool(bundle.signal_feasible)) and str(bundle.signal_failure_reasons).strip():
         print(f"[probe] failed checks: {bundle.signal_failure_reasons}")

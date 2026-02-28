@@ -119,3 +119,51 @@ def test_counterfactual_surprise_score_increases_with_stronger_policy_shift():
         proposal_delta_l2=0.5,
     )
     assert high_score > low_score
+
+
+def test_counterfactual_surprise_belief_source_auto_prefers_b3_for_latent_metric():
+    _, diag = metrics.compute_counterfactual_surprise_score(
+        trace_change_diag={
+            "step_moment_kl_all_mean": 0.2,
+            "step_moment_kl_mean": 0.1,
+            "step_w2_all_mean": 0.1,
+        },
+        effect_l2_mean=0.3,
+        effect_l2_budget=1.0,
+        base_surprise_abs=0.1,
+        proposal_surprise_abs=0.4,  # rollout_belief_delta = 0.3
+        action_divergence=0.05,
+        metric_hint="latent_belief_kl",
+        belief_source_mode="auto",
+        proposal_delta_l2=0.5,
+        perturb_floor_weight=0.0,
+        response_floor_weight=0.0,
+        use_additive_score=True,
+    )
+    assert diag["surprise_belief_mode"] == "auto"
+    assert diag["surprise_belief_source"] == "rollout_belief_delta"
+    assert abs(float(diag["surprise_belief_shift_raw"]) - 0.3) < 1e-12
+
+
+def test_counterfactual_surprise_belief_source_can_be_forced_to_b1():
+    _, diag = metrics.compute_counterfactual_surprise_score(
+        trace_change_diag={
+            "step_moment_kl_all_mean": 0.2,
+            "step_moment_kl_mean": 0.1,
+            "step_w2_all_mean": 0.1,
+        },
+        effect_l2_mean=0.3,
+        effect_l2_budget=1.0,
+        base_surprise_abs=0.1,
+        proposal_surprise_abs=0.4,
+        action_divergence=0.05,
+        metric_hint="latent_belief_kl",
+        belief_source_mode="b1",
+        proposal_delta_l2=0.5,
+        perturb_floor_weight=0.0,
+        response_floor_weight=0.0,
+        use_additive_score=True,
+    )
+    assert diag["surprise_belief_mode"] == "b1"
+    assert diag["surprise_belief_source"] == "step_moment_kl_all_mean"
+    assert abs(float(diag["surprise_belief_shift_raw"]) - 0.2) < 1e-12
