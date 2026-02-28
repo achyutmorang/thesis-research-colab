@@ -136,6 +136,116 @@ def validate_notebook_contract_manifest(
     return len(reasons) == 0, reasons
 
 
+def run_risk_training_notebook_gates(
+    *,
+    runner: Any,
+    cfg: Any,
+    eval_idx: Optional[Iterable[int]] = None,
+    probe_shift_suite: str = 'nominal_clean',
+) -> Dict[str, Any]:
+    import numpy as np
+    import pandas as pd
+    from src.closedloop.calibration import run_closedloop_preflight_checks
+    from src.closedloop.planner_backends import make_closed_loop_components
+    from src.closedloop.risk_candidates import build_candidate_risk_dataset_rows
+
+    scenarios = list(getattr(runner, 'data', {}).get('scenarios', []))
+    candidate_ids: List[int] = []
+    if eval_idx is not None:
+        for sid in eval_idx:
+            sid_int = int(sid)
+            if 0 <= sid_int < len(scenarios):
+                rec = scenarios[sid_int]
+                if isinstance(rec, dict) and ('state' in rec):
+                    candidate_ids.append(sid_int)
+    if len(candidate_ids) == 0:
+        for sid_int, rec in enumerate(scenarios):
+            if isinstance(rec, dict) and ('state' in rec):
+                candidate_ids.append(int(sid_int))
+    candidate_ids = sorted(set(int(x) for x in candidate_ids))
+
+    failure_reasons: List[str] = []
+    if len(candidate_ids) == 0:
+        failure_reasons.append('no_scenarios_with_state')
+        return {
+            'overall_pass': False,
+            'risk_probe_pass': False,
+            'preflight_pass': False,
+            'failure_reasons': failure_reasons,
+            'risk_probe_summary_df': pd.DataFrame(),
+            'risk_probe_rows_df': pd.DataFrame(),
+            'preflight_df': pd.DataFrame(),
+        }
+
+    preflight_idx = np.asarray(candidate_ids[: max(1, min(8, len(candidate_ids)))], dtype=np.int32)
+    preflight_df = run_closedloop_preflight_checks(runner=runner, cfg=cfg, eval_idx=preflight_idx)
+    preflight_pass = bool((not preflight_df.empty) and ('pass' in preflight_df.columns) and bool(preflight_df['pass'].all()))
+    if not preflight_pass:
+        failure_reasons.append('preflight_failed')
+
+    sid = int(candidate_ids[0])
+    rec = scenarios[sid]
+    selected_idx = np.asarray(rec.get('selected_indices', []), dtype=np.int32)
+    planner_bundle = make_closed_loop_components(
+        rec['state'],
+        planner_kind=getattr(cfg, 'planner_kind', 'latentdriver'),
+        planner_name=getattr(cfg, 'planner_name', 'latentdriver_waypoint_sdc'),
+        cfg=cfg,
+    )
+    seed = int(getattr(cfg, 'global_seed', 17) + sid * max(1, int(getattr(cfg, 'rollout_seed_stride', 10000))))
+    rows = build_candidate_risk_dataset_rows(
+        scenario_id=sid,
+        state=rec['state'],
+        selected_idx=selected_idx,
+        planner_bundle=planner_bundle,
+        cfg=cfg,
+        seed=seed,
+        shift_suite=str(probe_shift_suite),
+    )
+    probe_df = pd.DataFrame(rows)
+    finite_numeric = False
+    required_columns_ok = False
+    if not probe_df.empty:
+        numeric_cols = [c for c in probe_df.columns if pd.api.types.is_numeric_dtype(probe_df[c])]
+        if len(numeric_cols) > 0:
+            finite_numeric = bool(np.isfinite(probe_df[numeric_cols].to_numpy(dtype=float)).all())
+        horizon = int(max(1, int(getattr(cfg, 'risk_dataset_control_horizon_steps', 6))))
+        required = [
+            'dist_entropy',
+            f'progress_h{horizon}',
+            'collision_h5',
+            'offroad_h5',
+            'failure_proxy_h15',
+        ]
+        required_columns_ok = all(col in probe_df.columns for col in required)
+    risk_probe_pass = bool((not probe_df.empty) and finite_numeric and required_columns_ok)
+    if not risk_probe_pass:
+        if probe_df.empty:
+            failure_reasons.append('risk_probe_empty')
+        if (not finite_numeric) and (not probe_df.empty):
+            failure_reasons.append('risk_probe_non_finite_numeric')
+        if (not required_columns_ok) and (not probe_df.empty):
+            failure_reasons.append('risk_probe_missing_required_columns')
+
+    summary_rows = [
+        {'check': 'risk_probe_rows_nonempty', 'pass': int(not probe_df.empty), 'detail': f'rows={len(probe_df)}'},
+        {'check': 'risk_probe_numeric_finite', 'pass': int(finite_numeric), 'detail': 'all numeric columns finite'},
+        {'check': 'risk_probe_required_columns', 'pass': int(required_columns_ok), 'detail': 'dist_entropy/progress/labels present'},
+        {'check': 'preflight_all_checks_pass', 'pass': int(preflight_pass), 'detail': f'n_checks={len(preflight_df)}'},
+    ]
+    risk_probe_summary_df = pd.DataFrame(summary_rows)
+    overall_pass = bool(risk_probe_pass and preflight_pass)
+    return {
+        'overall_pass': bool(overall_pass),
+        'risk_probe_pass': bool(risk_probe_pass),
+        'preflight_pass': bool(preflight_pass),
+        'failure_reasons': list(failure_reasons),
+        'risk_probe_summary_df': risk_probe_summary_df,
+        'risk_probe_rows_df': probe_df,
+        'preflight_df': preflight_df,
+    }
+
+
 def write_notebook_contract_manifest(
     *,
     run_prefix: str,
@@ -208,4 +318,3 @@ def write_notebook_contract_manifest(
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(json.dumps(manifest, indent=2, sort_keys=True, ensure_ascii=True))
     return str(p)
-

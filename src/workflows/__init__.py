@@ -58,6 +58,7 @@ from .paper_export_flow import (
 from .notebook_contract import (
     load_notebook_contract_manifest,
     manifest_has_stage,
+    run_risk_training_notebook_gates,
     validate_notebook_contract_manifest,
     write_notebook_contract_manifest,
 )
@@ -112,6 +113,7 @@ __all__ = [
     "export_paper_tables_and_figures",
     "load_notebook_contract_manifest",
     "manifest_has_stage",
+    "run_risk_training_notebook_gates",
     "validate_notebook_contract_manifest",
     "write_notebook_contract_manifest",
 ]
