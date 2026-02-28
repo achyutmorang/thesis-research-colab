@@ -23,6 +23,7 @@ from .config import (
     SearchConfig,
     ClosedLoopConfig,
     build_run_artifact_paths,
+    normalize_method_labels,
     required_total_scenarios,
     restore_artifacts_via_upload,
 )
@@ -1055,7 +1056,7 @@ def run_closed_loop(
     run_prefix: Optional[str] = None,
     static_frames: Optional[Dict[str, pd.DataFrame]] = None,
 ) -> Tuple[pd.DataFrame, pd.DataFrame]:
-    methods = ['random', 'risk_only', 'surprise_only', 'joint']
+    methods = normalize_method_labels(getattr(cfg, "method_labels", None))
 
     run_prefix = run_prefix or cfg.run_prefix
     checkpoint_path = f'{run_prefix}_per_scenario_results.csv'

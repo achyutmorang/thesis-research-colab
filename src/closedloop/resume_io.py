@@ -19,7 +19,13 @@ except Exception:  # pragma: no cover - optional in lightweight test environment
 import numpy as np
 import pandas as pd
 
-from .config import SearchConfig, ClosedLoopConfig, build_run_artifact_paths, build_uq_artifact_paths
+from .config import (
+    SearchConfig,
+    ClosedLoopConfig,
+    build_run_artifact_paths,
+    build_uq_artifact_paths,
+    normalize_method_labels,
+)
 from .calibration import diagnose_surprise_root_cause
 from .signal_analysis import (
     analyze_surprise_signal_usefulness,
@@ -299,7 +305,7 @@ def _write_contract_mirror(
 
     _atomic_write_json(paths['carry_forward'], carry_forward_config)
 
-    methods = ['random', 'risk_only', 'surprise_only', 'joint']
+    methods = normalize_method_labels(getattr(cfg, 'method_labels', None))
     completed = _completed_scenarios(results_df, methods) if isinstance(results_df, pd.DataFrame) else set()
     progress_payload = {
         'updated_utc': _utc_now_iso(),
@@ -996,7 +1002,7 @@ def export_closedloop_artifacts(
             'hard_brake_mps2': float(cfg.hard_brake_mps2),
             'hard_jerk_mps3': float(cfg.hard_jerk_mps3),
         },
-        'method_labels': ['random', 'risk_only', 'surprise_only', 'joint'],
+        'method_labels': list(normalize_method_labels(getattr(cfg, 'method_labels', None))),
     }
     _atomic_write_json(Path(carry_path), carry_forward_config)
     write_artifact_schema_manifest(run_prefix)

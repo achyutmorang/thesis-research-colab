@@ -6,10 +6,36 @@ import random
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 import pandas as pd
+
+
+DEFAULT_METHOD_LABELS: Tuple[str, ...] = ("random", "risk_only", "surprise_only", "joint")
+
+
+def normalize_method_labels(methods: Optional[Sequence[str]] = None) -> List[str]:
+    allowed = set(DEFAULT_METHOD_LABELS)
+    raw = list(methods) if methods is not None else list(DEFAULT_METHOD_LABELS)
+    out: List[str] = []
+    seen = set()
+    for value in raw:
+        key = str(value).strip().lower()
+        if not key:
+            continue
+        if key not in allowed:
+            raise ValueError(
+                f"Unsupported method label={value!r}. "
+                f"Allowed={sorted(DEFAULT_METHOD_LABELS)}."
+            )
+        if key in seen:
+            continue
+        out.append(key)
+        seen.add(key)
+    if len(out) <= 0:
+        raise ValueError("method_labels is empty after normalization.")
+    return out
 
 
 @dataclass
@@ -149,6 +175,7 @@ class ClosedLoopConfig:
 
     # Run controls: fairness, chunking, resume
     run_prefix: str = 'closedloop_run'
+    method_labels: Tuple[str, ...] = DEFAULT_METHOD_LABELS
     run_chunk_size: int = 200
     checkpoint_every_scenarios: int = 25
     resume_from_existing: bool = True
@@ -427,9 +454,9 @@ def inspect_shard_progress(
     run_tag: str,
     persist_root: str,
     n_shards: int,
-    methods: Optional[List[str]] = None,
+    methods: Optional[Sequence[str]] = None,
 ) -> pd.DataFrame:
-    methods = methods or ['random', 'risk_only', 'surprise_only', 'joint']
+    methods = normalize_method_labels(methods)
     n_shards = int(max(1, n_shards))
     rows: List[Dict[str, Any]] = []
     for sid in range(n_shards):
@@ -459,8 +486,9 @@ def auto_select_shard_id(
     run_tag: str,
     persist_root: str,
     n_shards: int,
-    methods: Optional[List[str]] = None,
+    methods: Optional[Sequence[str]] = None,
 ) -> int:
+    methods = normalize_method_labels(methods)
     progress = inspect_shard_progress(
         run_tag=run_tag,
         persist_root=persist_root,

@@ -757,6 +757,7 @@ def export_surprise_potential_report(
         "n_error_rows": int(len(bundle.errors_df)) if isinstance(bundle.errors_df, pd.DataFrame) else 0,
         "n_metric_method_rows": int(len(frames.metric_method_df)),
         "n_metric_rank_rows": int(len(frames.metric_rank_df)),
+        "methods": sorted(set(str(x) for x in frames.metric_method_df.get("method", pd.Series(dtype=object)).dropna().tolist())) if len(frames.metric_method_df) > 0 else [],
         "metrics": sorted(set(str(x) for x in frames.metric_method_df.get("metric", pd.Series(dtype=object)).dropna().tolist())) if len(frames.metric_method_df) > 0 else [],
         "counterfactual_families": sorted(set(str(x) for x in frames.metric_method_df.get("counterfactual_family", pd.Series(dtype=object)).dropna().tolist())) if len(frames.metric_method_df) > 0 else [],
         "write_rigorous_eval": bool(write_rigorous_eval),

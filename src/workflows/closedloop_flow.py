@@ -23,6 +23,7 @@ from src.closedloop.config import (
     configure_persistent_run_prefix,
     initialize_configs,
     inspect_shard_progress,
+    normalize_method_labels,
 )
 from src.closedloop.core import (
     build_closedloop_runner_and_splits,
@@ -252,6 +253,7 @@ def _discover_run_tag_candidates(
     persist_root: str,
     run_tag_prefix: str,
     n_shards: int,
+    method_labels: Optional[Sequence[str]] = None,
 ) -> pd.DataFrame:
     root = Path(str(persist_root)).expanduser()
     if not root.exists():
@@ -287,12 +289,14 @@ def _discover_run_tag_candidates(
             continue
         tags.add(tag)
 
+    method_list = normalize_method_labels(method_labels)
     rows = []
     for tag in sorted(tags):
         progress = inspect_shard_progress(
             run_tag=str(tag),
             persist_root=str(persist_root),
             n_shards=int(max(1, n_shards)),
+            methods=method_list,
         )
         if progress.empty:
             continue
@@ -436,11 +440,13 @@ def initialize_run_context(
     run_tag_prefix: str = "closedloop",
     planner_backend: str = "latentdriver",
     planner_surprise_name: str = "latent_belief_kl",
+    method_labels: Optional[Sequence[str]] = None,
     auto_generate_run_tag_if_empty: bool = True,
     resume_mode: str = "auto",
     warn_on_config_drift: bool = True,
 ) -> RunContextBundle:
     planner_backend = _normalize_planner_backend(planner_backend)
+    method_list = normalize_method_labels(method_labels)
     cfg, search_cfg, ckpt_scan_df = initialize_configs(planner_kind_override=planner_backend)
 
     # Fast iteration defaults for Colab loops.
@@ -452,6 +458,7 @@ def initialize_run_context(
     cfg.latentdriver_auto_align_token_count = bool(latentdriver_auto_align_token_count)
     cfg.latentdriver_log_forward_errors = bool(latentdriver_log_forward_errors)
     cfg.latentdriver_log_forward_errors_max = int(max(1, latentdriver_log_forward_errors_max))
+    cfg.method_labels = tuple(method_list)
     planner_profile_df = configure_experiment_profile(
         cfg=cfg,
         planner_backend=planner_backend,
@@ -470,6 +477,7 @@ def initialize_run_context(
                 persist_root=str(persist_root),
                 run_tag_prefix=str(run_tag_prefix),
                 n_shards=int(max(1, n_shards)),
+                method_labels=method_list,
             )
             if len(run_tag_candidates_df) > 0:
                 requested_run_tag = str(run_tag_candidates_df.iloc[0]["run_tag"])
@@ -488,6 +496,7 @@ def initialize_run_context(
         run_tag=str(requested_run_tag),
         persist_root=str(persist_root),
         n_shards=n_shards,
+        methods=method_list,
     )
     existing_results_files = int(shard_progress_df.get("results_exists", pd.Series(dtype=int)).sum()) if len(shard_progress_df) else 0
     total_touched_scenarios = int(shard_progress_df.get("n_touched_scenarios", pd.Series(dtype=int)).sum()) if len(shard_progress_df) else 0
@@ -506,6 +515,7 @@ def initialize_run_context(
             run_tag=str(requested_run_tag),
             persist_root=str(persist_root),
             n_shards=n_shards,
+            methods=method_list,
         )
     else:
         shard_id_int = int(shard_id)
@@ -518,6 +528,7 @@ def initialize_run_context(
     setattr(cfg, 'n_shards', int(n_shards))
     setattr(cfg, 'shard_id', int(shard_id_int))
     setattr(cfg, 'run_mode_applied', str(run_mode_applied))
+    setattr(cfg, 'method_labels', tuple(method_list))
 
     run_prefix = configure_persistent_run_prefix(
         cfg=cfg,
@@ -547,6 +558,7 @@ def initialize_run_context(
         "resume_from_existing": int(bool(cfg.resume_from_existing)),
         "n_shards": int(n_shards),
         "shard_id": int(shard_id_int),
+        "method_labels": ",".join(method_list),
         "existing_results_files": int(existing_results_files),
         "total_touched_scenarios": int(total_touched_scenarios),
         "total_completed_scenarios": int(total_completed_scenarios),
