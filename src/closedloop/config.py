@@ -155,6 +155,46 @@ class ClosedLoopConfig:
     # Keep raw simulator states for eval scenarios
     keep_raw_state: bool = True
 
+    # Risk/UQ dataset controls
+    risk_dataset_build: bool = True
+    risk_dataset_candidate_count: int = 8
+    risk_dataset_control_horizon_steps: int = 6
+    risk_dataset_label_horizons: Tuple[int, ...] = (5, 10, 15)
+    risk_dataset_events: Tuple[str, ...] = ('collision', 'offroad', 'failure_proxy')
+
+    # Risk/UQ model defaults
+    risk_model_type: str = 'ensemble_mlp'
+    risk_model_ensemble_size: int = 5
+    risk_model_hidden_dims: Tuple[int, ...] = (128, 128)
+    risk_model_dropout: float = 0.10
+    risk_model_learning_rate: float = 1e-3
+    risk_model_batch_size: int = 1024
+    risk_model_max_epochs: int = 50
+    risk_model_patience: int = 8
+    risk_calibration_method: str = 'temperature'
+    risk_conformal_alpha: float = 0.10
+
+    # Risk-aware controller
+    risk_control_enable: bool = True
+    risk_control_candidate_top_modes: int = 2
+    risk_control_candidate_random_samples: int = 6
+    risk_control_progress_weight: float = 1.0
+    risk_control_fail_weight: float = 2.0
+    risk_control_uncertainty_weight: float = 0.5
+    risk_control_comfort_weight: float = 0.25
+    risk_control_fail_budget: float = 0.20
+
+    # UQ benchmark controls
+    uq_shift_suites: Tuple[str, ...] = (
+        'nominal_clean',
+        'hist_prim_shift',
+        'fut_prim_shift',
+        'hist_rmv_shift',
+        'high_interaction_holdout',
+    )
+    uq_eval_probability_bins: int = 15
+    uq_bootstrap_samples: int = 1000
+
 
 @dataclass
 class SearchConfig:
@@ -444,6 +484,26 @@ def build_run_artifact_paths(run_prefix: str) -> Dict[str, str]:
         'closedloop_calibration': f'{run_prefix}_closedloop_calibration.csv',
         'calibration_diagnostics': f'{run_prefix}_calibration_diagnostics.csv',
         'calibration_quantiles': f'{run_prefix}_calibration_quantiles.csv',
+    }
+
+
+def build_uq_artifact_paths(run_prefix: str) -> Dict[str, str]:
+    return {
+        'risk_dataset': f'{run_prefix}_risk_dataset.parquet',
+        'risk_dataset_summary': f'{run_prefix}_risk_dataset_summary.csv',
+        'risk_train_summary': f'{run_prefix}_risk_train_summary.csv',
+        'risk_validation_predictions': f'{run_prefix}_risk_validation_predictions.parquet',
+        'risk_temperature_scalers': f'{run_prefix}_risk_temperature_scalers.json',
+        'risk_conformal_thresholds': f'{run_prefix}_risk_conformal_thresholds.json',
+        'uq_benchmark_summary': f'{run_prefix}_uq_benchmark_summary.csv',
+        'uq_benchmark_per_shift': f'{run_prefix}_uq_benchmark_per_shift.csv',
+        'uq_reliability_bins': f'{run_prefix}_uq_reliability_bins.csv',
+        'uq_selective_risk_curve': f'{run_prefix}_uq_selective_risk_curve.csv',
+        'uq_shift_gap_summary': f'{run_prefix}_uq_shift_gap_summary.csv',
+        'risk_control_per_scenario_results': f'{run_prefix}_risk_control_per_scenario_results.csv',
+        'risk_control_per_step_trace': f'{run_prefix}_risk_control_per_step_trace.csv',
+        'risk_control_summary': f'{run_prefix}_risk_control_summary.csv',
+        'uq_artifact_schema': f'{run_prefix}_uq_artifact_schema.json',
     }
 
 

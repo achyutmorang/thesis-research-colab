@@ -12,7 +12,7 @@ import jax
 import numpy as np
 import pandas as pd
 
-from .config import SearchConfig, ClosedLoopConfig, build_run_artifact_paths
+from .config import SearchConfig, ClosedLoopConfig, build_run_artifact_paths, build_uq_artifact_paths
 from .calibration import diagnose_surprise_root_cause
 from .signal_analysis import (
     analyze_surprise_signal_usefulness,
@@ -20,6 +20,7 @@ from .signal_analysis import (
 )
 
 ARTIFACT_SCHEMA_VERSION = '1.0.0'
+UQ_ARTIFACT_SCHEMA_VERSION = '1.0.0'
 RESULTS_REQUIRED_COLUMNS = ['scenario_id', 'method']
 TRACE_REQUIRED_COLUMNS = ['scenario_id', 'method', 'eval_index']
 SURPRISE_COL_CANDIDATES = ('delta_surprise', 'delta_surprise_pd', 'surprise_pd')
@@ -73,6 +74,19 @@ def write_artifact_schema_manifest(run_prefix: str) -> str:
             f,
             indent=2,
         )
+    return path
+
+
+def write_uq_artifact_schema_manifest(run_prefix: str, artifact_names: Optional[List[str]] = None) -> str:
+    path = f'{run_prefix}_uq_artifact_schema.json'
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        'schema_version': UQ_ARTIFACT_SCHEMA_VERSION,
+        'artifacts': artifact_names or sorted(build_uq_artifact_paths(run_prefix).keys()),
+        'written_utc': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
+    }
+    with open(path, 'w') as f:
+        json.dump(payload, f, indent=2)
     return path
 
 

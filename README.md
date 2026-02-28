@@ -15,6 +15,10 @@ This codebase is intentionally experimental.
 - Closed-loop evaluation notebook: [notebooks/closedloop_evaluation_colab.ipynb](https://colab.research.google.com/github/achyutmorang/waymax-simulation-experiments/blob/main/notebooks/closedloop_evaluation_colab.ipynb)
 - Compute-normalized discovery notebook: [notebooks/compute_normalized_blindspot_discovery_colab.ipynb](https://colab.research.google.com/github/achyutmorang/waymax-simulation-experiments/blob/main/notebooks/compute_normalized_blindspot_discovery_colab.ipynb)
 - Counterfactual sensitivity notebook: [notebooks/counterfactual_risk_sensitivity_atlas_colab.ipynb](https://colab.research.google.com/github/achyutmorang/waymax-simulation-experiments/blob/main/notebooks/counterfactual_risk_sensitivity_atlas_colab.ipynb)
+- Risk/UQ paper track:
+  - [notebooks/expts_risk_uq/risk_model_training_colab.ipynb](https://colab.research.google.com/github/achyutmorang/waymax-simulation-experiments/blob/main/notebooks/expts_risk_uq/risk_model_training_colab.ipynb)
+  - [notebooks/expts_risk_uq/uq_benchmark_colab.ipynb](https://colab.research.google.com/github/achyutmorang/waymax-simulation-experiments/blob/main/notebooks/expts_risk_uq/uq_benchmark_colab.ipynb)
+  - [notebooks/expts_risk_uq/paper_tables_figures_colab.ipynb](https://colab.research.google.com/github/achyutmorang/waymax-simulation-experiments/blob/main/notebooks/expts_risk_uq/paper_tables_figures_colab.ipynb)
 
 ## Research Focus
 - Closed-loop search under fixed compute budget.
@@ -22,10 +26,13 @@ This codebase is intentionally experimental.
 - Surprise-signal usefulness diagnostics for ranking quality.
 - Paper-style counterfactual-family sweeps (`hist_prim`, `fut_prim`, `hist_rmv`, etc.) in closed loop.
 - Counterfactual and compute-normalized post-hoc evaluation.
+- Calibrated closed-loop risk modeling and risk-aware control on top of the LatentDriver backend.
+- Waymax uncertainty-quantification benchmark artifacts for calibration, selective risk, and shift robustness.
 
 ## Repository Layout
 - `notebooks/`: thin Colab notebooks for orchestration, diagnostics, and reporting.
 - `src/closedloop/`: domain logic (planner integration, calibration, search, metrics, artifact IO).
+- `src/risk_model/`: offline risk-model training, calibration, inference, and artifact helpers.
 - `src/workflows/`: notebook workflow orchestration (`closedloop_flow.py`, `surprise_potential_flow.py`).
 - `src/platform/`: Colab/runtime bootstrap (repo sync, Drive checks, deterministic setup, hot reload).
 - `scripts/`: setup and utility scripts.
@@ -36,6 +43,13 @@ This codebase is intentionally experimental.
 3. In Step 2, set user knobs (`PLANNER_BACKEND`, `RUN_TAG`, `RUN_MODE`, `PERSIST_ROOT`, sharding).
 4. Run quick probe (Step 3) before full dataset build.
 5. Continue preflight, calibration, gate, main loop, and export cells top-to-bottom.
+
+For the risk/UQ paper track:
+
+1. Open `notebooks/expts_risk_uq/risk_model_training_colab.ipynb`.
+2. Build the candidate-level risk dataset and train/calibrate the ensemble risk model.
+3. Open `notebooks/expts_risk_uq/uq_benchmark_colab.ipynb` to score calibration and robustness across shift suites.
+4. Open `notebooks/expts_risk_uq/paper_tables_figures_colab.ipynb` to export publication tables and figures from saved artifacts.
 
 ## LatentDriver Backend
 Closed-loop planning is configured for `PLANNER_BACKEND='latentdriver'`.
@@ -104,6 +118,12 @@ Given run prefix `<run_prefix>`:
 - `<run_prefix>_runtime_manifest.json`
 - `<run_prefix>_carry_forward_config.json`
 - `<run_prefix>_artifact_schema.json`
+- `<run_prefix>_risk_dataset.parquet`
+- `<run_prefix>_risk_temperature_scalers.json`
+- `<run_prefix>_uq_benchmark_summary.csv`
+- `<run_prefix>_uq_reliability_bins.csv`
+- `<run_prefix>_risk_control_summary.csv`
+- `<run_prefix>_uq_artifact_schema.json`
 
 ## Testing And CI
 Run locally:

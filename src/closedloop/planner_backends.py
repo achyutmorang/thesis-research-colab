@@ -2360,6 +2360,244 @@ def _extract_sdc_action_vector(planner_out: Any, sdc_idx: int, fallback_dim: int
 
     return vec.astype(np.float32), val
 
+
+def dist_entropy_from_step(dist_step: Optional[Dict[str, Any]]) -> float:
+    if not isinstance(dist_step, dict):
+        return float('nan')
+    try:
+        weights = np.asarray(dist_step.get('weights', []), dtype=float).reshape(-1)
+        weights = weights[np.isfinite(weights) & (weights > 0.0)]
+        if weights.size <= 0:
+            return float('nan')
+        weights = weights / np.sum(weights)
+        return float(-np.sum(weights * np.log(np.clip(weights, 1e-12, 1.0))))
+    except Exception:
+        return float('nan')
+
+
+def latentdriver_current_action_and_dist(
+    state: Any,
+    selected_idx: np.ndarray,
+    planner_bundle: Dict[str, Any],
+    cfg: ClosedLoopConfig,
+) -> Tuple[np.ndarray, Dict[str, np.ndarray]]:
+    planner_type = planner_bundle['planner_type']
+    if planner_type != 'latentdriver':
+        raise ValueError(f'Unsupported planner_type={planner_type!r}. Only latentdriver is supported.')
+
+    ld_adapter = planner_bundle['ld_adapter']
+    ld_state_hist, ld_action_hist = _warm_start_latentdriver_histories(
+        state=state,
+        selected_idx=np.asarray(selected_idx, dtype=np.int32),
+        ld_adapter=ld_adapter,
+        cfg=cfg,
+    )
+    tokens = ld_adapter.encode_tokens(state, selected_idx)
+    ld_state_hist.append(np.asarray(tokens, dtype=np.float32))
+
+    try:
+        action_vec, dist_step = ld_adapter.predict_action_and_dist(ld_state_hist, ld_action_hist)
+    except Exception:
+        action_vec = np.zeros((3,), dtype=np.float32)
+        dist_step = _latentdriver_fallback_dist(
+            action_dim=np.asarray(action_vec).size,
+            mean_hint=action_vec,
+            source='fallback:current_action_exception',
+        )
+
+    if isinstance(dist_step, dict):
+        dist_step.setdefault('fallback', np.asarray(0, dtype=np.int32))
+        dist_step.setdefault('source', 'model')
+        dist_step.setdefault('actor_fallback', np.asarray(0, dtype=np.int32))
+        dist_step.setdefault('belief_kl_step', np.asarray(np.nan, dtype=np.float32))
+        dist_step.setdefault('belief_kl_mean', np.asarray(np.nan, dtype=np.float32))
+        dist_step.setdefault('belief_kl_available', np.asarray(0, dtype=np.int32))
+        try:
+            is_model_fallback = float(np.asarray(dist_step.get('fallback', 0)).reshape(-1)[0]) > 0.5
+        except Exception:
+            is_model_fallback = False
+        if is_model_fallback:
+            dist_step = _inject_action_proxy_into_dist(
+                dist_step,
+                action_vec=action_vec,
+                source='proxy:model_fallback_action',
+            )
+    return np.asarray(action_vec, dtype=np.float32), dist_step
+
+
+def closed_loop_rollout_action_prefix(
+    state: Any,
+    selected_idx: np.ndarray,
+    action_prefix: List[np.ndarray],
+    cfg: ClosedLoopConfig,
+    planner_bundle: Dict[str, Any],
+    seed: int,
+    horizon_steps: Optional[int] = None,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, List[Optional[Dict[str, np.ndarray]]], bool, str]:
+    env = planner_bundle['env']
+    non_sdc_actor = planner_bundle['non_sdc_actor']
+    planner_type = planner_bundle['planner_type']
+    sdc_idx = int(planner_bundle['sdc_idx'])
+
+    try:
+        state = env.reset(state)
+
+        rng = jax.random.PRNGKey(int(seed))
+        k1, step_key = jax.random.split(rng, 2)
+        actor_state_non_sdc = non_sdc_actor.init(k1, state)
+
+        xy_seq = []
+        valid_seq = []
+        action_seq = []
+        action_valid_seq = []
+        dist_trace: List[Optional[Dict[str, np.ndarray]]] = []
+
+        selected_idx_j = jnp.asarray(selected_idx, dtype=jnp.int32)
+        rollout_steps = int(max(1, horizon_steps if horizon_steps is not None else cfg.future_steps))
+        action_dim = None
+
+        if planner_type != 'latentdriver':
+            raise ValueError(f'Unsupported planner_type={planner_type!r}. Only latentdriver is supported.')
+
+        planner_actor = planner_bundle['planner_actor']
+        sdc_fallback_actor = planner_bundle['sdc_fallback_actor']
+        control_dynamics_model = planner_bundle['control_dynamics_model']
+        ld_adapter = planner_bundle['ld_adapter']
+        ld_state_hist, ld_action_hist = _warm_start_latentdriver_histories(
+            state=state,
+            selected_idx=selected_idx,
+            ld_adapter=ld_adapter,
+            cfg=cfg,
+        )
+        kfb, step_key = jax.random.split(step_key)
+        actor_state_sdc_fallback = sdc_fallback_actor.init(kfb, state)
+
+        for t in range(rollout_steps):
+            cur = state.current_sim_trajectory
+            xy_t_all, valid_t_all = squeeze_xy_valid_from_current(cur)
+
+            xy_t = xy_t_all[selected_idx_j, :]
+            valid_t = valid_t_all[selected_idx_j]
+            xy_seq.append(xy_t)
+            valid_seq.append(valid_t)
+
+            step_key, sub = jax.random.split(step_key)
+            subkeys = jax.random.split(sub, 2)
+
+            tokens = ld_adapter.encode_tokens(state, selected_idx)
+            ld_state_hist.append(tokens)
+
+            try:
+                planner_action_vec, dist_step = ld_adapter.predict_action_and_dist(ld_state_hist, ld_action_hist)
+            except Exception:
+                planner_action_vec = np.zeros((3,), dtype=np.float32)
+                dist_step = _latentdriver_fallback_dist(
+                    action_dim=np.asarray(planner_action_vec).size,
+                    mean_hint=planner_action_vec,
+                    source='fallback:predict_action_exception',
+                )
+
+            if isinstance(dist_step, dict):
+                dist_step.setdefault('fallback', np.asarray(0, dtype=np.int32))
+                dist_step.setdefault('source', 'model')
+                dist_step.setdefault('actor_fallback', np.asarray(0, dtype=np.int32))
+                dist_step.setdefault('belief_kl_step', np.asarray(np.nan, dtype=np.float32))
+                dist_step.setdefault('belief_kl_mean', np.asarray(np.nan, dtype=np.float32))
+                dist_step.setdefault('belief_kl_available', np.asarray(0, dtype=np.int32))
+                try:
+                    is_model_fallback = float(np.asarray(dist_step.get('fallback', 0)).reshape(-1)[0]) > 0.5
+                except Exception:
+                    is_model_fallback = False
+                if is_model_fallback:
+                    dist_step = _inject_action_proxy_into_dist(
+                        dist_step,
+                        action_vec=planner_action_vec,
+                        source='proxy:model_fallback_action',
+                    )
+
+            if t < len(action_prefix):
+                action_vec = np.asarray(action_prefix[t], dtype=np.float32).reshape(-1)
+                action_source = 'prefix'
+            else:
+                action_vec = np.asarray(planner_action_vec, dtype=np.float32).reshape(-1)
+                action_source = 'planner'
+            ld_action_hist.append(np.asarray(action_vec, dtype=np.float32))
+            if isinstance(dist_step, dict):
+                dist_step['selected_action_source'] = np.asarray(1 if action_source == 'prefix' else 0, dtype=np.int32)
+            dist_trace.append(dist_step)
+
+            try:
+                out_p_raw = planner_actor.select_action({'actions': action_vec.tolist()}, state, None, None)
+
+                cur_timestep = int(np.asarray(state.timestep).reshape(-1)[0])
+                traj = waymax_datatypes.dynamic_slice(
+                    inputs=state.sim_trajectory,
+                    start_index=cur_timestep,
+                    slice_size=1,
+                    axis=-1,
+                )
+                action_transformed = control_dynamics_model.compute_update(out_p_raw.action, traj).as_action()
+                out_p = _replace_action(out_p_raw, action_transformed)
+                action_ok = True
+            except Exception:
+                out_p = sdc_fallback_actor.select_action({}, state, actor_state_sdc_fallback, subkeys[0])
+                actor_state_sdc_fallback = out_p.actor_state
+                action_vec, action_ok = _extract_sdc_action_vector(out_p, sdc_idx=sdc_idx, fallback_dim=3)
+                if isinstance(dist_step, dict):
+                    dist_step['actor_fallback'] = np.asarray(1, dtype=np.int32)
+                    dist_step = _inject_action_proxy_into_dist(
+                        dist_step,
+                        action_vec=action_vec,
+                        source='proxy:actor_fallback_action',
+                    )
+
+            if action_dim is None:
+                action_dim = int(np.asarray(action_vec).size)
+            if np.asarray(action_vec).size != action_dim:
+                vec = np.zeros((action_dim,), dtype=np.float32)
+                n = min(action_dim, np.asarray(action_vec).size)
+                vec[:n] = np.asarray(action_vec).reshape(-1)[:n]
+                action_vec = vec
+
+            action_seq.append(np.asarray(action_vec, dtype=np.float32))
+            action_valid_seq.append(bool(action_ok))
+
+            out_n = non_sdc_actor.select_action({}, state, actor_state_non_sdc, subkeys[1])
+            actor_state_non_sdc = out_n.actor_state
+
+            merged = waymax_agents.merge_actions([out_p, out_n])
+            state = env.step(state, merged)
+
+        xy = np.asarray(jnp.stack(xy_seq, axis=1), dtype=np.float32)
+        valid = np.asarray(jnp.stack(valid_seq, axis=1), dtype=bool)
+
+        if len(action_seq) > 0:
+            planner_actions = np.asarray(np.stack(action_seq, axis=0), dtype=np.float32)
+            planner_action_valid = np.asarray(action_valid_seq, dtype=bool)
+        else:
+            planner_actions = np.zeros((rollout_steps, 3), dtype=np.float32)
+            planner_action_valid = np.zeros((rollout_steps,), dtype=bool)
+
+        finite_ok = bool(np.isfinite(xy).all()) and bool(np.isfinite(planner_actions).all())
+        any_valid = bool(valid.any()) and bool(planner_action_valid.any())
+        rollout_feasible = bool(finite_ok and any_valid)
+        note_parts: List[str] = []
+        if not rollout_feasible:
+            note_parts.append('non_finite_or_all_invalid_rollout_or_action')
+        if len(action_prefix) > 0:
+            note_parts.append(f'action_prefix_len={len(action_prefix)}')
+        note = '|'.join(note_parts)
+        return xy, valid, planner_actions, planner_action_valid, dist_trace, rollout_feasible, note
+    except Exception as e:
+        n_obj = int(selected_idx.shape[0])
+        rollout_steps = int(max(1, horizon_steps if horizon_steps is not None else cfg.future_steps))
+        xy = np.zeros((n_obj, rollout_steps, 2), dtype=np.float32)
+        valid = np.zeros((n_obj, rollout_steps), dtype=bool)
+        planner_actions = np.zeros((rollout_steps, 3), dtype=np.float32)
+        planner_action_valid = np.zeros((rollout_steps,), dtype=bool)
+        dist_trace = [None for _ in range(rollout_steps)]
+        return xy, valid, planner_actions, planner_action_valid, dist_trace, False, f'rollout_exception: {e}'
+
 def closed_loop_rollout_selected(
     base_state: Any,
     selected_idx: np.ndarray,

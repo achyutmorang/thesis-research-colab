@@ -34,6 +34,21 @@ from .surprise_potential_flow import (
     run_surprise_potential_metric_sweep,
     run_surprise_potential_single_metric,
 )
+from .risk_training_flow import (
+    RiskDatasetBundle,
+    RiskTrainingFlowBundle,
+    build_risk_dataset_from_runner,
+    run_risk_training_flow,
+    train_and_calibrate_risk_model,
+)
+from .uq_benchmark_flow import (
+    UQBenchmarkFlowBundle,
+    run_uq_benchmark_flow,
+)
+from .paper_export_flow import (
+    PaperExportBundle,
+    export_paper_tables_and_figures,
+)
 
 __all__ = [
     "ExportBundle",
@@ -68,4 +83,13 @@ __all__ = [
     "report_surprise_potential_sweep",
     "run_surprise_potential_metric_sweep",
     "run_surprise_potential_single_metric",
+    "RiskDatasetBundle",
+    "RiskTrainingFlowBundle",
+    "build_risk_dataset_from_runner",
+    "run_risk_training_flow",
+    "train_and_calibrate_risk_model",
+    "UQBenchmarkFlowBundle",
+    "run_uq_benchmark_flow",
+    "PaperExportBundle",
+    "export_paper_tables_and_figures",
 ]

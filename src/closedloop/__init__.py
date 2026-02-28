@@ -1,41 +1,18 @@
-from .config import (
-    SearchConfig,
-    ClosedLoopConfig,
-    align_dataset_scale,
-    auto_select_shard_id,
-    build_run_artifact_paths,
-    configure_persistent_run_prefix,
-    initialize_configs,
-    inspect_shard_progress,
-    resolve_latentdriver_checkpoint,
-    restore_artifacts_via_upload,
-    shard_run_prefix,
-)
-from .calibration import diagnose_surprise_root_cause, run_surprise_quality_gate
-from .core import (
-    build_closedloop_runner_and_splits,
-    make_waymax_data_iter,
-    run_quick_surprise_probe,
-    run_preflight_and_calibration,
-    run_closed_loop,
-)
-from .resume_io import export_closedloop_artifacts, summarize_method_outputs
-from .signal_analysis import (
-    analyze_surprise_signal_usefulness,
-    save_surprise_signal_usefulness_artifacts,
-)
-from .visualization import plot_predictive_distribution_step, preview_predictive_distribution_pair
-from .colab_runtime import (
-    ensure_drive_ready,
-    ensure_repo_checkout,
-    prepare_repo_imports,
-    run_cached_deterministic_setup,
-)
+from __future__ import annotations
+
+from importlib import import_module
+from typing import Dict
 
 _WORKFLOW_EXPORTS = [
     'SimulationContextBundle',
+    'PaperExportBundle',
+    'RiskDatasetBundle',
+    'RiskTrainingFlowBundle',
+    'UQBenchmarkFlowBundle',
     'analyze_signal_if_available',
+    'build_risk_dataset_from_runner',
     'build_full_simulation_context',
+    'export_paper_tables_and_figures',
     'configure_experiment_profile',
     'initialize_run_context',
     'report_export_bundle',
@@ -46,11 +23,14 @@ _WORKFLOW_EXPORTS = [
     'report_signal_bundle',
     'report_surprise_gate_bundle',
     'resolve_main_loop_policy',
+    'run_risk_training_flow',
     'run_main_loop_with_policy',
     'run_preflight_bundle',
     'run_quick_probe_with_auto_escalation',
     'run_surprise_gate_with_policy',
+    'run_uq_benchmark_flow',
     'summarize_and_export_if_available',
+    'train_and_calibrate_risk_model',
 ]
 
 __all__ = [
@@ -58,7 +38,9 @@ __all__ = [
     'ClosedLoopConfig',
     'align_dataset_scale',
     'auto_select_shard_id',
+    'BenchmarkBundle',
     'build_run_artifact_paths',
+    'build_uq_artifact_paths',
     'build_closedloop_runner_and_splits',
     'configure_persistent_run_prefix',
     'diagnose_surprise_root_cause',
@@ -67,6 +49,8 @@ __all__ = [
     'inspect_shard_progress',
     'make_waymax_data_iter',
     'run_quick_surprise_probe',
+    'run_risk_aware_closed_loop_step',
+    'run_uq_benchmark',
     'resolve_latentdriver_checkpoint',
     'restore_artifacts_via_upload',
     'run_preflight_and_calibration',
@@ -75,7 +59,10 @@ __all__ = [
     'save_surprise_signal_usefulness_artifacts',
     'plot_predictive_distribution_step',
     'preview_predictive_distribution_pair',
+    'RiskControlSelection',
+    'select_action_with_calibrated_risk',
     'shard_run_prefix',
+    'summarize_controller_tradeoff',
     'summarize_method_outputs',
     'analyze_surprise_signal_usefulness',
     'ensure_drive_ready',
@@ -84,14 +71,83 @@ __all__ = [
     'run_cached_deterministic_setup',
 ] + _WORKFLOW_EXPORTS
 
+_SYMBOL_MODULE: Dict[str, str] = {
+    # config
+    'SearchConfig': 'src.closedloop.config',
+    'ClosedLoopConfig': 'src.closedloop.config',
+    'align_dataset_scale': 'src.closedloop.config',
+    'auto_select_shard_id': 'src.closedloop.config',
+    'build_run_artifact_paths': 'src.closedloop.config',
+    'build_uq_artifact_paths': 'src.closedloop.config',
+    'configure_persistent_run_prefix': 'src.closedloop.config',
+    'initialize_configs': 'src.closedloop.config',
+    'inspect_shard_progress': 'src.closedloop.config',
+    'resolve_latentdriver_checkpoint': 'src.closedloop.config',
+    'restore_artifacts_via_upload': 'src.closedloop.config',
+    'shard_run_prefix': 'src.closedloop.config',
+    # risk benchmark/control
+    'BenchmarkBundle': 'src.closedloop.risk_benchmark',
+    'run_uq_benchmark': 'src.closedloop.risk_benchmark',
+    'summarize_controller_tradeoff': 'src.closedloop.risk_benchmark',
+    'RiskControlSelection': 'src.closedloop.risk_control',
+    'run_risk_aware_closed_loop_step': 'src.closedloop.risk_control',
+    'select_action_with_calibrated_risk': 'src.closedloop.risk_control',
+    # calibration/core
+    'diagnose_surprise_root_cause': 'src.closedloop.calibration',
+    'run_surprise_quality_gate': 'src.closedloop.calibration',
+    'build_closedloop_runner_and_splits': 'src.closedloop.core',
+    'make_waymax_data_iter': 'src.closedloop.core',
+    'run_quick_surprise_probe': 'src.closedloop.core',
+    'run_preflight_and_calibration': 'src.closedloop.core',
+    'run_closed_loop': 'src.closedloop.core',
+    # artifact/signal/viz/runtime
+    'export_closedloop_artifacts': 'src.closedloop.resume_io',
+    'summarize_method_outputs': 'src.closedloop.resume_io',
+    'analyze_surprise_signal_usefulness': 'src.closedloop.signal_analysis',
+    'save_surprise_signal_usefulness_artifacts': 'src.closedloop.signal_analysis',
+    'plot_predictive_distribution_step': 'src.closedloop.visualization',
+    'preview_predictive_distribution_pair': 'src.closedloop.visualization',
+    'ensure_drive_ready': 'src.closedloop.colab_runtime',
+    'ensure_repo_checkout': 'src.closedloop.colab_runtime',
+    'prepare_repo_imports': 'src.closedloop.colab_runtime',
+    'run_cached_deterministic_setup': 'src.closedloop.colab_runtime',
+    # workflows: closedloop flow
+    'SimulationContextBundle': 'src.workflows.closedloop_flow',
+    'analyze_signal_if_available': 'src.workflows.closedloop_flow',
+    'build_full_simulation_context': 'src.workflows.closedloop_flow',
+    'configure_experiment_profile': 'src.workflows.closedloop_flow',
+    'initialize_run_context': 'src.workflows.closedloop_flow',
+    'report_export_bundle': 'src.workflows.closedloop_flow',
+    'report_main_loop_bundle': 'src.workflows.closedloop_flow',
+    'report_preflight_bundle': 'src.workflows.closedloop_flow',
+    'report_quick_probe_bundle': 'src.workflows.closedloop_flow',
+    'report_run_context': 'src.workflows.closedloop_flow',
+    'report_signal_bundle': 'src.workflows.closedloop_flow',
+    'report_surprise_gate_bundle': 'src.workflows.closedloop_flow',
+    'resolve_main_loop_policy': 'src.workflows.closedloop_flow',
+    'run_main_loop_with_policy': 'src.workflows.closedloop_flow',
+    'run_preflight_bundle': 'src.workflows.closedloop_flow',
+    'run_quick_probe_with_auto_escalation': 'src.workflows.closedloop_flow',
+    'run_surprise_gate_with_policy': 'src.workflows.closedloop_flow',
+    'summarize_and_export_if_available': 'src.workflows.closedloop_flow',
+    # workflows: risk/uq/paper
+    'RiskDatasetBundle': 'src.workflows.risk_training_flow',
+    'RiskTrainingFlowBundle': 'src.workflows.risk_training_flow',
+    'build_risk_dataset_from_runner': 'src.workflows.risk_training_flow',
+    'run_risk_training_flow': 'src.workflows.risk_training_flow',
+    'train_and_calibrate_risk_model': 'src.workflows.risk_training_flow',
+    'UQBenchmarkFlowBundle': 'src.workflows.uq_benchmark_flow',
+    'run_uq_benchmark_flow': 'src.workflows.uq_benchmark_flow',
+    'PaperExportBundle': 'src.workflows.paper_export_flow',
+    'export_paper_tables_and_figures': 'src.workflows.paper_export_flow',
+}
+
 
 def __getattr__(name: str):
-    if name in _WORKFLOW_EXPORTS:
-        # Avoid eager import of workflow symbols; eager import creates a circular
-        # dependency when src.workflows imports src.closedloop internals.
-        from src.workflows import closedloop_flow as _closedloop_flow
-
-        value = getattr(_closedloop_flow, name)
-        globals()[name] = value
-        return value
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    module_name = _SYMBOL_MODULE.get(name)
+    if module_name is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    mod = import_module(module_name)
+    value = getattr(mod, name)
+    globals()[name] = value
+    return value
