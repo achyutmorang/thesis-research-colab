@@ -35,7 +35,47 @@ This codebase is intentionally experimental.
 - `src/risk_model/`: offline risk-model training, calibration, inference, and artifact helpers.
 - `src/workflows/`: notebook workflow orchestration (`closedloop_flow.py`, `surprise_potential_flow.py`).
 - `src/platform/`: Colab/runtime bootstrap (repo sync, Drive checks, deterministic setup, hot reload).
+- `src/experiments/`: experiment-pack contracts, registry, and scaffold utilities for new paper ideas.
+- `experiments/`: pack-level docs (one folder per existing research track).
+- `configs/experiments/`: notebook/runtime defaults per experiment pack.
 - `scripts/`: setup and utility scripts.
+
+## Paper-First Refactor
+The repository now uses **experiment packs** as the top-level research unit:
+
+- one pack = one paper replication or one new idea
+- each pack maps to notebook(s) + workflow entrypoint(s) + config JSON
+- notebooks stay thin; methods live in reusable `src/` modules
+
+Discover packs programmatically:
+
+```python
+from src.workflows import list_experiment_packs
+
+for pack in list_experiment_packs():
+    print(pack.slug, "->", pack.notebooks)
+```
+
+Validate all pack paths:
+
+```python
+from src.workflows import validate_registry
+
+report = validate_registry(".")
+print(report)
+```
+
+Scaffold a new paper idea:
+
+```bash
+python scripts/new_experiment.py \
+  --slug social-lstm-replication \
+  --title "Social LSTM Replication" \
+  --objective "Replicate Social LSTM style interaction modeling on WOMD slices."
+```
+
+Notebook starter template:
+- `notebooks/templates/paper_experiment_colab_template.ipynb`
 
 ## Recommended Workflow
 1. Open `notebooks/closedloop_simulation_colab.ipynb` in Colab.

@@ -1,0 +1,12 @@
+{
+  "slug": "surprise-potential",
+  "title": "Surprise Potential Sweep",
+  "objective": "Compare surprise metrics and perturbation families with fast feasibility checks.",
+  "run": {
+    "run_tag_prefix": "surprise_potential",
+    "persist_root": "/content/drive/MyDrive/waymax_experiments/closedloop_runs/v1",
+    "n_shards": 1,
+    "shard_id": 0
+  }
+}
+

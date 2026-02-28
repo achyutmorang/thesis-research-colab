@@ -24,7 +24,18 @@ jobs:
 
       - name: Syntax check
         run: |
-          python -m py_compile src/closedloop/*.py scripts/*.py tests/*.py
+          python - <<'PY'
+          import compileall
+          import pathlib
+          import sys
+
+          ok = True
+          for target in ("src", "scripts", "tests"):
+              path = pathlib.Path(target)
+              if path.exists():
+                  ok = compileall.compile_dir(str(path), force=False, quiet=1) and ok
+          sys.exit(0 if ok else 1)
+          PY
 
       - name: Run unit tests
         run: |

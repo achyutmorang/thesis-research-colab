@@ -16,3 +16,6 @@ __pycache__/
 *.ckpt
 *.pt
 *.pth
+
+# Versioned experiment configs
+!configs/experiments/*.json

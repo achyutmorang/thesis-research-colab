@@ -1,0 +1,12 @@
+{
+  "slug": "risk-uq-suite",
+  "title": "Risk And UQ Suite",
+  "objective": "Train, calibrate, and benchmark risk models with reproducible paper exports.",
+  "run": {
+    "run_tag_prefix": "risk_uq",
+    "persist_root": "/content/drive/MyDrive/waymax_experiments/risk_uq_runs/v1",
+    "n_shards": 1,
+    "shard_id": 0
+  }
+}
+

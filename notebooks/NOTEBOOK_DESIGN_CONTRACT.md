@@ -7,6 +7,7 @@ Use this as the standard for any Colab notebook, regardless of topic.
 - Resume work without manual reconstruction.
 - Keep notebooks clean, fast, and deterministic.
 - Separate orchestration (notebook) from logic (`src/`).
+- Keep each notebook attached to one experiment pack (`experiments/<slug>/` + `configs/experiments/<slug>.json`).
 
 ## Core Principles
 1. Notebook cells orchestrate; modules implement.
