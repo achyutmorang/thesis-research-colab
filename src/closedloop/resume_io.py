@@ -8,7 +8,10 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-import jax
+try:
+    import jax
+except Exception:  # pragma: no cover - optional in lightweight test environments
+    jax = None
 import numpy as np
 import pandas as pd
 
@@ -685,8 +688,8 @@ def export_closedloop_artifacts(
             'waymax': _package_version('waymo-waymax'),
             'torch': _package_version('torch'),
         },
-        'jax_backend': str(jax.default_backend()),
-        'jax_devices': [str(d) for d in jax.devices()],
+        'jax_backend': str(jax.default_backend()) if jax is not None else 'not_available',
+        'jax_devices': [str(d) for d in jax.devices()] if jax is not None else [],
         'planner': {
             'planner_kind': cfg.planner_kind,
             'planner_name': cfg.planner_name,

@@ -38,11 +38,16 @@ from .risk_training_flow import (
     RiskDatasetBundle,
     RiskTrainingFlowBundle,
     build_risk_dataset_from_runner,
+    has_existing_risk_model_artifacts,
+    load_existing_risk_dataset_artifact,
+    load_existing_risk_training_bundle,
     run_risk_training_flow,
     train_and_calibrate_risk_model,
 )
 from .uq_benchmark_flow import (
     UQBenchmarkFlowBundle,
+    has_existing_uq_benchmark_artifacts,
+    load_existing_uq_benchmark_bundle,
     run_uq_benchmark_flow,
 )
 from .paper_export_flow import (
@@ -86,9 +91,14 @@ __all__ = [
     "RiskDatasetBundle",
     "RiskTrainingFlowBundle",
     "build_risk_dataset_from_runner",
+    "has_existing_risk_model_artifacts",
+    "load_existing_risk_dataset_artifact",
+    "load_existing_risk_training_bundle",
     "run_risk_training_flow",
     "train_and_calibrate_risk_model",
     "UQBenchmarkFlowBundle",
+    "has_existing_uq_benchmark_artifacts",
+    "load_existing_uq_benchmark_bundle",
     "run_uq_benchmark_flow",
     "PaperExportBundle",
     "export_paper_tables_and_figures",

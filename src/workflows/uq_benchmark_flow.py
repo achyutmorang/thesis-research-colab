@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Dict, Mapping, Optional, Sequence
 
 import numpy as np
@@ -17,6 +18,7 @@ class UQBenchmarkFlowBundle:
     benchmark_bundle: BenchmarkBundle = field(default_factory=BenchmarkBundle)
     controller_summary_df: pd.DataFrame = field(default_factory=pd.DataFrame)
     artifact_paths: Dict[str, str] = field(default_factory=dict)
+    loaded_from_existing: bool = False
 
 
 DEFAULT_LABEL_COLUMNS = (
@@ -24,6 +26,81 @@ DEFAULT_LABEL_COLUMNS = (
     'offroad_h5', 'offroad_h10', 'offroad_h15',
     'failure_proxy_h5', 'failure_proxy_h10', 'failure_proxy_h15',
 )
+
+
+def _normalize_resume_mode(value: Any) -> str:
+    mode = str(value if value is not None else 'auto').strip().lower()
+    if mode not in {'auto', 'fresh', 'resume'}:
+        raise ValueError(f"Invalid resume_mode={value!r}. Expected one of: auto, fresh, resume.")
+    return mode
+
+
+def _read_frame_with_parquet_fallback(preferred_path: str) -> pd.DataFrame:
+    p = Path(preferred_path)
+    if p.exists():
+        try:
+            if p.suffix.lower() == '.parquet':
+                return pd.read_parquet(p)
+            return pd.read_csv(p)
+        except (pd.errors.EmptyDataError, ValueError):
+            return pd.DataFrame()
+    if p.suffix.lower() == '.parquet':
+        csv_path = p.with_suffix('.csv')
+        if csv_path.exists():
+            try:
+                return pd.read_csv(csv_path)
+            except (pd.errors.EmptyDataError, ValueError):
+                return pd.DataFrame()
+    return pd.DataFrame()
+
+
+def _benchmark_artifact_paths(run_prefix: str) -> Dict[str, str]:
+    return {
+        'uq_benchmark_summary': f'{run_prefix}_uq_benchmark_summary.csv',
+        'uq_benchmark_per_shift': f'{run_prefix}_uq_benchmark_per_shift.csv',
+        'uq_reliability_bins': f'{run_prefix}_uq_reliability_bins.csv',
+        'uq_selective_risk_curve': f'{run_prefix}_uq_selective_risk_curve.csv',
+        'uq_shift_gap_summary': f'{run_prefix}_uq_shift_gap_summary.csv',
+        'uq_predictions': f'{run_prefix}_uq_predictions.parquet',
+        'risk_control_summary': f'{run_prefix}_risk_control_summary.csv',
+    }
+
+
+def has_existing_uq_benchmark_artifacts(run_prefix: str) -> bool:
+    paths = _benchmark_artifact_paths(run_prefix)
+    required = [
+        paths['uq_benchmark_summary'],
+        paths['uq_benchmark_per_shift'],
+        paths['uq_reliability_bins'],
+        paths['uq_selective_risk_curve'],
+        paths['uq_shift_gap_summary'],
+    ]
+    return all(Path(p).exists() for p in required)
+
+
+def load_existing_uq_benchmark_bundle(run_prefix: str) -> UQBenchmarkFlowBundle:
+    paths = _benchmark_artifact_paths(run_prefix)
+    summary_df = _read_frame_with_parquet_fallback(paths['uq_benchmark_summary'])
+    per_shift_df = _read_frame_with_parquet_fallback(paths['uq_benchmark_per_shift'])
+    reliability_df = _read_frame_with_parquet_fallback(paths['uq_reliability_bins'])
+    selective_curve_df = _read_frame_with_parquet_fallback(paths['uq_selective_risk_curve'])
+    shift_gap_df = _read_frame_with_parquet_fallback(paths['uq_shift_gap_summary'])
+    pred_df = _read_frame_with_parquet_fallback(paths['uq_predictions'])
+    ctrl_df = _read_frame_with_parquet_fallback(paths['risk_control_summary'])
+    bundle = BenchmarkBundle(
+        summary_df=summary_df,
+        per_shift_df=per_shift_df,
+        reliability_df=reliability_df,
+        selective_curve_df=selective_curve_df,
+        shift_gap_df=shift_gap_df,
+    )
+    return UQBenchmarkFlowBundle(
+        predictions_df=pred_df,
+        benchmark_bundle=bundle,
+        controller_summary_df=ctrl_df,
+        artifact_paths=paths,
+        loaded_from_existing=True,
+    )
 
 
 def run_uq_benchmark_flow(
@@ -36,10 +113,19 @@ def run_uq_benchmark_flow(
     label_columns: Sequence[str] = ('failure_proxy_h15',),
     base_df: Optional[pd.DataFrame] = None,
     controller_df: Optional[pd.DataFrame] = None,
+    resume_mode: str = 'auto',
+    force_rerun: bool = False,
 ) -> UQBenchmarkFlowBundle:
-    if dataset_df.empty:
-        return UQBenchmarkFlowBundle()
+    mode = _normalize_resume_mode(resume_mode)
     run_prefix = run_prefix or cfg.run_prefix
+    if bool((mode in {'auto', 'resume'}) and (not force_rerun) and has_existing_uq_benchmark_artifacts(run_prefix)):
+        return load_existing_uq_benchmark_bundle(run_prefix)
+
+    if dataset_df.empty:
+        if mode == 'resume':
+            raise ValueError('resume_mode=\"resume\" requested but dataset_df is empty and no benchmark artifacts were found.')
+        return UQBenchmarkFlowBundle()
+
     if artifacts is None:
         artifacts = load_risk_artifacts(run_prefix)
 
@@ -87,4 +173,5 @@ def run_uq_benchmark_flow(
         benchmark_bundle=benchmark_bundle,
         controller_summary_df=controller_summary_df,
         artifact_paths=artifact_paths,
+        loaded_from_existing=False,
     )

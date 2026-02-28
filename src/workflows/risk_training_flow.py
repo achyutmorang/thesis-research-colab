@@ -7,9 +7,7 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence
 import numpy as np
 import pandas as pd
 
-from src.closedloop.planner_backends import make_closed_loop_components
 from src.closedloop.risk_benchmark import run_uq_benchmark
-from src.closedloop.risk_candidates import build_candidate_risk_dataset_rows
 from src.risk_model.artifacts import (
     save_risk_artifacts,
     save_risk_dataset_artifacts,
@@ -40,9 +38,130 @@ class RiskTrainingFlowBundle:
     conformal_thresholds: Dict[str, float]
     artifact_paths: Dict[str, str] = field(default_factory=dict)
     calibration_bundle: Any = None
+    loaded_from_existing: bool = False
 
 
 DEFAULT_FAILURE_LABEL = 'failure_proxy_h15'
+DEFAULT_LABEL_COLUMNS = [
+    'collision_h5', 'collision_h10', 'collision_h15',
+    'offroad_h5', 'offroad_h10', 'offroad_h15',
+    'failure_proxy_h5', 'failure_proxy_h10', 'failure_proxy_h15',
+]
+
+
+def _normalize_resume_mode(value: Any) -> str:
+    mode = str(value if value is not None else 'auto').strip().lower()
+    if mode not in {'auto', 'fresh', 'resume'}:
+        raise ValueError(f"Invalid resume_mode={value!r}. Expected one of: auto, fresh, resume.")
+    return mode
+
+
+def _read_frame_with_parquet_fallback(preferred_path: str) -> pd.DataFrame:
+    p = Path(preferred_path)
+    if p.exists():
+        try:
+            if p.suffix.lower() == '.parquet':
+                return pd.read_parquet(p)
+            return pd.read_csv(p)
+        except (pd.errors.EmptyDataError, ValueError):
+            return pd.DataFrame()
+
+    if p.suffix.lower() == '.parquet':
+        csv_path = p.with_suffix('.csv')
+        if csv_path.exists():
+            try:
+                return pd.read_csv(csv_path)
+            except (pd.errors.EmptyDataError, ValueError):
+                return pd.DataFrame()
+    return pd.DataFrame()
+
+
+def _risk_artifact_paths(run_prefix: str) -> Dict[str, str]:
+    return {
+        'dataset': f'{run_prefix}_risk_dataset.parquet',
+        'dataset_summary': f'{run_prefix}_risk_dataset_summary.csv',
+        'train_summary': f'{run_prefix}_risk_train_summary.csv',
+        'validation_predictions': f'{run_prefix}_risk_validation_predictions.parquet',
+        'metadata': f'{run_prefix}_risk_model_metadata.json',
+        'temperature_scalers': f'{run_prefix}_risk_temperature_scalers.json',
+        'conformal_thresholds': f'{run_prefix}_risk_conformal_thresholds.json',
+        'calibration_summary': f'{run_prefix}_risk_calibration_summary.csv',
+        'reliability_bins': f'{run_prefix}_risk_reliability_bins.csv',
+    }
+
+
+def load_existing_risk_dataset_artifact(run_prefix: str) -> pd.DataFrame:
+    return _read_frame_with_parquet_fallback(_risk_artifact_paths(run_prefix)['dataset'])
+
+
+def has_existing_risk_model_artifacts(run_prefix: str) -> bool:
+    paths = _risk_artifact_paths(run_prefix)
+    members = list(Path(Path(paths['metadata']).parent).glob(Path(run_prefix).name + '_risk_ensemble_member_*.npz'))
+    return bool(
+        Path(paths['metadata']).exists()
+        and Path(paths['temperature_scalers']).exists()
+        and Path(paths['conformal_thresholds']).exists()
+        and len(members) > 0
+    )
+
+
+def load_existing_risk_training_bundle(
+    run_prefix: str,
+    dataset_df: Optional[pd.DataFrame] = None,
+) -> RiskTrainingFlowBundle:
+    from src.risk_model.artifacts import load_risk_artifacts
+
+    artifacts = load_risk_artifacts(run_prefix)
+    paths = _risk_artifact_paths(run_prefix)
+
+    train_summary = _read_frame_with_parquet_fallback(paths['train_summary'])
+    val_pred = _read_frame_with_parquet_fallback(paths['validation_predictions'])
+    if dataset_df is None:
+        dataset_df = load_existing_risk_dataset_artifact(run_prefix)
+
+    label_columns = list(artifacts.get('label_columns', DEFAULT_LABEL_COLUMNS))
+    train_bundle = RiskTrainingBundle(
+        model=artifacts['model'],
+        feature_columns=list(artifacts['feature_columns']),
+        label_columns=label_columns,
+        feature_mean=np.asarray(artifacts['feature_mean'], dtype=float),
+        feature_std=np.asarray(artifacts['feature_std'], dtype=float),
+        train_summary=train_summary,
+        validation_predictions=val_pred,
+    )
+
+    calibration_bundle = None
+    if (not val_pred.empty) and all(f'risk_raw_{label}' in val_pred.columns for label in label_columns):
+        calibration_bundle = run_uq_benchmark(
+            val_pred,
+            variants={
+                'raw': 'risk_raw_failure_proxy_h15',
+                'cal': 'risk_cal_failure_proxy_h15',
+            },
+            label_columns=(DEFAULT_FAILURE_LABEL,),
+            n_bins=15,
+        )
+
+    artifact_paths = {
+        'risk_dataset': paths['dataset'] if Path(paths['dataset']).exists() or Path(paths['dataset']).with_suffix('.csv').exists() else '',
+        'risk_dataset_summary': paths['dataset_summary'] if Path(paths['dataset_summary']).exists() else '',
+        'risk_train_summary': paths['train_summary'] if Path(paths['train_summary']).exists() else '',
+        'risk_validation_predictions': paths['validation_predictions'] if Path(paths['validation_predictions']).exists() or Path(paths['validation_predictions']).with_suffix('.csv').exists() else '',
+        'risk_model_metadata': paths['metadata'] if Path(paths['metadata']).exists() else '',
+        'risk_temperature_scalers': paths['temperature_scalers'] if Path(paths['temperature_scalers']).exists() else '',
+        'risk_conformal_thresholds': paths['conformal_thresholds'] if Path(paths['conformal_thresholds']).exists() else '',
+        'risk_calibration_summary': paths['calibration_summary'] if Path(paths['calibration_summary']).exists() else '',
+        'risk_reliability_bins': paths['reliability_bins'] if Path(paths['reliability_bins']).exists() else '',
+    }
+    return RiskTrainingFlowBundle(
+        dataset_bundle=RiskDatasetBundle(dataset_df=dataset_df),
+        training_bundle=train_bundle,
+        scalers=dict(artifacts.get('temperature_scalers', {})),
+        conformal_thresholds={k: float(v) for k, v in dict(artifacts.get('conformal_thresholds', {})).items()},
+        artifact_paths=artifact_paths,
+        calibration_bundle=calibration_bundle,
+        loaded_from_existing=True,
+    )
 
 
 def _meta_map(runner: Any) -> Dict[int, Dict[str, Any]]:
@@ -62,6 +181,9 @@ def build_risk_dataset_from_runner(
     persist: bool = True,
     run_prefix: Optional[str] = None,
 ) -> RiskDatasetBundle:
+    from src.closedloop.planner_backends import make_closed_loop_components
+    from src.closedloop.risk_candidates import build_candidate_risk_dataset_rows
+
     scenarios = getattr(runner, 'data', {}).get('scenarios', [])
     if scenario_ids is None:
         scenario_ids = [int(rec['scenario_id']) for rec in scenarios if isinstance(rec, dict)]
@@ -153,11 +275,7 @@ def train_and_calibrate_risk_model(
     run_prefix = run_prefix or cfg.run_prefix
     train_bundle = train_risk_ensemble(
         dataset_df,
-        label_columns=[
-            'collision_h5', 'collision_h10', 'collision_h15',
-            'offroad_h5', 'offroad_h10', 'offroad_h15',
-            'failure_proxy_h5', 'failure_proxy_h10', 'failure_proxy_h15',
-        ],
+        label_columns=list(DEFAULT_LABEL_COLUMNS),
         ensemble_size=int(getattr(cfg, 'risk_model_ensemble_size', 5)),
         hidden_dims=tuple(getattr(cfg, 'risk_model_hidden_dims', (128, 128))),
         dropout=float(getattr(cfg, 'risk_model_dropout', 0.10)),
@@ -196,6 +314,7 @@ def train_and_calibrate_risk_model(
         conformal_thresholds=conformal_thresholds,
         artifact_paths=artifact_paths,
         calibration_bundle=calibration_bundle,
+        loaded_from_existing=False,
     )
 
 
@@ -207,25 +326,57 @@ def run_risk_training_flow(
     scenario_ids: Optional[Iterable[int]] = None,
     shift_suite: str = 'nominal_clean',
     run_prefix: Optional[str] = None,
+    resume_mode: str = 'auto',
+    force_rebuild_dataset: bool = False,
+    force_retrain_model: bool = False,
 ) -> RiskTrainingFlowBundle:
     run_prefix = run_prefix or cfg.run_prefix
+    mode = _normalize_resume_mode(resume_mode)
+
+    existing_dataset_df = load_existing_risk_dataset_artifact(run_prefix)
+    existing_model_ready = has_existing_risk_model_artifacts(run_prefix)
+    if mode == 'resume':
+        if dataset_df is None and existing_dataset_df.empty:
+            raise FileNotFoundError(
+                f"resume_mode='resume' but dataset artifact not found for run_prefix={run_prefix!r}."
+            )
+        if (not existing_model_ready) and bool(not force_retrain_model):
+            raise FileNotFoundError(
+                f"resume_mode='resume' but risk model artifacts are incomplete for run_prefix={run_prefix!r}."
+            )
+
     if dataset_df is None:
-        if runner is None:
-            raise ValueError('runner or dataset_df is required.')
-        dataset_bundle = build_risk_dataset_from_runner(
-            runner,
-            cfg,
-            scenario_ids=scenario_ids,
-            shift_suite=shift_suite,
-            persist=True,
-            run_prefix=run_prefix,
-        )
-        dataset_df = dataset_bundle.dataset_df
+        can_reuse_dataset = bool((mode in {'auto', 'resume'}) and (not force_rebuild_dataset) and (not existing_dataset_df.empty))
+        if can_reuse_dataset:
+            dataset_df = existing_dataset_df
+            dataset_bundle = RiskDatasetBundle(
+                dataset_df=dataset_df,
+                artifact_paths={'risk_dataset': _risk_artifact_paths(run_prefix)['dataset']},
+            )
+        else:
+            if runner is None:
+                raise ValueError('runner or dataset_df is required when dataset artifact is unavailable.')
+            dataset_bundle = build_risk_dataset_from_runner(
+                runner,
+                cfg,
+                scenario_ids=scenario_ids,
+                shift_suite=shift_suite,
+                persist=True,
+                run_prefix=run_prefix,
+            )
+            dataset_df = dataset_bundle.dataset_df
     else:
         dataset_bundle = RiskDatasetBundle(
             dataset_df=dataset_df,
             artifact_paths=save_risk_dataset_artifacts(run_prefix, dataset_df),
         )
+
+    can_reuse_model = bool((mode in {'auto', 'resume'}) and (not force_retrain_model) and has_existing_risk_model_artifacts(run_prefix))
+    if can_reuse_model:
+        existing_bundle = load_existing_risk_training_bundle(run_prefix=run_prefix, dataset_df=dataset_df)
+        existing_bundle.dataset_bundle = dataset_bundle
+        return existing_bundle
+
     bundle = train_and_calibrate_risk_model(dataset_df, cfg, run_prefix=run_prefix)
     bundle.dataset_bundle = dataset_bundle
     return bundle

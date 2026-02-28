@@ -7,8 +7,6 @@ from typing import Any, Dict, Mapping
 import numpy as np
 import pandas as pd
 
-from src.closedloop.resume_io import write_uq_artifact_schema_manifest
-
 from .calibration import TemperatureScaler
 from .model import NumpyEnsembleMLP
 from .train import RiskTrainingBundle
@@ -32,6 +30,20 @@ def _write_frame(path: str, df: pd.DataFrame) -> str:
             df.to_csv(csv_path, index=False)
             return str(csv_path)
     df.to_csv(p, index=False)
+    return str(p)
+
+
+def _write_uq_artifact_schema_manifest(run_prefix: str, artifact_names: list[str]) -> str:
+    p = _mkdir(f'{run_prefix}_uq_artifact_schema.json')
+    p.write_text(
+        json.dumps(
+            {
+                'schema_version': '1.0.0',
+                'artifacts': sorted(list(artifact_names)),
+            },
+            indent=2,
+        )
+    )
     return str(p)
 
 
@@ -123,5 +135,5 @@ def save_risk_evaluation_artifacts(run_prefix: str, frames: Mapping[str, pd.Data
         if 'predictions' in name or 'dataset' in name:
             ext = '.parquet'
         out[name] = _write_frame(f'{run_prefix}_{name}{ext}', df)
-    out['artifact_schema'] = write_uq_artifact_schema_manifest(run_prefix, sorted(out.keys()))
+    out['artifact_schema'] = _write_uq_artifact_schema_manifest(run_prefix, sorted(out.keys()))
     return out
