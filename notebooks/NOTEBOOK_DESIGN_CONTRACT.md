@@ -1,143 +1,145 @@
-# Colab Notebook Design Contract (Resumable + Persistent)
+# Colab Notebook Design Contract (Generic, Resumable, Persistent)
 
-Use this as the standard for every new research notebook.
+Use this as the standard for any Colab notebook, regardless of topic.
 
-## Goals
-- Thin notebook orchestration, heavy logic in `src/`.
-- Fully resumable on transient Colab runtimes.
-- Persistent artifacts/checkpoints in Google Drive.
-- Deterministic and reproducible runs.
-- Fast iteration with quick probe before expensive runs.
+## Purpose
+- Survive transient Colab runtimes.
+- Resume work without manual reconstruction.
+- Keep notebooks clean, fast, and deterministic.
+- Separate orchestration (notebook) from logic (`src/`).
 
-## Non-Negotiable Rules
-1. Keep notebooks thin:
-   - No large algorithm functions in `.ipynb`.
-   - Put reusable logic in `src/...`.
-2. Every run must be resumable:
-   - Training resume from latest checkpoint.
-   - Experiment resume from latest completed shard/chunk.
-3. Every run must write a manifest:
-   - git commit, config hash, package versions, runtime info.
-4. Every step must be idempotent:
-   - Rerunning a cell should not corrupt state.
-5. Never trust score alone:
-   - Run quick probe and preflight gates before expensive loops.
+## Core Principles
+1. Notebook cells orchestrate; modules implement.
+2. Every step is idempotent.
+3. Every long-running process is resumable.
+4. Persistent storage is the source of truth.
+5. Fail fast with lightweight checks before expensive runs.
 
-## Canonical Cell Order
-1. Title + objective + expected outputs (markdown).
-2. Deterministic setup + auto-restart if package mismatch.
-3. Drive mount + required folder check.
-4. Repo sync + import setup.
-5. Config block (single source of truth).
-6. Run context init (run tag, resume mode, shard selection).
-7. Quick probe (metric sweep + gate checks).
-8. Build full simulation/training context.
-9. Main run loop (with periodic checkpoint flush).
-10. Evaluation + diagnostics.
-11. Export + summary + next actions.
+## Notebook Structure (Required Order)
+1. **Objective cell**:
+   - What this notebook does.
+   - Inputs, outputs, and success criteria.
+2. **Bootstrap cell**:
+   - Check package/runtime versions.
+   - Install only missing/mismatched dependencies.
+   - Restart runtime only when required.
+3. **Storage cell**:
+   - Mount Drive.
+   - Verify required folders exist and are writable.
+4. **Repo sync cell**:
+   - Clone/pull repo.
+   - Set Python path/import guards.
+5. **Configuration cell**:
+   - Single config object / dict.
+   - No hidden defaults spread across cells.
+6. **Run context cell**:
+   - Resolve run name/tag.
+   - Resolve resume mode.
+   - Resolve shard/chunk allocation.
+7. **Fast-fail validation cell**:
+   - Small smoke run.
+   - Data/IO checks.
+   - Sanity constraints.
+8. **Main execution cell**:
+   - Training / simulation / processing loop.
+   - Periodic checkpoint and progress flush.
+9. **Evaluation/reporting cell**:
+   - Metrics, summaries, diagnostics.
+10. **Export cell**:
+   - Persist final artifacts and manifests.
+   - Print next-step actions.
 
-## Required Config Block (Notebook)
+## Mandatory Config Fields
 ```python
-RUN_TAG = ""  # empty means auto-select or auto-resume logic
-RUN_PREFIX = "closedloop_run"
-PERSIST_ROOT = "/content/drive/MyDrive/waymax_experiments/closedloop_runs/v1"
+RUN_NAME = ""
+RUN_PREFIX = "experiment"
+PERSIST_ROOT = "/content/drive/MyDrive/project_runs/v1"
 
-N_SHARDS = 5
-SHARD_ID = 0  # optional manual override; auto-select preferred
+N_SHARDS = 1
+SHARD_ID = 0
+RESUME_FROM_EXISTING = True
 
-AUTO_RUN_MAIN_LOOP_WHEN_READY = True
-RUN_MAIN_LOOP_OVERRIDE = None
+RUN_ENABLED = True
 ```
 
-## Persistent Storage Layout
-Use:
+## Persistent Storage Contract
 ```text
 {PERSIST_ROOT}/
-  {RUN_PREFIX}_{RUN_TAG}/
-    carry_forward.json
-    env_manifest.json
+  {RUN_PREFIX}_{RUN_NAME}/
     config.json
+    env_manifest.json
+    run_manifest.json
+    progress/
+      shard_{i}.json
     checkpoints/
       latest.json
-      ckpt_step_{k}.pt
-    shards/
-      shard_{i}/
-        progress.json
-        results.csv
-        trace.csv
-    exports/
-      summary.csv
-      plots/
+      step_{k}.ckpt
+    outputs/
+      metrics.csv
+      artifacts/
 ```
 
-## Resume Protocol
-### Training Resume
-- Save model/optimizer/scheduler/scaler/RNG states.
-- Save atomic checkpoint:
-  - write to temp file
-  - `fsync`
-  - rename to final path
-- Update `latest.json` only after checkpoint is complete.
+## Resume Contract
+### Checkpointing
+- Save state atomically:
+  - write temp file
+  - flush + fsync
+  - rename
+- Update `latest.json` only after full checkpoint success.
 
-### Experiment Resume
-- Track completion per shard/chunk.
+### Progress Tracking
+- Persist chunk/shard completion markers.
 - On restart:
-  - scan progress files
-  - skip completed shards/chunks
+  - load progress
+  - skip completed units
   - continue from first incomplete unit
 
-## Minimal Required Metadata
-Every run writes:
-- `run_tag`
-- `git_commit`
+## Manifest Contract
+Each run must persist:
+- `run_name`, `run_prefix`
 - `created_utc`
-- `cfg_hash`
+- `git_commit`
+- `config_hash`
 - `python_version`
-- `numpy/pandas/torch/jax versions`
-- `colab_runtime_type` (cpu/gpu)
-- `n_shards`, `shard_id`
+- package versions (core dependencies)
+- runtime type (CPU/GPU)
+- sharding metadata
 
-## Probe-First Policy
-Before main run, quick probe must report:
-- finite surprise rows > 0
-- nonzero surprise fraction >= threshold
-- realized fraction >= threshold
-- raw belief/policy shift checks pass
-- raw-vs-floor fraction checks pass
-
-If not, do not run full experiment.
-
-## What Goes in `src/` vs Notebook
+## What Goes in Notebook vs `src/`
 Move to `src/`:
-- all scoring metrics
-- calibration and gates
-- perturbation generators
-- checkpoint/resume IO
-- export/report utilities
-- model training loops
+- business logic
+- training/inference loops
+- metrics and diagnostics
+- checkpoint + resume I/O
+- export utilities
+- dataset adapters/loaders
 
 Keep in notebook:
-- high-level orchestration
+- orchestration flow
 - config values
-- display/report tables
-- small glue code only
+- concise visual checks
+- calls to reusable APIs
+
+## Agent Implementation Rules
+When an agent writes a Colab notebook:
+1. Follow this contract exactly.
+2. Keep notebook code minimal and readable.
+3. Reuse existing `src/` functions when possible.
+4. Add new reusable code to `src/`, not notebook cells.
+5. Include restart-safe setup and resume-safe run logic.
+6. Include clear status prints after each critical step.
 
 ## Agent Prompt Template
-Give this to any coding agent:
-
 ```text
 Follow notebooks/NOTEBOOK_DESIGN_CONTRACT.md exactly.
-Keep notebook thin and orchestration-only.
-All reusable logic must go to src/.
-Implement resumable training + resumable experiment execution.
-Use PERSIST_ROOT on Google Drive for durable state.
-Write carry_forward/config/env manifests.
-Make quick probe + preflight gates mandatory before main loop.
-Use idempotent cells and atomic checkpoint writes.
+Design a thin Colab notebook with restart-safe bootstrap, Drive-backed persistence, and resumable execution.
+Keep logic in src/ modules and keep notebook cells orchestration-only.
+Ensure idempotent cells, manifest writing, checkpoint resume, and shard/chunk progress resume.
+Add fast-fail validation before full execution.
 ```
 
 ## Optional Enhancements
-- Add heartbeat writes every N minutes (`heartbeat.json`).
-- Add run lock file to prevent concurrent writes.
-- Add retention policy for old checkpoints.
-- Add artifact upload compression for large traces.
+- Heartbeat file (`heartbeat.json`) every N minutes.
+- Run lock file to prevent concurrent writers.
+- Checkpoint retention policy.
+- Auto-compaction/compression for large outputs.
