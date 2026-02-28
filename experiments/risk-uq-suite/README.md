@@ -4,9 +4,9 @@
 Train/calibrate risk models and run uncertainty-quantification benchmarks with paper tables/figures.
 
 ## Notebooks
-- `notebooks/expts_risk_uq/risk_model_training_colab.ipynb`
-- `notebooks/expts_risk_uq/uq_benchmark_colab.ipynb`
-- `notebooks/expts_risk_uq/paper_tables_figures_colab.ipynb`
+- `experiments/risk-uq-suite/notebooks/risk_model_training_colab.ipynb`
+- `experiments/risk-uq-suite/notebooks/uq_benchmark_colab.ipynb`
+- `experiments/risk-uq-suite/notebooks/paper_tables_figures_colab.ipynb`
 
 ## Workflow Entrypoints
 - `src/workflows/risk_training_flow.py`
@@ -16,4 +16,3 @@ Train/calibrate risk models and run uncertainty-quantification benchmarks with p
 ## Core Modules
 - `src/risk_model/`
 - `src/workflows/`
-

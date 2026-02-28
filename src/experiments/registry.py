@@ -12,7 +12,7 @@ _PACKS: Sequence[ExperimentPack] = (
         title='Closed-Loop Simulation And Search',
         objective='Run calibrated closed-loop search with resumable persistence and artifact export.',
         notebooks=(
-            'notebooks/closedloop_simulation_colab.ipynb',
+            'experiments/closedloop-simulation/notebooks/closedloop_simulation_colab.ipynb',
         ),
         workflows=(
             'src/workflows/closedloop_flow.py',
@@ -31,7 +31,7 @@ _PACKS: Sequence[ExperimentPack] = (
         title='Surprise Potential Sweep',
         objective='Compare surprise signal instantiations and counterfactual families before expensive runs.',
         notebooks=(
-            'notebooks/surprise_potential_closedloop_colab.ipynb',
+            'experiments/surprise-potential/notebooks/surprise_potential_closedloop_colab.ipynb',
         ),
         workflows=(
             'src/workflows/surprise_potential_flow.py',
@@ -51,9 +51,9 @@ _PACKS: Sequence[ExperimentPack] = (
         title='Closed-Loop Evaluation',
         objective='Run post-hoc evaluation over closed-loop artifacts with compute-normalized analysis.',
         notebooks=(
-            'notebooks/closedloop_evaluation_colab.ipynb',
-            'notebooks/compute_normalized_blindspot_discovery_colab.ipynb',
-            'notebooks/counterfactual_risk_sensitivity_atlas_colab.ipynb',
+            'experiments/closedloop-evaluation/notebooks/closedloop_evaluation_colab.ipynb',
+            'experiments/closedloop-evaluation/notebooks/compute_normalized_blindspot_discovery_colab.ipynb',
+            'experiments/closedloop-evaluation/notebooks/counterfactual_risk_sensitivity_atlas_colab.ipynb',
         ),
         workflows=(),
         modules=(
@@ -71,9 +71,9 @@ _PACKS: Sequence[ExperimentPack] = (
         title='Risk And Uncertainty Suite',
         objective='Train calibrated risk models and benchmark robustness/calibration with publication exports.',
         notebooks=(
-            'notebooks/expts_risk_uq/risk_model_training_colab.ipynb',
-            'notebooks/expts_risk_uq/uq_benchmark_colab.ipynb',
-            'notebooks/expts_risk_uq/paper_tables_figures_colab.ipynb',
+            'experiments/risk-uq-suite/notebooks/risk_model_training_colab.ipynb',
+            'experiments/risk-uq-suite/notebooks/uq_benchmark_colab.ipynb',
+            'experiments/risk-uq-suite/notebooks/paper_tables_figures_colab.ipynb',
         ),
         workflows=(
             'src/workflows/risk_training_flow.py',
@@ -144,4 +144,3 @@ def validate_registry(repo_root: str | Path) -> Dict[str, Dict[str, List[str]]]:
     for pack in _PACKS:
         out[pack.slug] = validate_pack_paths(repo_root, pack)
     return out
-

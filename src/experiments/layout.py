@@ -23,8 +23,7 @@ def experiment_pack_paths(repo_root: str | Path, slug: str) -> Dict[str, Path]:
     return {
         'pack_dir': root / 'experiments' / pack_slug,
         'config_file': root / 'configs' / 'experiments' / f'{pack_slug}.json',
-        'notebook_file': root / 'notebooks' / f'{pack_slug}_colab.ipynb',
+        'notebook_file': root / 'experiments' / pack_slug / 'notebooks' / f'{pack_slug}_colab.ipynb',
         'workflow_file': root / 'src' / 'workflows' / f'{pack_slug.replace("-", "_")}_flow.py',
         'module_dir': root / 'src' / 'experiments' / 'papers' / pack_slug.replace('-', '_'),
     }
-

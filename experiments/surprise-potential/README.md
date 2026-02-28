@@ -4,7 +4,7 @@
 Evaluate surprise signal definitions and perturbation families before full-budget runs.
 
 ## Primary Notebook
-- `notebooks/surprise_potential_closedloop_colab.ipynb`
+- `experiments/surprise-potential/notebooks/surprise_potential_closedloop_colab.ipynb`
 
 ## Workflow Entrypoint
 - `src/workflows/surprise_potential_flow.py`
@@ -13,4 +13,3 @@ Evaluate surprise signal definitions and perturbation families before full-budge
 - `src/closedloop/calibration.py`
 - `src/closedloop/signal_analysis.py`
 - `src/workflows/surprise_potential_flow.py`
-

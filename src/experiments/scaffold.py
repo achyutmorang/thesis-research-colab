@@ -87,7 +87,7 @@ def scaffold_experiment_pack(
 {objective}
 
 ## Contents
-- Notebook: `notebooks/{pack_slug}_colab.ipynb`
+- Notebook: `experiments/{pack_slug}/notebooks/{pack_slug}_colab.ipynb`
 - Workflow: `src/workflows/{pack_slug.replace('-', '_')}_flow.py`
 - Config: `configs/experiments/{pack_slug}.json`
 - Paper-specific module: `src/experiments/papers/{pack_slug.replace('-', '_')}/`
@@ -150,4 +150,3 @@ def run_{pack_slug.replace('-', '_')}_flow(**kwargs: Any) -> {pack_slug.replace(
         skipped.append(str(paths['notebook_file']))
 
     return {'created': created, 'skipped': skipped}
-

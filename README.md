@@ -1,183 +1,109 @@
 # Waymax Simulation Experiments
 
-Experiment-first research repository for closed-loop planning, calibration, and evaluation on Waymax/WOMD.
+Experiment-first repository for reproducible Waymax/WOMD research on closed-loop simulation, surprise diagnostics, and risk/UQ evaluation.
 
-## Experimental Status
-This codebase is intentionally experimental.
+## Why This Repo Exists
+- Replicate paper methods quickly on Colab.
+- Test new paper ideas with minimal notebook boilerplate.
+- Keep runs resumable despite transient GPU runtimes.
+- Keep notebooks thin and move implementation into reusable `src/` modules.
 
-- Methods, interfaces, and defaults can change as thesis experiments evolve.
-- Notebooks are orchestration/reporting surfaces; core logic is in `src/` modules.
-- Results should always be cited with commit hash + run artifacts, not notebook screenshots alone.
-
-## Open In Colab
-- Closed-loop simulation notebook: [notebooks/closedloop_simulation_colab.ipynb](https://colab.research.google.com/github/achyutmorang/waymax-simulation-experiments/blob/main/notebooks/closedloop_simulation_colab.ipynb)
-- Surprise-potential closed-loop sweep notebook: [notebooks/surprise_potential_closedloop_colab.ipynb](https://colab.research.google.com/github/achyutmorang/waymax-simulation-experiments/blob/main/notebooks/surprise_potential_closedloop_colab.ipynb)
-- Closed-loop evaluation notebook: [notebooks/closedloop_evaluation_colab.ipynb](https://colab.research.google.com/github/achyutmorang/waymax-simulation-experiments/blob/main/notebooks/closedloop_evaluation_colab.ipynb)
-- Compute-normalized discovery notebook: [notebooks/compute_normalized_blindspot_discovery_colab.ipynb](https://colab.research.google.com/github/achyutmorang/waymax-simulation-experiments/blob/main/notebooks/compute_normalized_blindspot_discovery_colab.ipynb)
-- Counterfactual sensitivity notebook: [notebooks/counterfactual_risk_sensitivity_atlas_colab.ipynb](https://colab.research.google.com/github/achyutmorang/waymax-simulation-experiments/blob/main/notebooks/counterfactual_risk_sensitivity_atlas_colab.ipynb)
-- Risk/UQ paper track:
-  - [notebooks/expts_risk_uq/risk_model_training_colab.ipynb](https://colab.research.google.com/github/achyutmorang/waymax-simulation-experiments/blob/main/notebooks/expts_risk_uq/risk_model_training_colab.ipynb)
-  - [notebooks/expts_risk_uq/uq_benchmark_colab.ipynb](https://colab.research.google.com/github/achyutmorang/waymax-simulation-experiments/blob/main/notebooks/expts_risk_uq/uq_benchmark_colab.ipynb)
-  - [notebooks/expts_risk_uq/paper_tables_figures_colab.ipynb](https://colab.research.google.com/github/achyutmorang/waymax-simulation-experiments/blob/main/notebooks/expts_risk_uq/paper_tables_figures_colab.ipynb)
-
-## Research Focus
-- Closed-loop search under fixed compute budget.
-- Calibration + quality gates before expensive runs.
-- Surprise-signal usefulness diagnostics for ranking quality.
-- Paper-style counterfactual-family sweeps (`hist_prim`, `fut_prim`, `hist_rmv`, etc.) in closed loop.
-- Counterfactual and compute-normalized post-hoc evaluation.
-- Calibrated closed-loop risk modeling and risk-aware control on top of the LatentDriver backend.
-- Waymax uncertainty-quantification benchmark artifacts for calibration, selective risk, and shift robustness.
+## Design Contract
+- Notebook contract: `notebooks/NOTEBOOK_DESIGN_CONTRACT.md`
+- One experiment pack per research track: `experiments/<slug>/`
+- Pack config defaults: `configs/experiments/<slug>.json`
+- Reusable orchestration APIs: `src/workflows/`
+- Reusable core methods: `src/closedloop/`, `src/risk_model/`, `src/eval*/`
 
 ## Repository Layout
-- `notebooks/`: thin Colab notebooks for orchestration, diagnostics, and reporting.
-- `src/closedloop/`: domain logic (planner integration, calibration, search, metrics, artifact IO).
-- `src/risk_model/`: offline risk-model training, calibration, inference, and artifact helpers.
-- `src/workflows/`: notebook workflow orchestration (`closedloop_flow.py`, `surprise_potential_flow.py`).
-- `src/platform/`: Colab/runtime bootstrap (repo sync, Drive checks, deterministic setup, hot reload).
-- `src/experiments/`: experiment-pack contracts, registry, and scaffold utilities for new paper ideas.
-- `experiments/`: pack-level docs (one folder per existing research track).
-- `configs/experiments/`: notebook/runtime defaults per experiment pack.
-- `scripts/`: setup and utility scripts.
+- `experiments/`
+  - `closedloop-simulation/`
+  - `surprise-potential/`
+  - `closedloop-evaluation/`
+  - `risk-uq-suite/`
+- `configs/experiments/`: versioned runtime defaults per pack.
+- `src/experiments/`: experiment-pack registry and scaffolding utilities.
+- `src/workflows/`: notebook-facing orchestration entrypoints.
+- `src/closedloop/`: planner integration, calibration, search, metrics, resume/export.
+- `src/risk_model/`: risk model training, calibration, inference, artifacts.
+- `src/eval*`: post-hoc analysis tracks.
+- `notebooks/templates/`: starter template for new notebook orchestration surfaces.
+- `scripts/new_experiment.py`: scaffold a new pack.
 
-## Paper-First Refactor
-The repository now uses **experiment packs** as the top-level research unit:
+## Experiment Packs
+### 1) Closed-Loop Simulation
+- Notebook: `experiments/closedloop-simulation/notebooks/closedloop_simulation_colab.ipynb`
+- Colab: <https://colab.research.google.com/github/achyutmorang/waymax-simulation-experiments/blob/main/experiments/closedloop-simulation/notebooks/closedloop_simulation_colab.ipynb>
+- Goal: run calibration-gated, resumable closed-loop search.
 
-- one pack = one paper replication or one new idea
-- each pack maps to notebook(s) + workflow entrypoint(s) + config JSON
-- notebooks stay thin; methods live in reusable `src/` modules
+### 2) Surprise Potential
+- Notebook: `experiments/surprise-potential/notebooks/surprise_potential_closedloop_colab.ipynb`
+- Colab: <https://colab.research.google.com/github/achyutmorang/waymax-simulation-experiments/blob/main/experiments/surprise-potential/notebooks/surprise_potential_closedloop_colab.ipynb>
+- Goal: compare surprise definitions and feasibility before full-budget runs.
 
-Discover packs programmatically:
+### 3) Closed-Loop Evaluation
+- Notebooks:
+  - `experiments/closedloop-evaluation/notebooks/closedloop_evaluation_colab.ipynb`
+  - `experiments/closedloop-evaluation/notebooks/compute_normalized_blindspot_discovery_colab.ipynb`
+  - `experiments/closedloop-evaluation/notebooks/counterfactual_risk_sensitivity_atlas_colab.ipynb`
+- Colab:
+  - <https://colab.research.google.com/github/achyutmorang/waymax-simulation-experiments/blob/main/experiments/closedloop-evaluation/notebooks/closedloop_evaluation_colab.ipynb>
+  - <https://colab.research.google.com/github/achyutmorang/waymax-simulation-experiments/blob/main/experiments/closedloop-evaluation/notebooks/compute_normalized_blindspot_discovery_colab.ipynb>
+  - <https://colab.research.google.com/github/achyutmorang/waymax-simulation-experiments/blob/main/experiments/closedloop-evaluation/notebooks/counterfactual_risk_sensitivity_atlas_colab.ipynb>
+- Goal: analyze artifacts for compute-normalized and counterfactual findings.
 
+### 4) Risk-UQ Suite
+- Notebooks:
+  - `experiments/risk-uq-suite/notebooks/risk_model_training_colab.ipynb`
+  - `experiments/risk-uq-suite/notebooks/uq_benchmark_colab.ipynb`
+  - `experiments/risk-uq-suite/notebooks/paper_tables_figures_colab.ipynb`
+- Colab:
+  - <https://colab.research.google.com/github/achyutmorang/waymax-simulation-experiments/blob/main/experiments/risk-uq-suite/notebooks/risk_model_training_colab.ipynb>
+  - <https://colab.research.google.com/github/achyutmorang/waymax-simulation-experiments/blob/main/experiments/risk-uq-suite/notebooks/uq_benchmark_colab.ipynb>
+  - <https://colab.research.google.com/github/achyutmorang/waymax-simulation-experiments/blob/main/experiments/risk-uq-suite/notebooks/paper_tables_figures_colab.ipynb>
+- Goal: train calibrated risk models and benchmark robustness/calibration.
+
+## Pack Discovery And Validation
 ```python
-from src.workflows import list_experiment_packs
+from src.workflows import list_experiment_packs, validate_registry
 
 for pack in list_experiment_packs():
-    print(pack.slug, "->", pack.notebooks)
+    print(pack.slug, pack.notebooks)
+
+print(validate_registry('.'))
 ```
 
-Validate all pack paths:
-
-```python
-from src.workflows import validate_registry
-
-report = validate_registry(".")
-print(report)
-```
-
-Scaffold a new paper idea:
-
+## Create A New Paper Pack
 ```bash
 python scripts/new_experiment.py \
   --slug social-lstm-replication \
   --title "Social LSTM Replication" \
-  --objective "Replicate Social LSTM style interaction modeling on WOMD slices."
+  --objective "Replicate and extend Social LSTM style interaction modeling on WOMD."
 ```
 
-Notebook starter template:
-- `notebooks/templates/paper_experiment_colab_template.ipynb`
+Scaffold output:
+- `experiments/<slug>/README.md`
+- `experiments/<slug>/notebooks/<slug>_colab.ipynb`
+- `configs/experiments/<slug>.json`
+- `src/workflows/<slug>_flow.py`
+- `src/experiments/papers/<slug>/__init__.py`
 
-## Recommended Workflow
-1. Open `notebooks/closedloop_simulation_colab.ipynb` in Colab.
-2. Run Step 1 bootstrap cell.
-3. In Step 2, set user knobs (`PLANNER_BACKEND`, `RUN_TAG`, `RUN_MODE`, `PERSIST_ROOT`, sharding).
-4. Run quick probe (Step 3) before full dataset build.
-5. Continue preflight, calibration, gate, main loop, and export cells top-to-bottom.
-
-For the risk/UQ paper track:
-
-1. Open `notebooks/expts_risk_uq/risk_model_training_colab.ipynb`.
-2. Build the candidate-level risk dataset and train/calibrate the ensemble risk model.
-3. Open `notebooks/expts_risk_uq/uq_benchmark_colab.ipynb` to score calibration and robustness across shift suites.
-4. Open `notebooks/expts_risk_uq/paper_tables_figures_colab.ipynb` to export publication tables and figures from saved artifacts.
-
-## LatentDriver Backend
-Closed-loop planning is configured for `PLANNER_BACKEND='latentdriver'`.
-
-- Surprise is driven by latent belief KL (`planner_surprise_name='latent_belief_kl'`) from LatentDriver world-model prior/posterior distributions.
-- Action-level KL remains as a runtime fallback when latent belief distributions are unavailable for a step.
-
-Planner defaults are applied centrally in `src/workflows/closedloop_flow.py::configure_experiment_profile`, keeping notebooks orchestration-only.
-
-## Run Management Semantics
-Step 2 is auto-aware and produces an explicit run plan.
-
-- `RUN_TAG`:
-  - If empty and `RUN_MODE` is `auto`/`resume`, Step 2 first tries to auto-adopt the most recent matching run tag under `PERSIST_ROOT` (filtered by `RUN_TAG_PREFIX` and `N_SHARDS`).
-  - If no matching history is found, it auto-generates `<RUN_TAG_PREFIX>_YYYYMMDD_HHMMSS` (UTC).
-- `RUN_MODE`:
-  - `auto`: infer `fresh`/`resume` from existing shard artifacts.
-  - `fresh`: force recomputation for the selected run prefix.
-  - `resume`: continue from existing artifacts when present.
-- `SHARD_ID="auto"`:
-  - picks the least-complete shard first.
-- Config drift warning:
-  - in resume mode, Step 2 compares key config/search fields against prior carry-forward config and warns on mismatches.
-
-## Contributor Access To Persisted Artifacts (Drive Shortcut)
-Ask for edit access to shared folder `waymax_experiments` (owner: Achyut Morang), then add a shortcut:
-
-1. Open Google Drive with the same account used in Colab.
-2. Go to `Shared with me` and find `waymax_experiments`.
-3. Right-click folder -> `Organize` -> `Add shortcut`.
-4. Choose `My Drive` (or subfolder) and confirm.
-
-Then use:
-
-```python
-PERSIST_ROOT = "/content/drive/MyDrive/waymax_experiments/closedloop_runs/v1"
-```
+## Runtime, Persistence, Resume
+- Deterministic setup: `scripts/colab_setup.py`
+- Recommended persistent root (Colab Drive):
+  - `/content/drive/MyDrive/waymax_experiments/...`
+- Run manifests/checkpoints are written by workflow/export modules.
+- Resume behavior is run-tag and shard aware; keep `RUN_TAG` stable to resume the same run.
 
 ## WOMD Access Prerequisite
-Before dataset access in Colab, register your Google account on Waymo Open:
+- Register your Google account at <https://waymo.com/open/terms>.
+- Use the same account in Colab runtime authentication.
 
-1. Visit [waymo.com/open/terms](https://waymo.com/open/terms).
-2. Sign in with your target Colab Google account.
-3. Accept terms and wait for access propagation.
-
-Optional Colab sanity check:
-
-```bash
-!gsutil ls gs://waymo_open_dataset_motion_v_1_1_0/
-```
-
-## Reproducibility Notes
-- Colab runtime dependencies are pinned in `requirements-colab.txt`.
-- Deterministic bootstrap is handled by `scripts/colab_setup.py`.
-- Runtime setup caches healthy states and only reinstalls when required.
-- Exported artifacts include runtime/config manifests for provenance.
-
-## Key Exported Artifacts
-Given run prefix `<run_prefix>`:
-
-- `<run_prefix>_per_scenario_results.csv`
-- `<run_prefix>_per_eval_trace.csv`
-- `<run_prefix>_closedloop_calibration.csv`
-- `<run_prefix>_thresholds.json`
-- `<run_prefix>_quick_summary.csv`
-- `<run_prefix>_runtime_manifest.json`
-- `<run_prefix>_carry_forward_config.json`
-- `<run_prefix>_artifact_schema.json`
-- `<run_prefix>_risk_dataset.parquet`
-- `<run_prefix>_risk_temperature_scalers.json`
-- `<run_prefix>_uq_benchmark_summary.csv`
-- `<run_prefix>_uq_reliability_bins.csv`
-- `<run_prefix>_risk_control_summary.csv`
-- `<run_prefix>_uq_artifact_schema.json`
-
-## Testing And CI
-Run locally:
-
+## Local Testing
 ```bash
 pip install -r requirements-dev.txt
-pytest -q
+PYTHONPATH=. pytest -q
 ```
 
-CI (`.github/workflows/ci.yml`) validates syntax and tests on push/PR.
-
-## Ownership And License
-This repository is thesis research code and is not open source.
-
-- Unauthorized reuse is not permitted.
-- Cite repository URL and exact commit hash when referencing results.
-- License: proprietary, all rights reserved (see `LICENSE`).
+## License
+Proprietary thesis research code. All rights reserved. See `LICENSE`.

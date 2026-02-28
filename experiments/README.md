@@ -27,7 +27,7 @@ python scripts/new_experiment.py \
 This scaffolds:
 - `experiments/<slug>/README.md`
 - `configs/experiments/<slug>.json`
-- `notebooks/<slug>_colab.ipynb`
+- `experiments/<slug>/notebooks/<slug>_colab.ipynb`
 - `src/workflows/<slug>_flow.py`
 - `src/experiments/papers/<slug>/__init__.py`
 
