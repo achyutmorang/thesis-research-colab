@@ -310,6 +310,16 @@ def run_surprise_potential_single_metric(
 ) -> SurprisePotentialRunBundle:
     metric_key = str(metric).strip().lower()
     family_key = normalize_paper_counterfactual_family(counterfactual_family)
+    if not bool(quick_probe_enabled):
+        raise ValueError(
+            "quick_probe_enabled=False is not allowed for this contract-aligned workflow. "
+            "Run quick probe before main loop."
+        )
+    if not bool(surprise_gate_enabled):
+        raise ValueError(
+            "surprise_gate_enabled=False is not allowed for this contract-aligned workflow. "
+            "Run quality gate before main loop."
+        )
     run_context = initialize_run_context(
         run_tag=str(run_tag),
         persist_root=str(persist_root),

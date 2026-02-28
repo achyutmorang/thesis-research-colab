@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 import dataclasses
+import hashlib
 import json
 import os
+import platform
+import shutil
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -53,6 +57,318 @@ def _ensure_surprise_alias_columns(df: pd.DataFrame) -> pd.DataFrame:
 
 def _artifact_schema_manifest_path(run_prefix: str) -> str:
     return f'{run_prefix}_artifact_schema.json'
+
+
+def _repo_root_path() -> Path:
+    # src/closedloop/resume_io.py -> repo root is parents[2]
+    return Path(__file__).resolve().parents[2]
+
+
+def _safe_git_commit() -> str:
+    try:
+        repo_root = _repo_root_path()
+        return subprocess.check_output(
+            ['git', '-C', str(repo_root), 'rev-parse', 'HEAD'],
+            text=True,
+        ).strip()
+    except Exception:
+        return 'unknown'
+
+
+def _stable_json_hash(payload: Dict[str, Any]) -> str:
+    encoded = json.dumps(payload, sort_keys=True, separators=(',', ':'), default=str).encode('utf-8')
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _safe_int(value: Any, default: int) -> int:
+    try:
+        out = int(value)
+    except Exception:
+        return int(default)
+    return int(out)
+
+
+def _colab_runtime_type(jax_devices: List[str]) -> str:
+    if bool(os.environ.get('COLAB_TPU_ADDR')):
+        return 'tpu'
+    if bool(os.environ.get('COLAB_GPU')):
+        return 'gpu'
+    labels = [str(x).lower() for x in jax_devices]
+    if any('tpu' in x for x in labels):
+        return 'tpu'
+    if any(('gpu' in x) or ('cuda' in x) for x in labels):
+        return 'gpu'
+    return 'cpu'
+
+
+def _utc_now_iso() -> str:
+    return time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
+
+
+def _to_jsonable(value: Any) -> Any:
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    if isinstance(value, (np.integer,)):
+        return int(value)
+    if isinstance(value, (np.floating,)):
+        return float(value)
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, dict):
+        return {str(k): _to_jsonable(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [_to_jsonable(v) for v in value]
+    if dataclasses.is_dataclass(value):
+        return _to_jsonable(dataclasses.asdict(value))
+    return str(value)
+
+
+def _safe_json_read(path: Path) -> Dict[str, Any]:
+    if not path.exists():
+        return {}
+    try:
+        payload = json.loads(path.read_text())
+    except Exception:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _atomic_write_json(path: Path, payload: Dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + '.tmp')
+    with open(tmp, 'w') as f:
+        json.dump(_to_jsonable(payload), f, indent=2, sort_keys=True)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, path)
+
+
+def _atomic_write_csv(df: pd.DataFrame, path: str, index: bool = False) -> None:
+    dst = Path(path)
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dst.with_name(dst.name + '.tmp')
+    with open(tmp, 'w', newline='') as f:
+        df.to_csv(f, index=index)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, dst)
+
+
+def _package_version(pkg_name: str) -> str:
+    try:
+        import importlib.metadata as im
+        return str(im.version(pkg_name))
+    except Exception:
+        try:
+            mod = __import__(pkg_name)
+            return str(getattr(mod, '__version__', 'unknown'))
+        except Exception:
+            return 'not_installed'
+
+
+def _file_meta(path: str) -> Dict[str, Any]:
+    if not os.path.exists(path):
+        return {'exists': False}
+    st = os.stat(path)
+    return {
+        'exists': True,
+        'size_bytes': int(st.st_size),
+        'mtime_utc': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(st.st_mtime)),
+    }
+
+
+def _run_identity(
+    cfg: ClosedLoopConfig,
+    search_cfg: SearchConfig,
+    run_prefix: str,
+) -> Dict[str, Any]:
+    cfg_payload = dataclasses.asdict(cfg)
+    search_payload = dataclasses.asdict(search_cfg)
+    run_tag = str(getattr(cfg, 'run_tag', Path(str(run_prefix)).name)).strip() or Path(str(run_prefix)).name
+    run_tag_prefix = str(getattr(cfg, 'run_tag_prefix', 'experiment')).strip() or 'experiment'
+    n_shards = max(1, _safe_int(getattr(cfg, 'n_shards', 1), 1))
+    shard_id_raw = _safe_int(getattr(cfg, 'shard_id', 0), 0)
+    shard_id = int(min(max(shard_id_raw, 0), max(0, n_shards - 1)))
+    jax_devices = [str(d) for d in jax.devices()] if jax is not None else []
+    return {
+        'run_tag': run_tag,
+        'run_prefix': run_tag_prefix,
+        'run_prefix_path': str(run_prefix),
+        'persist_root': str(getattr(cfg, 'persist_root', Path(str(run_prefix)).parent)),
+        'git_commit': _safe_git_commit(),
+        'cfg_hash': _stable_json_hash({'cfg': cfg_payload, 'search_cfg': search_payload}),
+        'n_shards': int(n_shards),
+        'shard_id': int(shard_id),
+        'jax_devices': list(jax_devices),
+        'colab_runtime_type': _colab_runtime_type(jax_devices),
+        'cfg_payload': cfg_payload,
+        'search_cfg_payload': search_payload,
+    }
+
+
+def _contract_layout_paths(run_prefix: str, shard_id: int) -> Dict[str, Path]:
+    run_dir = Path(str(run_prefix))
+    outputs_dir = run_dir / 'outputs'
+    artifacts_dir = outputs_dir / 'artifacts'
+    checkpoints_dir = run_dir / 'checkpoints'
+    progress_dir = run_dir / 'progress'
+    return {
+        'run_dir': run_dir,
+        'config': run_dir / 'config.json',
+        'env_manifest': run_dir / 'env_manifest.json',
+        'run_manifest': run_dir / 'run_manifest.json',
+        'carry_forward': run_dir / 'carry_forward.json',
+        'progress': progress_dir / f'shard_{int(shard_id)}.json',
+        'checkpoints_dir': checkpoints_dir,
+        'checkpoint_latest': checkpoints_dir / 'latest.json',
+        'outputs_dir': outputs_dir,
+        'outputs_metrics': outputs_dir / 'metrics.csv',
+        'outputs_artifacts_dir': artifacts_dir,
+        'outputs_artifact_index': artifacts_dir / 'artifact_index.json',
+    }
+
+
+def _write_contract_mirror(
+    run_prefix: str,
+    cfg: ClosedLoopConfig,
+    search_cfg: SearchConfig,
+    *,
+    carry_forward_config: Dict[str, Any],
+    runtime_manifest: Optional[Dict[str, Any]],
+    artifact_paths: Dict[str, str],
+    results_df: pd.DataFrame,
+    trace_df: pd.DataFrame,
+    quick_summary_df: pd.DataFrame,
+    thresholds: Dict[str, Any],
+    save_step_checkpoint: bool,
+) -> Dict[str, str]:
+    identity = _run_identity(cfg=cfg, search_cfg=search_cfg, run_prefix=run_prefix)
+    paths = _contract_layout_paths(run_prefix=run_prefix, shard_id=int(identity['shard_id']))
+
+    config_payload = {
+        'run_name': str(identity['run_tag']),
+        'run_prefix': str(identity['run_prefix']),
+        'run_prefix_path': str(identity['run_prefix_path']),
+        'cfg_hash': str(identity['cfg_hash']),
+        'cfg': identity['cfg_payload'],
+        'search_cfg': identity['search_cfg_payload'],
+    }
+    _atomic_write_json(paths['config'], config_payload)
+
+    env_payload = _safe_json_read(paths['env_manifest'])
+    env_payload.update({
+        'updated_utc': _utc_now_iso(),
+        'python_version': str(sys.version),
+        'platform': platform.platform(),
+        'git_commit': str(identity['git_commit']),
+        'cfg_hash': str(identity['cfg_hash']),
+        'run_tag': str(identity['run_tag']),
+        'run_prefix': str(identity['run_prefix']),
+        'run_prefix_path': str(identity['run_prefix_path']),
+        'colab_runtime_type': str(identity['colab_runtime_type']),
+        'n_shards': int(identity['n_shards']),
+        'shard_id': int(identity['shard_id']),
+    })
+    if isinstance(runtime_manifest, dict) and runtime_manifest:
+        env_payload.update(dict(runtime_manifest))
+    _atomic_write_json(paths['env_manifest'], env_payload)
+
+    run_payload_prior = _safe_json_read(paths['run_manifest'])
+    created_utc = str(run_payload_prior.get('created_utc', '')).strip() or _utc_now_iso()
+    run_payload = {
+        'run_name': str(identity['run_tag']),
+        'run_prefix': str(identity['run_prefix']),
+        'run_tag': str(identity['run_tag']),
+        'run_prefix_path': str(identity['run_prefix_path']),
+        'created_utc': created_utc,
+        'updated_utc': _utc_now_iso(),
+        'git_commit': str(identity['git_commit']),
+        'config_hash': str(identity['cfg_hash']),
+        'python_version': str(sys.version.split()[0]),
+        'package_versions': dict(env_payload.get('packages', {})),
+        'runtime_type': str(identity['colab_runtime_type']),
+        'n_shards': int(identity['n_shards']),
+        'shard_id': int(identity['shard_id']),
+        'resume_from_existing': bool(cfg.resume_from_existing),
+        'run_mode_applied': str(getattr(cfg, 'run_mode_applied', '')),
+        'artifact_count': int(len(artifact_paths)),
+        'result_rows': int(len(results_df)),
+        'trace_rows': int(len(trace_df)) if isinstance(trace_df, pd.DataFrame) else 0,
+    }
+    _atomic_write_json(paths['run_manifest'], run_payload)
+
+    _atomic_write_json(paths['carry_forward'], carry_forward_config)
+
+    methods = ['random', 'risk_only', 'surprise_only', 'joint']
+    completed = _completed_scenarios(results_df, methods) if isinstance(results_df, pd.DataFrame) else set()
+    progress_payload = {
+        'updated_utc': _utc_now_iso(),
+        'run_tag': str(identity['run_tag']),
+        'run_prefix': str(identity['run_prefix']),
+        'run_prefix_path': str(identity['run_prefix_path']),
+        'n_shards': int(identity['n_shards']),
+        'shard_id': int(identity['shard_id']),
+        'n_rows': int(len(results_df)),
+        'n_trace_rows': int(len(trace_df)) if isinstance(trace_df, pd.DataFrame) else 0,
+        'n_unique_scenarios': int(results_df['scenario_id'].nunique()) if isinstance(results_df, pd.DataFrame) and ('scenario_id' in results_df.columns) else 0,
+        'n_completed_scenarios': int(len(completed)),
+        'checkpoint_every_scenarios': int(cfg.checkpoint_every_scenarios),
+        'resume_from_existing': bool(cfg.resume_from_existing),
+        'thresholds_source': str(thresholds.get('source', '')),
+    }
+    _atomic_write_json(paths['progress'], progress_payload)
+
+    paths['checkpoints_dir'].mkdir(parents=True, exist_ok=True)
+    checkpoint_meta = {
+        'updated_utc': _utc_now_iso(),
+        'run_prefix_path': str(identity['run_prefix_path']),
+        'result_rows': int(len(results_df)),
+        'trace_rows': int(len(trace_df)) if isinstance(trace_df, pd.DataFrame) else 0,
+        'results_artifact': str(artifact_paths.get('per_scenario_results', '')),
+        'trace_artifact': str(artifact_paths.get('per_eval_trace', '')),
+        'progress_artifact': str(paths['progress']),
+    }
+    if bool(save_step_checkpoint):
+        step_key = int(max(0, len(results_df)))
+        step_ckpt = paths['checkpoints_dir'] / f'step_{step_key}.ckpt'
+        _atomic_write_json(step_ckpt, checkpoint_meta)
+        checkpoint_meta['latest_step_checkpoint'] = str(step_ckpt)
+    _atomic_write_json(paths['checkpoint_latest'], checkpoint_meta)
+
+    paths['outputs_dir'].mkdir(parents=True, exist_ok=True)
+    if isinstance(quick_summary_df, pd.DataFrame):
+        quick_summary_df.to_csv(paths['outputs_metrics'], index=False)
+    elif str(artifact_paths.get('quick_summary', '')).strip():
+        src = Path(str(artifact_paths['quick_summary']))
+        if src.exists():
+            shutil.copy2(src, paths['outputs_metrics'])
+
+    paths['outputs_artifacts_dir'].mkdir(parents=True, exist_ok=True)
+    artifact_index = {
+        'updated_utc': _utc_now_iso(),
+        'artifact_count': int(len(artifact_paths)),
+        'artifacts': [
+            {
+                'key': str(k),
+                'path': str(v),
+                'exists': bool(Path(str(v)).exists()),
+            }
+            for k, v in sorted(artifact_paths.items())
+        ],
+    }
+    _atomic_write_json(paths['outputs_artifact_index'], artifact_index)
+
+    return {
+        'contract_run_dir': str(paths['run_dir']),
+        'contract_config': str(paths['config']),
+        'contract_env_manifest': str(paths['env_manifest']),
+        'contract_run_manifest': str(paths['run_manifest']),
+        'contract_carry_forward': str(paths['carry_forward']),
+        'contract_progress': str(paths['progress']),
+        'contract_checkpoint_latest': str(paths['checkpoint_latest']),
+        'contract_outputs_metrics': str(paths['outputs_metrics']),
+        'contract_outputs_artifact_index': str(paths['outputs_artifact_index']),
+    }
 
 
 def artifact_schema_spec() -> Dict[str, Any]:
@@ -187,8 +503,7 @@ def _flush_checkpoint(
     if len(dedup_cols) > 0:
         combined = combined.drop_duplicates(subset=dedup_cols, keep='last')
 
-    Path(out_path).parent.mkdir(parents=True, exist_ok=True)
-    combined.to_csv(out_path, index=False)
+    _atomic_write_csv(combined, out_path, index=False)
     return combined
 
 def _safe_float_dict(d: Dict[str, Any]) -> Dict[str, Any]:
@@ -276,6 +591,7 @@ def _write_progress_artifacts(
     static_frames: Optional[Dict[str, pd.DataFrame]] = None,
 ) -> None:
     paths = build_run_artifact_paths(run_prefix)
+    identity = _run_identity(cfg=cfg, search_cfg=search_cfg, run_prefix=run_prefix)
 
     per_scenario_path = paths['per_scenario_results']
     per_eval_trace_path = paths['per_eval_trace']
@@ -341,7 +657,15 @@ def _write_progress_artifacts(
 
     carry_forward_config = {
         'experiment_track': 'B_closed_loop_simulation_only',
-        'created_utc': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
+        'created_utc': _utc_now_iso(),
+        'run_name': str(identity['run_tag']),
+        'run_prefix': str(identity['run_prefix']),
+        'run_prefix_path': str(identity['run_prefix_path']),
+        'git_commit': str(identity['git_commit']),
+        'cfg_hash': str(identity['cfg_hash']),
+        'n_shards': int(identity['n_shards']),
+        'shard_id': int(identity['shard_id']),
+        'runtime_type': str(identity['colab_runtime_type']),
         'planner': {
             'planner_kind': cfg.planner_kind,
             'planner_name_config': cfg.planner_name,
@@ -356,8 +680,7 @@ def _write_progress_artifacts(
         'thresholds': _safe_float_dict(thresholds),
         'optimization': dataclasses.asdict(search_cfg),
     }
-    with open(carry_path, 'w') as f:
-        json.dump(carry_forward_config, f, indent=2)
+    _atomic_write_json(Path(carry_path), carry_forward_config)
     write_artifact_schema_manifest(run_prefix)
 
     static_frames = static_frames or {}
@@ -374,6 +697,36 @@ def _write_progress_artifacts(
         if isinstance(obj, pd.DataFrame):
             Path(out_path).parent.mkdir(parents=True, exist_ok=True)
             obj.to_csv(out_path, index=False)
+
+    contract_artifact_paths: Dict[str, str] = {
+        'per_scenario_results': str(per_scenario_path),
+        'per_eval_trace': str(per_eval_trace_path),
+        'thresholds': str(thresholds_path),
+        'quick_summary': str(quick_summary_path),
+        'sanity_checks': str(sanity_path),
+        'fairness_checks': str(fairness_path),
+        'trace_diagnostics': str(trace_diag_path),
+        'seed_map': str(seed_map_path),
+        'carry_forward_config': str(carry_path),
+        'artifact_schema': str(schema_manifest_path),
+    }
+    for var_name, out_path in static_pairs:
+        if isinstance(static_frames.get(var_name), pd.DataFrame):
+            contract_artifact_paths[str(var_name)] = str(out_path)
+
+    _write_contract_mirror(
+        run_prefix=run_prefix,
+        cfg=cfg,
+        search_cfg=search_cfg,
+        carry_forward_config=carry_forward_config,
+        runtime_manifest=None,
+        artifact_paths=contract_artifact_paths,
+        results_df=results_df,
+        trace_df=trace_df,
+        quick_summary_df=quick_summary_df,
+        thresholds=thresholds,
+        save_step_checkpoint=True,
+    )
 
 def summarize_method_outputs(closedloop_results_df: pd.DataFrame, closedloop_trace_df: pd.DataFrame):
     usable_df = _ensure_surprise_alias_columns(closedloop_results_df[
@@ -459,6 +812,7 @@ def export_closedloop_artifacts(
 ) -> Dict[str, str]:
     run_prefix = cfg.run_prefix
     artifact_paths = build_run_artifact_paths(run_prefix)
+    identity = _run_identity(cfg=cfg, search_cfg=search_cfg, run_prefix=run_prefix)
 
     per_scenario_path = artifact_paths['per_scenario_results']
     per_eval_trace_path = artifact_paths['per_eval_trace']
@@ -569,19 +923,8 @@ def export_closedloop_artifacts(
     ][['scenario_id', 'seed_used']].drop_duplicates().sort_values('scenario_id')
     seed_map_df.to_csv(seed_map_path, index=False)
 
-    with open(thresholds_path, 'w') as f:
-        json.dump(
-            {
-                k: (
-                    float(v)
-                    if isinstance(v, (np.floating, float, int)) and k not in ['source', 'surprise_metric_name']
-                    else v
-                )
-                for k, v in closedloop_thresholds.items()
-            },
-            f,
-            indent=2,
-        )
+    safe_thresholds = _safe_float_dict(closedloop_thresholds)
+    _atomic_write_json(Path(thresholds_path), safe_thresholds)
 
     surprise_name = str(getattr(cfg, 'planner_surprise_name', 'predictive_seq_w2')).strip().lower()
     surprise_type = 'counterfactual_composite'
@@ -596,7 +939,16 @@ def export_closedloop_artifacts(
 
     carry_forward_config = {
         'experiment_track': 'closed_loop_simulation_only',
-        'created_utc': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
+        'created_utc': _utc_now_iso(),
+        'run_name': str(identity['run_tag']),
+        'run_prefix': str(identity['run_prefix']),
+        'run_prefix_path': str(identity['run_prefix_path']),
+        'git_commit': str(identity['git_commit']),
+        'config_hash': str(identity['cfg_hash']),
+        'cfg_hash': str(identity['cfg_hash']),
+        'n_shards': int(identity['n_shards']),
+        'shard_id': int(identity['shard_id']),
+        'runtime_type': str(identity['colab_runtime_type']),
         'planner': {
             'planner_kind': cfg.planner_kind,
             'planner_name_config': cfg.planner_name,
@@ -635,7 +987,7 @@ def export_closedloop_artifacts(
             'eval_scenario_ids': [int(x) for x in eval_idx],
         },
         'optimization': dataclasses.asdict(search_cfg),
-        'thresholds': closedloop_thresholds,
+        'thresholds': safe_thresholds,
         'risk_failure_thresholds': {
             'collision_distance': float(cfg.collision_distance),
             'ttc_fail_seconds': float(cfg.ttc_fail_seconds),
@@ -646,37 +998,23 @@ def export_closedloop_artifacts(
         },
         'method_labels': ['random', 'risk_only', 'surprise_only', 'joint'],
     }
-    with open(carry_path, 'w') as f:
-        json.dump(carry_forward_config, f, indent=2)
+    _atomic_write_json(Path(carry_path), carry_forward_config)
     write_artifact_schema_manifest(run_prefix)
 
-    import platform
-
-    def _package_version(pkg_name: str) -> str:
-        try:
-            import importlib.metadata as im
-            return str(im.version(pkg_name))
-        except Exception:
-            try:
-                mod = __import__(pkg_name)
-                return str(getattr(mod, '__version__', 'unknown'))
-            except Exception:
-                return 'not_installed'
-
-    def _file_meta(path: str) -> Dict[str, Any]:
-        if not os.path.exists(path):
-            return {'exists': False}
-        st = os.stat(path)
-        return {
-            'exists': True,
-            'size_bytes': int(st.st_size),
-            'mtime_utc': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(st.st_mtime)),
-        }
-
     runtime_manifest = {
-        'created_utc': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
+        'created_utc': _utc_now_iso(),
+        'run_name': str(identity['run_tag']),
+        'run_prefix': str(identity['run_prefix']),
+        'run_prefix_path': str(identity['run_prefix_path']),
+        'git_commit': str(identity['git_commit']),
+        'config_hash': str(identity['cfg_hash']),
+        'cfg_hash': str(identity['cfg_hash']),
         'python_version': str(sys.version),
         'platform': platform.platform(),
+        'colab_runtime_type': str(identity['colab_runtime_type']),
+        'runtime_type': str(identity['colab_runtime_type']),
+        'n_shards': int(identity['n_shards']),
+        'shard_id': int(identity['shard_id']),
         'packages': {
             'jax': _package_version('jax'),
             'jaxlib': _package_version('jaxlib'),
@@ -688,8 +1026,15 @@ def export_closedloop_artifacts(
             'waymax': _package_version('waymo-waymax'),
             'torch': _package_version('torch'),
         },
+        'package_versions': {
+            'jax': _package_version('jax'),
+            'jaxlib': _package_version('jaxlib'),
+            'numpy': _package_version('numpy'),
+            'pandas': _package_version('pandas'),
+            'torch': _package_version('torch'),
+        },
         'jax_backend': str(jax.default_backend()) if jax is not None else 'not_available',
-        'jax_devices': [str(d) for d in jax.devices()] if jax is not None else [],
+        'jax_devices': list(identity['jax_devices']),
         'planner': {
             'planner_kind': cfg.planner_kind,
             'planner_name': cfg.planner_name,
@@ -698,8 +1043,21 @@ def export_closedloop_artifacts(
             'latentdriver_ckpt_meta': _file_meta(cfg.latentdriver_ckpt_path),
         },
     }
+    _atomic_write_json(Path(runtime_manifest_path), runtime_manifest)
 
-    with open(runtime_manifest_path, 'w') as f:
-        json.dump(runtime_manifest, f, indent=2)
+    contract_paths = _write_contract_mirror(
+        run_prefix=run_prefix,
+        cfg=cfg,
+        search_cfg=search_cfg,
+        carry_forward_config=carry_forward_config,
+        runtime_manifest=runtime_manifest,
+        artifact_paths=all_paths,
+        results_df=closedloop_results_df,
+        trace_df=closedloop_trace_df,
+        quick_summary_df=quick_summary_df,
+        thresholds=safe_thresholds,
+        save_step_checkpoint=False,
+    )
+    all_paths.update(contract_paths)
 
     return all_paths

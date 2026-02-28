@@ -34,6 +34,16 @@ from .surprise_potential_flow import (
     run_surprise_potential_metric_sweep,
     run_surprise_potential_single_metric,
 )
+from .surprise_potential_report import (
+    SurprisePotentialRigorousEvalFrames,
+    SurprisePotentialReportFrames,
+    SurprisePotentialReportExport,
+    SurprisePotentialReportLoad,
+    build_surprise_potential_rigorous_eval,
+    build_surprise_potential_report_frames,
+    export_surprise_potential_report,
+    load_surprise_potential_report,
+)
 from .risk_training_flow import (
     RiskDatasetBundle,
     RiskTrainingFlowBundle,
@@ -113,6 +123,14 @@ __all__ = [
     "report_surprise_potential_sweep",
     "run_surprise_potential_metric_sweep",
     "run_surprise_potential_single_metric",
+    "SurprisePotentialReportFrames",
+    "SurprisePotentialReportExport",
+    "SurprisePotentialRigorousEvalFrames",
+    "SurprisePotentialReportLoad",
+    "build_surprise_potential_report_frames",
+    "export_surprise_potential_report",
+    "build_surprise_potential_rigorous_eval",
+    "load_surprise_potential_report",
     "RiskDatasetBundle",
     "RiskTrainingFlowBundle",
     "build_risk_dataset_from_runner",

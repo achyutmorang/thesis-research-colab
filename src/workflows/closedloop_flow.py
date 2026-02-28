@@ -510,6 +510,15 @@ def initialize_run_context(
     else:
         shard_id_int = int(shard_id)
 
+    # Carry run identity into cfg so downstream exporters/manifests can include
+    # run-level metadata without changing every call signature.
+    setattr(cfg, 'run_tag', str(requested_run_tag))
+    setattr(cfg, 'run_tag_prefix', str(run_tag_prefix))
+    setattr(cfg, 'persist_root', str(persist_root))
+    setattr(cfg, 'n_shards', int(n_shards))
+    setattr(cfg, 'shard_id', int(shard_id_int))
+    setattr(cfg, 'run_mode_applied', str(run_mode_applied))
+
     run_prefix = configure_persistent_run_prefix(
         cfg=cfg,
         run_tag=str(requested_run_tag),
