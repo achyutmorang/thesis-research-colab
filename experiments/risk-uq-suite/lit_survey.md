@@ -1,55 +1,59 @@
-# Risk-UQ Suite Literature Survey (High-Citation, Methodology-Focused)
+# Risk-UQ Suite Literature Survey (Decision-Core, Citation-Strengthened)
 
-This revision prioritizes citation quality, decision relevance, and methodological support for our paper direction.
+This pass tightens the survey to maximize citation quality and methodological support for our exact claim.
 
-## Scope and Curation Rules
+## Scope
 
-- Focus: uncertainty/risk that directly changes a decision (action choice, threshold accept/reject, or constrained optimization).
-- Venue priority: NeurIPS, ICLR, ICML, ICRA, CoRL, CVPR, RSS (plus benchmark Datasets/Benchmarks tracks).
-- Balance target: recent SOTA + canonical foundations + closest prior + closed-loop benchmarks.
-- Citation strength is reported qualitatively:
-  - `Very high`: field-defining, typically multi-thousand citations.
-  - `High`: widely used, typically several hundred to >1000.
-  - `Medium`: visible and growing impact.
-  - `Emerging`: recent work, still accruing citations.
+- Focus: papers where uncertainty/risk directly changes a decision variable.
+- Decision variables considered valid: `action selection`, `threshold accept/reject`, `constraint satisfaction`, `fallback/abstain`.
+- Venue focus: NeurIPS, ICLR, ICML, ICRA, CoRL, CVPR, RSS (plus benchmark tracks where needed).
 
-## Portfolio Summary (22 papers)
+## Operational Definition: Decision-Grade Risk
 
-- Recent SOTA (last ~1-4 years): 6
-- Canonical/foundational: 10
-- Closest prior to our setup: 3
-- Benchmarks/substrate: 3
+We define a risk score as **decision-grade** if, at the operating threshold `tau`, it supports correct candidate-level choices in closed-loop:
+1. calibrated near `tau` (probability meaning preserved),
+2. discriminative across candidates (ranking quality),
+3. robust under shift (no collapse/flip in behavior),
+4. decision-useful (`false_safe` down without infeasible conservatism/fallback explosion).
 
-Note: Some papers play multiple roles.
+Scope qualifier for claims in this survey:
+- We target **candidate-level tau-threshold reranking in closed-loop AV simulation under shift**. This is narrower than generic risk-aware control.
 
 ---
 
+## Curated Portfolio (22 Papers)
+
+- Recent SOTA (last ~1-4 years): 6
+- Canonical/foundational: 11
+- Closest prior to our method setting: 3
+- Benchmark substrate papers: 3
+
 ## Master Evidence Table
 
-| ID | Paper | Venue/Year | Citation Strength | Role | Decision Rule (equation/canonical form) | How uncertainty/risk enters decision | Key assumptions | Evaluation | Limitation vs our setting |
+| ID | Paper | Venue/Year | Citation Strength | Role | Decision Rule (canonical) | How uncertainty/risk enters decision | Assumptions | Evaluation | Limitation vs our setting |
 |---|---|---|---|---|---|---|---|---|---|
-| P01 | On Calibration of Modern Neural Networks | ICML 2017 | Very high | Canonical | `p_cal = softmax(z / T)` with `T = argmin NLL_val` | Calibrated probabilities for downstream thresholds | Val IID and stationary | Open-loop, ECE/NLL/Brier | No closed-loop decision impact test |
-| P02 | Predicting Good Probabilities with Supervised Learning | ICML 2005 | High | Canonical | `p = sigma(a s + b)` (Platt) / isotonic map | Score-to-probability map changes threshold outcomes | Monotonic score-risk relation | Open-loop classification/calibration | No shift/closed-loop analysis |
-| P03 | Dropout as a Bayesian Approximation | ICML 2016 | Very high | Canonical | `a* = argmin E[C(a)]` under MC-dropout predictive distribution | Epistemic uncertainty from stochastic forward passes | Dropout posterior approximation quality | Open-loop and RL examples | Calibration-to-decision not audited |
-| P04 | Deep Ensembles | NeurIPS 2017 | Very high | Canonical | `p(y|x)=1/M sum_m p_m(y|x)`; act by risk/confidence | Ensemble spread used as uncertainty in decisions | Ensemble diversity approximates epistemic uncertainty | Open-loop, OOD/UQ metrics | No candidate-level tau control protocol |
-| P05 | Can You Trust Your Model's Uncertainty Under Shift? | NeurIPS 2019 | High | Canonical | Decision-oriented reliability checks under shift | Tests whether uncertainty remains valid OOD | Shift suite approximates deployment | Open-loop shift benchmarks | Does not connect to planner decisions |
-| P06 | Beyond Temperature Scaling: Dirichlet Calibration | NeurIPS 2019 | High | Canonical | `p_cal = DirichletMap(p_raw; theta)` | Better probability map for thresholding | Calibration split representative | Open-loop calibration metrics | No closed-loop policy consequences |
-| P07 | Selective Classification for DNNs | NeurIPS 2017 | High | Canonical | Accept if `s(x) >= theta`, else abstain | Uncertainty/confidence directly drives accept/reject | Score ranking aligns with risk | Open-loop risk-coverage | No sequential control feedback |
-| P08 | SelectiveNet | ICML 2019 | Medium | Canonical | Jointly learn predictor + selection function under coverage target | Uncertainty integrated into selection head | Coverage objective transfers to deployment | Open-loop selective prediction | No AV closed-loop or shift-control coupling |
-| P09 | Deep Gamblers | NeurIPS 2019 | Medium | Canonical | Bet/reject via reservation utility in objective | Confidence controls abstention budget | Utility surrogate matches risk preference | Open-loop abstention metrics | No causal calibration->control link |
-| P10 | Constrained Policy Optimization (CPO) | ICML 2017 | High | Canonical | `max_pi J_R(pi) s.t. J_C(pi) <= d` | Safety cost budget constrains policy updates | Cost surrogate accurately captures safety | Closed-loop RL constraints | Policy-level, not candidate-level tau gating |
-| P11 | Distribution-Free Risk-Controlling Prediction Sets (RCPS) | NeurIPS 2021 | Medium | Canonical | Choose `lambda` s.t. `R_hat(lambda) <= alpha` on calibration set | Risk budget controls acceptance set size | Exchangeability | Open-loop risk-control guarantees | Closed-loop adaptive dynamics break assumptions |
-| P12 | PETS | NeurIPS 2018 | High | Canonical | `u* = argmin_u E_{p_hat}[sum_t l(x_t,u_t)]` | Dynamics uncertainty enters MPC rollout cost | Learned dynamics valid near rollout states | Closed-loop control tasks | No explicit tau accept/reject evaluation |
-| P13 | MultiPath | CoRL 2020 | High | Closest prior | Downstream planners use `argmin_a sum_k w_k C(a,tau_k)` | Multimodal forecast probabilities used as risk proxy | Forecast mode probs are decision-grade | Mostly open-loop prediction + planning relevance | Candidate-level safety thresholding not validated |
-| P14 | MATS | CoRL 2020 | Medium | Closest prior | `a* = argmin_a sum_m w_m C(a,tau^(m))` | Forecast uncertainty affects planning score | Mode weights are usable as risk weights | Planning-control integration experiments | Calibration->decision causality not isolated |
-| P15 | RAP (Risk-Aware Prediction for Planning) | CoRL 2022 | Emerging/Medium | Closest prior + SOTA | `a* = argmin_a E[C(a)] + lambda Risk(C(a))` | Risk-sensitive objective over uncertain futures | Risk functional tuned and stable across scenes | Closed-loop planning outcomes | No explicit calibrated tau-budget diagnostics |
-| P16 | Hierarchical Game-Theoretic Planning for AVs | ICRA 2019 | Medium | SOTA precursor | `u_e* = argmax_{u_e} U_e(u_e, u_h*(u_e))` | Interaction uncertainty enters utility/game response | Human response model fidelity | Closed-loop interaction metrics | Surrogate utilities, not calibrated probabilities |
-| P17 | Safe Occlusion-Aware Active Perception Planning | RSS 2021 | Medium | SOTA precursor | `a* = argmax_a R_task(a) - lambda R_occ(a)` with safety guards | Occlusion uncertainty converted to risk penalty/constraint | Occlusion risk proxy tracks true hazard | Closed-loop occlusion scenarios | Little calibration/threshold error analysis |
-| P18 | CARLA | CoRL 2017 | Very high | Benchmark | `a_t = pi(o_t)` in closed-loop simulator | Supports uncertainty-aware policies; method-defined | Simulator realism approximates deployment | Closed-loop collisions/infractions/success | No standard calibration-to-decision protocol |
-| P19 | nuPlan | NeurIPS D&B 2021 | High | Benchmark | Planner chooses trajectory/action at each step | Supports risk/cost-aware planners | Scenario benchmark coverage adequate | Closed-loop safety/progress/comfort | No required tau-threshold diagnostics |
-| P20 | SafeBench | NeurIPS D&B 2022 | Medium | Benchmark + SOTA | Policy under adversarial/stress scenarios | Robustness stressors expose uncertainty failures | Stress scenarios represent safety-critical shift | Closed-loop safety robustness metrics | Does not isolate calibration as causal factor |
-| P21 | WOSAC | NeurIPS D&B 2023 | Emerging/Medium | Benchmark + SOTA | Interactive policy rollout in multi-agent sim | Method-specific uncertainty handling | Challenge metrics proxy deployment behavior | Closed-loop interactive realism and safety | No explicit candidate-level decision audit |
-| P22 | Waymax | arXiv 2023 | Emerging/Medium | Benchmark substrate | `a_t = pi(o_t)` in accelerated closed-loop sim | Enables controlled uncertainty/risk experiments at scale | Simulator shift knobs reflect meaningful disturbances | Closed-loop simulator metrics | Not itself a risk-calibration methodology |
+| P01 | On Calibration of Modern Neural Networks | ICML 2017 | Very high | Canonical | `p_cal = softmax(z/T)`, `T` fit on val-NLL | Probability map used by downstream thresholds | Calibration split representative, quasi-IID | Open-loop (ECE/NLL/Brier) | No closed-loop causal effect on control |
+| P02 | Predicting Good Probabilities with Supervised Learning | ICML 2005 | High | Canonical | `p = sigma(a s + b)` (Platt) / isotonic map | Score-to-probability conversion changes threshold decisions | Monotonic score-risk relation | Open-loop | No shift/closed-loop analysis |
+| P03 | Dropout as a Bayesian Approximation | ICML 2016 | Very high | Canonical | `a* = argmin_a E[C(a)]` under MC-dropout | Epistemic uncertainty from stochastic passes | Dropout approximates posterior uncertainty | Open-loop + control demos | No calibration-to-decision audit |
+| P04 | Deep Ensembles | NeurIPS 2017 | Very high | Canonical | `p = (1/M) sum_m p_m`; decisions from mean/variance | Ensemble spread as uncertainty signal | Ensemble diversity approximates epistemic | Open-loop UQ/OOD | No tau-threshold decision metrics |
+| P05 | Can You Trust Your Model's Uncertainty Under Shift? | NeurIPS 2019 | High | Canonical | Reliability under controlled shifts | OOD miscalibration diagnosis | Shift benchmarks approximate deployment | Open-loop shift benchmarks | No planner/action-level decision loop |
+| P06 | Beyond Temperature Scaling: Dirichlet Calibration | NeurIPS 2019 | High | Canonical | `p_cal = DirichletMap(p_raw; theta)` | Alternative calibration map for decisions | Val distribution representative | Open-loop calibration | No closed-loop safety impact analysis |
+| P07 | Selective Classification for DNNs | NeurIPS 2017 | High | Canonical | Accept if `s(x) >= theta`, reject otherwise | Confidence directly controls abstain/accept | Ranking quality of confidence | Open-loop risk-coverage | No sequential control coupling |
+| P08 | SelectiveNet | ICML 2019 | Medium | Canonical | Joint predictor-selector with target coverage | Uncertainty integrated in selector head | Coverage surrogate transfers OOD | Open-loop selective prediction | No AV closed-loop shift study |
+| P09 | Deep Gamblers | NeurIPS 2019 | Medium | Canonical | Bet/reject via reservation utility | Confidence controls abstention behavior | Utility captures risk preference | Open-loop abstention metrics | No control-level causal chain |
+| P10 | Constrained Policy Optimization (CPO) | ICML 2017 | High | Canonical | `max_pi J_R(pi)` s.t. `J_C(pi) <= d` | Safety budget constrains policy decision updates | Cost surrogate correctly encodes safety | Closed-loop RL constraints | Policy-level, not candidate-level tau gating |
+| P11 | RCPS: Distribution-Free Risk-Controlling Prediction Sets | NeurIPS 2021 | Medium | Canonical | choose `lambda` s.t. `R_hat(lambda)<=alpha` | Alpha-risk budget controls acceptance set | Exchangeability | Open-loop finite-sample guarantees | Exchangeability fails in adaptive closed-loop |
+| P12 | Conformal Risk Control (CRC) | 2022 | Medium | Canonical | Calibrate threshold/parameter to satisfy target risk | Risk budget enters decision set construction | Calibration data representative/exchangeable | Open-loop risk control | Closed-loop interaction not central |
+| P13 | Policy Gradient for Coherent Risk Measures | NeurIPS 2015 | High | Canonical formal-risk anchor | optimize `max_theta rho(G_theta)` for coherent risk `rho` (e.g., CVaR) | Risk measure directly optimizes policy choice | Risk estimator stable; policy gradient validity | RL control tasks | Not candidate-level tau filtering |
+| P14 | PETS | NeurIPS 2018 | High | Canonical uncertainty-control | `u* = argmin_u E_{p_hat}[sum_t l(x_t,u_t)]` | Dynamics uncertainty inside MPC rollouts | Model validity near visited states | Closed-loop control | No decision-threshold calibration audit |
+| P15 | RAP: Risk-Aware Prediction for Planning | CoRL 2022 | Emerging/Medium | Closest prior + SOTA | `a* = argmin_a E[C(a)] + lambda Risk(C(a))` | Risk-sensitive objective over uncertain futures | Risk functional stable under scene shifts | Closed-loop planning | No explicit calibrated tau-decision analysis |
+| P16 | Hierarchical Game-Theoretic Planning for AVs | ICRA 2019 | Medium | Closest prior | `u_e* = argmax_{u_e} U_e(u_e, u_h*(u_e))` | Interaction uncertainty in utility/game response | Human-response model fidelity | Closed-loop interaction metrics | Surrogate risk, not calibrated probability |
+| P17 | Safe Occlusion-Aware Active Perception Planning | RSS 2021 | Medium | Closest prior + SOTA precursor | `a* = argmax_a R_task(a)-lambda R_occ(a)` with safety guards | Occlusion uncertainty -> risk penalty/constraints | Occlusion proxy captures true hazard | Closed-loop occlusion scenarios | No tau-level false-safe/safe-reject audit |
+| P18 | CARLA | CoRL 2017 | Very high | Benchmark | `a_t = pi(o_t)` in simulator | Supports risk-aware policies (method-dependent) | Simulator realism | Closed-loop collisions/infractions/success | No standard calibration-to-decision protocol |
+| P19 | nuPlan | NeurIPS D&B 2021 | High | Benchmark | planner action/trajectory each step | Supports constrained/risk-aware planners | Scenario suite representativeness | Closed-loop safety/progress/comfort | No required tau-threshold diagnostics |
+| P20 | SafeBench | NeurIPS D&B 2022 | Medium | Benchmark + SOTA | policy under stress/adversarial scenarios | Stress exposes uncertainty failures | Stress scenarios approximate real OOD | Closed-loop safety robustness | Does not isolate calibration as causal factor |
+| P21 | WOSAC | NeurIPS D&B 2023 | Emerging/Medium | Benchmark + SOTA | multi-agent closed-loop rollout policy | Method-specific uncertainty use | Challenge metrics map to realism/safety | Closed-loop interactive metrics | No candidate-level decision audit |
+| P22 | Waymax | arXiv 2023 | Emerging/Medium | Benchmark substrate | `a_t = pi(o_t)` in accelerated sim | Enables controlled shift and candidate-level experiments | Simulator shifts reflect relevant disturbances | Closed-loop simulator metrics | Not itself a decision-grade risk method |
 
 ---
 
@@ -58,7 +62,7 @@ Note: Some papers play multiple roles.
 - P01: [paper](https://proceedings.mlr.press/v70/guo17a.html), [pdf](https://proceedings.mlr.press/v70/guo17a/guo17a.pdf), [local](references/pdfs/guo_2017.pdf)
 - P02: [pdf](https://www.cs.cornell.edu/~alexn/papers/calibration.icml05.crc.rev3.pdf), [local](references/pdfs/obtaining_calibrated_probabilities_boosting_2012.pdf)
 - P03: [paper](https://proceedings.mlr.press/v48/gal16.html), [pdf](https://arxiv.org/pdf/1506.02142.pdf), [local](references/pdfs/dropout_bayesian_2016.pdf)
-- P04: [paper](https://papers.neurips.cc/paper/2017/hash/9ef2ed4b7fd2c810847ffa5fa85bce38-Abstract.html), [pdf](https://arxiv.org/pdf/1612.01474.pdf), [local](references/pdfs/deep_ensembles_2017.pdf)
+- P04: [paper](https://papers.nips.cc/paper/2017/hash/9ef2ed4b7fd2c810847ffa5fa85bce38-Abstract.html), [pdf](https://arxiv.org/pdf/1612.01474.pdf), [local](references/pdfs/deep_ensembles_2017.pdf)
 - P05: [paper](https://papers.nips.cc/paper/2019/hash/8558cb408c1d76621371888657d2eb1d-Abstract.html), [pdf](https://arxiv.org/pdf/1906.02530.pdf), [local](references/pdfs/ovadia_2019.pdf)
 - P06: [paper](https://papers.nips.cc/paper/2019/hash/8ca01ea920679a0fe3728441494041b9-Abstract.html), [pdf](https://arxiv.org/pdf/1910.12656.pdf), [local](references/pdfs/dirichlet_2019.pdf)
 - P07: [paper](https://papers.nips.cc/paper/2017/hash/4a8423d5e91fda00bb7e46540e2b0cf1-Abstract.html), [pdf](https://arxiv.org/pdf/1705.08500.pdf), [local](references/pdfs/selective_classification_2017.pdf)
@@ -66,9 +70,9 @@ Note: Some papers play multiple roles.
 - P09: [paper](https://arxiv.org/abs/1905.09786), [pdf](https://arxiv.org/pdf/1905.09786.pdf), [local](references/pdfs/deep_gamblers_2019.pdf)
 - P10: [paper](https://proceedings.mlr.press/v70/achiam17a.html), [pdf](https://arxiv.org/pdf/1705.10528.pdf), [local](references/pdfs/cpo_2017.pdf)
 - P11: [paper](https://papers.nips.cc/paper_files/paper/2021/hash/32c0fdfc4f8f5f8f2f9ebf58f4a6ef08-Abstract.html), [pdf](https://arxiv.org/pdf/2101.02703.pdf), [local](references/pdfs/rcps_2021.pdf)
-- P12: [paper](https://papers.nips.cc/paper/2018/hash/3de568f8597b94bda53149c7d7f5958c-Abstract.html), [pdf](https://arxiv.org/pdf/1805.12114.pdf), [local](references/pdfs/pets_2018.pdf)
-- P13: [paper](https://proceedings.mlr.press/v100/chai20a.html), [pdf](https://proceedings.mlr.press/v100/chai20a/chai20a.pdf), [local](references/pdfs/multipath_2020.pdf)
-- P14: [paper](https://proceedings.mlr.press/v155/ivanovic21a.html), [pdf](https://arxiv.org/pdf/2009.07517.pdf), [local](references/pdfs/mats_corl_2020.pdf)
+- P12: [paper](https://arxiv.org/abs/2208.02814), [pdf](https://arxiv.org/pdf/2208.02814.pdf), [local](references/pdfs/crc_2022.pdf)
+- P13: [paper](https://papers.nips.cc/paper/2015/hash/024d7f84fff11dd7e8d9c510137a2381-Abstract.html), [pdf](https://arxiv.org/pdf/1502.03919.pdf), [local](references/pdfs/policy_gradient_coherent_risk_2015.pdf)
+- P14: [paper](https://papers.nips.cc/paper/2018/hash/3de568f8597b94bda53149c7d7f5958c-Abstract.html), [pdf](https://arxiv.org/pdf/1805.12114.pdf), [local](references/pdfs/pets_2018.pdf)
 - P15: [paper](https://openreview.net/forum?id=8r5Q2q7s8Q), [pdf](https://arxiv.org/pdf/2210.01368.pdf), [local](references/pdfs/rap_corl_2022.pdf)
 - P16: [paper](https://arxiv.org/abs/1810.05766), [pdf](https://arxiv.org/pdf/1810.05766.pdf), [local](references/pdfs/hierarchical_game_theoretic_icra_2019.pdf)
 - P17: [paper](https://roboticsconference.org/2021/program/papers/033/index.html), [pdf](https://arxiv.org/pdf/2105.08169.pdf), [local](references/pdfs/safe_occlusion_active_perception_rss_2021.pdf)
@@ -80,104 +84,92 @@ Note: Some papers play multiple roles.
 
 ---
 
-## Global Refinement Decisions
+## Critical Cross-Paper Findings
 
-Removed or deprioritized from the core argument:
-1. Pure prediction papers without explicit downstream decision rule.
-2. Niche low-citation papers with overlapping claims but weaker evidence.
-3. Methods that report aggregate accuracy only, without decision-impact or safety metrics.
+## 1) Common Patterns
 
-Replaced with stronger references that directly support claims about:
-1. calibration quality,
-2. threshold/budget decisions,
-3. constrained optimization,
-4. closed-loop safety evaluation.
+1. Uncertainty is mostly injected as a soft cost or risk regularizer.
+2. Constraints/budgets (`d`, `alpha`) are common at policy/trajectory level.
+3. Calibration is typically assessed separately from controller outcomes.
+4. Benchmark studies report safety/performance but rarely decision-threshold diagnostics.
 
----
+## 2) Common Assumptions
 
-## Critical Analysis
+1. `uncertainty score` is a monotonic surrogate of true failure probability.
+2. Risk scores are assumed usable without operating-point calibration.
+3. Validation distribution is close to deployment distribution.
+4. Open-loop reliability is assumed to transfer to closed-loop behavior.
 
-## A) Common Patterns Across Literature
+## 3) What Is Missing Repeatedly
 
-1. Uncertainty is widely used as a **cost weight** or **regularizer** in planning.
-2. Safety is often enforced via **constraints/budgets** (`d`, `alpha`, chance constraints).
-3. Evaluation commonly reports aggregate safety metrics (collision, violations, completion), but rarely decision-level threshold errors.
-4. Calibration work focuses on probability quality metrics, while planning work focuses on trajectory outcomes; these are usually disconnected.
+1. Candidate-level decision auditing at fixed `tau`.
+2. Calibration -> decision correctness -> closed-loop outcome causal chain.
+3. Explicit `false_safe`, `safe_reject`, `feasible_set_rate`, `fallback_rate` under shift.
+4. Bottleneck decomposition between risk model error and controller-rule error.
 
-## B) Common Assumptions
+## 4) Stress-Test of Prior Work in Our Setting
 
-1. Uncertainty is treated as a monotonic proxy for risk.
-2. Raw probabilities/scores are assumed decision-ready after minimal post-processing.
-3. Validation and deployment distributions are assumed sufficiently similar.
-4. Open-loop risk quality is assumed to transfer to closed-loop control behavior.
+Setting: candidate-level selection + tau-threshold + closed-loop + shift.
 
-## C) What Is Consistently Missing
+1. Candidate mismatch:
+- Policy-level success can hide poor candidate-level filtering decisions.
 
-1. Candidate-level decision auditing at a fixed operating threshold `tau`.
-2. Causal chain evaluation: calibration -> decision correctness -> closed-loop outcome.
-3. Explicit measurement of `false-safe` and `safe-reject` under distribution shift.
-4. Bottleneck decomposition to separate model-risk error from controller-rule error.
+2. Tau sensitivity:
+- Small calibration error near `tau` changes accept/reject sets discontinuously.
 
-## D) Stress-Test in Our Setting (candidate-level + tau + closed-loop + shift)
+3. Closed-loop feedback:
+- Early over/under-conservative choices alter state visitation, invalidating static assumptions.
 
-Where prior methods fail concretely:
-1. Candidate-level mismatch:
-   - Policy/trajectory-level methods can show good average safety but still make poor per-candidate accept/reject decisions.
-2. Tau-threshold fragility:
-   - A mildly miscalibrated score can cause feasible-set collapse (`no candidate <= tau`) and excessive fallback.
-3. Closed-loop coupling:
-   - Early conservative or unsafe choices change future states, invalidating static calibration assumptions.
-4. Shift amplification:
-   - OOD shifts can flip behavior from over-conservative to false-safe at the same `tau`.
+4. Shift fragility:
+- Same `tau` can become unsafe (false-safe spike) or unusable (feasible-set collapse) under OOD shift.
 
 ---
 
-## Refined Research Gap Statements (3 versions)
+## Refined Gap Statements
 
 1. Conservative:
-- Existing uncertainty-aware planners and calibration methods are strong individually, but they are not jointly validated for candidate-level threshold decisions in closed-loop AV simulation.
+- Existing calibration and risk-aware control methods are strong individually, but not jointly validated for candidate-level tau-threshold AV decisions in closed-loop.
 
 2. Strong:
-- Prior work rarely evaluates whether calibrated risk probabilities actually improve decision correctness (`false-safe` / `safe-reject`) at operational `tau` in closed-loop, especially under shift.
+- Prior work does not systematically test whether calibration improves decision correctness (`false_safe` / `safe_reject`) at operational `tau` under shift.
 
 3. Bold:
-- The field lacks a decision-grade risk methodology: current pipelines assume risk scores are decision-ready, yet fail to prove calibration-to-decision-to-outcome causality for candidate-level AV control under distribution shift.
+- The field lacks a decision-grade risk methodology that proves calibration-to-decision-to-outcome causality for candidate-level closed-loop AV control under distribution shift.
 
 ---
 
-## Methodology Justification
+## Methodology Justification (Why New Method Is Needed)
 
-Why existing methods are insufficient:
-1. Calibration-only papers do not test control consequences.
-2. Planning-only papers do not test probability reliability at the decision threshold.
-3. Benchmark papers do not prescribe causal diagnostics linking uncertainty quality to decision errors.
+1. Calibration papers optimize probability quality but usually stop before control outcomes.
+2. Planning papers optimize safety/progress but often assume risk signals are decision-ready.
+3. Benchmark papers expose failures but do not prescribe decision-threshold diagnostics.
 
-What method is needed:
+Required methodology shape:
 1. Candidate-level risk estimation for each action option.
-2. Post-hoc calibration (and optionally conformal wrapping) tuned to operating `tau`.
-3. Decision-level diagnostics (`accept_rate`, `false_safe`, `safe_reject`, `fallback_rate`).
-4. Closed-loop and shift-aware evaluation that quantifies tradeoff: safety gain vs progress loss.
+2. Operating-point calibration near `tau` (plus optional conformal wrapping).
+3. Decision metrics at `tau`: `accept_rate`, `false_safe`, `safe_reject`, `feasible_set_rate`, `fallback_rate`.
+4. Closed-loop shift-suite evaluation with explicit safety-progress tradeoff.
 
 ---
 
-## Closest Prior Work Comparison (Direct)
+## Closest Prior Work: Direct Comparison
 
-| Prior work | What they do | What we do differently | Why it matters |
+| Prior work | What they do | What we add | Why it matters |
 |---|---|---|---|
-| RAP (CoRL 2022) | Risk-sensitive planning objective over uncertain predictions | Add explicit post-hoc calibration and tau-threshold decision auditing | Separates risk-model quality from controller behavior |
-| Safe Occlusion-Aware Planning (RSS 2021) | Uses occlusion risk surrogate in planning constraints/objective | Evaluate whether surrogate risk is calibrated for threshold decisions under shift | Prevents hidden over/under-confidence at deployment threshold |
-| Hierarchical Game-Theoretic Planning (ICRA 2019) | Utility/game-based risk-aware interactive control | Add candidate-level accept/reject analysis with fallback and feasibility diagnostics | Converts qualitative risk-aware behavior into measurable decision correctness |
+| RAP (CoRL 2022) | Risk-sensitive planning objective under uncertain predictions | Explicit post-hoc calibration + tau-threshold decision diagnostics | Separates risk estimation quality from controller behavior |
+| Safe Occlusion-Aware Planning (RSS 2021) | Uses occlusion-risk surrogate in planning decisions | Tests whether surrogate risk is decision-grade at tau under shift | Prevents hidden over/under-confidence at deployment threshold |
+| Hierarchical Game-Theoretic Planning (ICRA 2019) | Utility-based risk-aware interactive decisions | Candidate-level accept/reject and fallback feasibility auditing | Converts aggregate safety claims into decision-causal evidence |
 
 ---
 
-## Anchor Papers Defining the Space
+## Anchor Papers (2-3 strongest)
 
-1. **Guo et al., ICML 2017 (P01)**: establishes modern neural miscalibration and temperature scaling baseline.
-2. **CPO, ICML 2017 (P10)**: establishes budgeted safety-constrained decision optimization.
-3. **RAP, CoRL 2022 (P15)**: closest AV planning precedent for uncertainty-to-risk decision integration.
+1. **Guo et al., ICML 2017 (P01)**: canonical calibration baseline.
+2. **CPO, ICML 2017 (P10)**: canonical budgeted safety-constrained decision optimization.
+3. **RAP, CoRL 2022 (P15)**: closest AV uncertainty-to-decision prior.
 
 ---
 
 ## Final Positioning Statement
 
-Existing methods assume uncertainty-derived risk is decision-ready, but fail to validate candidate-level tau-threshold decisions in closed-loop under shift; this motivates a methodology that explicitly calibrates risk for decision correctness and tests the full causal chain from probability quality to control outcomes.
+Existing methods assume uncertainty-derived risk is decision-ready, but fail to validate candidate-level tau-threshold behavior in closed-loop under shift. This motivates a methodology that calibrates risk for decision correctness and evaluates the full calibration -> decision -> outcome chain.
