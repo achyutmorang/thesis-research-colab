@@ -583,6 +583,10 @@ def _probe_collapse_stats(
     min_policy_shift_mean: float = 1e-8,
     min_realization_ratio_mean: float = 0.05,
     require_belief_and_policy: bool = True,
+    min_raw_belief_shift_mean: float = 1e-8,
+    min_raw_policy_shift_mean: float = 1e-8,
+    min_raw_fraction_of_total: float = 0.10,
+    require_raw_signal: bool = True,
 ) -> Tuple[bool, Dict[str, float], List[str], pd.DataFrame]:
     if len(probe_summary_df) == 0:
         metrics = {
@@ -591,8 +595,13 @@ def _probe_collapse_stats(
             "proposal_realized_fraction": 0.0,
             "proposal_effect_l2_mean": 0.0,
             "surprise_belief_shift_mean": 0.0,
+            "surprise_belief_shift_raw_mean": 0.0,
             "surprise_policy_shift_mean": 0.0,
+            "surprise_policy_shift_raw_mean": 0.0,
             "surprise_realization_ratio_mean": 0.0,
+            "surprise_realization_ratio_raw_mean": 0.0,
+            "surprise_belief_raw_fraction": 0.0,
+            "surprise_policy_raw_fraction": 0.0,
         }
         reasons = ["quick_probe_summary_empty"]
     else:
@@ -603,9 +612,16 @@ def _probe_collapse_stats(
             "proposal_realized_fraction": _float_or_default(row.get("proposal_realized_fraction"), 0.0),
             "proposal_effect_l2_mean": _float_or_default(row.get("proposal_effect_l2_mean"), 0.0),
             "surprise_belief_shift_mean": _float_or_default(row.get("surprise_belief_shift_mean"), 0.0),
+            "surprise_belief_shift_raw_mean": _float_or_default(row.get("surprise_belief_shift_raw_mean"), 0.0),
             "surprise_policy_shift_mean": _float_or_default(row.get("surprise_policy_shift_mean"), 0.0),
+            "surprise_policy_shift_raw_mean": _float_or_default(row.get("surprise_policy_shift_raw_mean"), 0.0),
             "surprise_realization_ratio_mean": _float_or_default(row.get("surprise_realization_ratio_mean"), 0.0),
+            "surprise_realization_ratio_raw_mean": _float_or_default(row.get("surprise_realization_ratio_raw_mean"), 0.0),
         }
+        belief_total = max(1e-12, float(metrics["surprise_belief_shift_mean"]))
+        policy_total = max(1e-12, float(metrics["surprise_policy_shift_mean"]))
+        metrics["surprise_belief_raw_fraction"] = float(np.clip(float(metrics["surprise_belief_shift_raw_mean"]) / belief_total, 0.0, 1.0))
+        metrics["surprise_policy_raw_fraction"] = float(np.clip(float(metrics["surprise_policy_shift_raw_mean"]) / policy_total, 0.0, 1.0))
         reasons = []
 
     checks = [
@@ -648,6 +664,36 @@ def _probe_collapse_stats(
         )
     checks.append(("belief_policy_shift", bp_ok, bp_reason))
 
+    raw_belief_ok = bool(metrics["surprise_belief_shift_raw_mean"] >= float(min_raw_belief_shift_mean))
+    raw_policy_ok = bool(metrics["surprise_policy_shift_raw_mean"] >= float(min_raw_policy_shift_mean))
+    raw_belief_frac_ok = bool(metrics["surprise_belief_raw_fraction"] >= float(min_raw_fraction_of_total))
+    raw_policy_frac_ok = bool(metrics["surprise_policy_raw_fraction"] >= float(min_raw_fraction_of_total))
+    if bool(require_belief_and_policy):
+        raw_mag_ok = bool(raw_belief_ok and raw_policy_ok)
+        raw_frac_ok = bool(raw_belief_frac_ok and raw_policy_frac_ok)
+        raw_mag_reason = (
+            f"raw_belief_or_policy_shift_too_small(raw_belief<{float(min_raw_belief_shift_mean):.2e},"
+            f"raw_policy<{float(min_raw_policy_shift_mean):.2e})"
+        )
+        raw_frac_reason = (
+            f"raw_signal_floor_dominated(raw_belief_frac<{float(min_raw_fraction_of_total):.2f},"
+            f"raw_policy_frac<{float(min_raw_fraction_of_total):.2f})"
+        )
+    else:
+        raw_mag_ok = bool(raw_belief_ok or raw_policy_ok)
+        raw_frac_ok = bool(raw_belief_frac_ok or raw_policy_frac_ok)
+        raw_mag_reason = (
+            f"raw_belief_and_policy_shift_too_small(raw_belief<{float(min_raw_belief_shift_mean):.2e},"
+            f"raw_policy<{float(min_raw_policy_shift_mean):.2e})"
+        )
+        raw_frac_reason = (
+            f"raw_signal_floor_dominated_both(raw_belief_frac<{float(min_raw_fraction_of_total):.2f},"
+            f"raw_policy_frac<{float(min_raw_fraction_of_total):.2f})"
+        )
+    if bool(require_raw_signal):
+        checks.append(("raw_belief_policy_shift", raw_mag_ok, raw_mag_reason))
+        checks.append(("raw_signal_fraction", raw_frac_ok, raw_frac_reason))
+
     for _, ok, reason in checks:
         if not bool(ok):
             reasons.append(str(reason))
@@ -686,7 +732,25 @@ def _probe_feasibility_score(metrics: Dict[str, float]) -> float:
     belief = max(0.0, float(metrics.get("surprise_belief_shift_mean", 0.0)))
     policy = max(0.0, float(metrics.get("surprise_policy_shift_mean", 0.0)))
     ratio = max(0.0, float(metrics.get("surprise_realization_ratio_mean", 0.0)))
-    return float(nonzero * realized * np.log1p(effect) * np.log1p(belief) * np.log1p(policy) * max(ratio, 1e-12))
+    raw_belief = max(0.0, float(metrics.get("surprise_belief_shift_raw_mean", 0.0)))
+    raw_policy = max(0.0, float(metrics.get("surprise_policy_shift_raw_mean", 0.0)))
+    belief_total = max(1e-12, belief)
+    policy_total = max(1e-12, policy)
+    raw_frac = 0.5 * (
+        np.clip(raw_belief / belief_total, 0.0, 1.0)
+        + np.clip(raw_policy / policy_total, 0.0, 1.0)
+    )
+    raw_mag = np.log1p(raw_belief) + np.log1p(raw_policy)
+    return float(
+        nonzero
+        * realized
+        * np.log1p(effect)
+        * np.log1p(belief)
+        * np.log1p(policy)
+        * max(ratio, 1e-12)
+        * max(raw_frac, 1e-12)
+        * max(raw_mag, 1e-12)
+    )
 
 
 def build_full_simulation_context(
@@ -739,7 +803,12 @@ def run_quick_probe_with_auto_escalation(
     probe_scale_multipliers: Sequence[float] = (1.0, 1.35, 1.8),
     probe_delta_l2_multipliers: Sequence[float] = (1.0, 1.2, 1.4),
     probe_delta_clip_multipliers: Sequence[float] = (1.0, 1.1, 1.2),
+    probe_persist_step_multipliers: Sequence[float] = (1.0, 2.0, 3.0),
+    probe_interaction_gain_multipliers: Sequence[float] = (1.0, 1.5, 2.0),
     probe_budget_bump_per_escalation: int = 2,
+    probe_force_behavioral_preset: bool = True,
+    probe_target_top_k: int = 3,
+    probe_hist_prim_selector_mode: str = "interaction_band",
     probe_surprise_metrics: Optional[Sequence[str]] = None,
     probe_metric_selection_policy: str = "first_feasible",  # first_feasible | best_feasible_score
     probe_min_nonzero_surprise_fraction: float = 0.01,
@@ -748,13 +817,19 @@ def run_quick_probe_with_auto_escalation(
     probe_min_belief_shift_mean: float = 1e-8,
     probe_min_policy_shift_mean: float = 1e-8,
     probe_min_realization_ratio_mean: float = 0.05,
+    probe_min_raw_belief_shift_mean: float = 1e-8,
+    probe_min_raw_policy_shift_mean: float = 1e-8,
+    probe_min_raw_fraction_of_total: float = 0.10,
     probe_require_belief_and_policy: bool = True,
+    probe_require_raw_signal: bool = True,
     apply_successful_probe_tuning: bool = True,
     build_simulation_context: bool = True,
 ) -> QuickProbeBundle:
     scale_mults = tuple(float(x) for x in probe_scale_multipliers) or (1.0,)
     l2_mults = tuple(float(x) for x in probe_delta_l2_multipliers) or (1.0,)
     clip_mults = tuple(float(x) for x in probe_delta_clip_multipliers) or (1.0,)
+    persist_mults = tuple(float(x) for x in probe_persist_step_multipliers) or (1.0,)
+    interaction_mults = tuple(float(x) for x in probe_interaction_gain_multipliers) or (1.0,)
 
     selected_cfg = cfg
     selected_search_cfg = search_cfg
@@ -800,9 +875,25 @@ def run_quick_probe_with_auto_escalation(
                 scale_mult = float(scale_mults[min(attempt, len(scale_mults) - 1)])
                 l2_mult = float(l2_mults[min(attempt, len(l2_mults) - 1)])
                 clip_mult = float(clip_mults[min(attempt, len(clip_mults) - 1)])
+                persist_mult = float(persist_mults[min(attempt, len(persist_mults) - 1)])
+                interaction_mult = float(interaction_mults[min(attempt, len(interaction_mults) - 1)])
 
                 cfg_trial = copy.deepcopy(cfg)
                 cfg_trial.planner_surprise_name = str(metric_name)
+                if bool(probe_force_behavioral_preset):
+                    cfg_trial.perturb_use_behavioral_proposals = True
+                    cfg_trial.counterfactual_family = "hist_prim"
+                    cfg_trial.perturb_target_selection_mode = "highest_interaction"
+                    cfg_trial.perturb_target_top_k = int(max(int(getattr(cfg_trial, "perturb_target_top_k", 1)), int(probe_target_top_k)))
+                    cfg_trial.perturb_hist_prim_selector_mode = str(probe_hist_prim_selector_mode).strip().lower() or "interaction_band"
+                    base_persist_steps = int(max(1, int(getattr(cfg, "perturb_persist_steps", 3))))
+                    cfg_trial.perturb_persist_steps = int(max(1, round(float(base_persist_steps) * persist_mult)))
+                    base_interaction_gain = float(max(0.1, float(getattr(cfg, "perturb_behavioral_interaction_gain", 1.25))))
+                    base_longitudinal_gain = float(max(0.1, float(getattr(cfg, "perturb_behavioral_longitudinal_gain", 1.05))))
+                    base_lateral_gain = float(max(0.1, float(getattr(cfg, "perturb_behavioral_lateral_gain", 1.20))))
+                    cfg_trial.perturb_behavioral_interaction_gain = float(base_interaction_gain * interaction_mult)
+                    cfg_trial.perturb_behavioral_longitudinal_gain = float(base_longitudinal_gain * interaction_mult)
+                    cfg_trial.perturb_behavioral_lateral_gain = float(base_lateral_gain * interaction_mult)
                 search_trial = copy.deepcopy(search_cfg)
 
                 search_trial.proposal_scale_ladder = tuple(float(x * scale_mult) for x in tuple(search_cfg.proposal_scale_ladder))
@@ -829,6 +920,10 @@ def run_quick_probe_with_auto_escalation(
                     min_policy_shift_mean=float(probe_min_policy_shift_mean),
                     min_realization_ratio_mean=float(probe_min_realization_ratio_mean),
                     require_belief_and_policy=bool(probe_require_belief_and_policy),
+                    min_raw_belief_shift_mean=float(probe_min_raw_belief_shift_mean),
+                    min_raw_policy_shift_mean=float(probe_min_raw_policy_shift_mean),
+                    min_raw_fraction_of_total=float(probe_min_raw_fraction_of_total),
+                    require_raw_signal=bool(probe_require_raw_signal),
                 )
                 feasibility_score = _probe_feasibility_score(probe_metrics)
 
@@ -840,13 +935,21 @@ def run_quick_probe_with_auto_escalation(
                     "delta_l2_budget": float(search_trial.delta_l2_budget),
                     "delta_clip": float(search_trial.delta_clip),
                     "budget_evals": int(search_trial.budget_evals),
+                    "probe_persist_steps": int(getattr(cfg_trial, "perturb_persist_steps", 0)),
+                    "probe_interaction_gain": float(getattr(cfg_trial, "perturb_behavioral_interaction_gain", np.nan)),
+                    "probe_hist_prim_selector_mode": str(getattr(cfg_trial, "perturb_hist_prim_selector_mode", "")),
                     "n_finite_surprise": int(probe_metrics.get("n_finite_surprise", 0.0)),
                     "nonzero_surprise_fraction": float(probe_metrics.get("nonzero_surprise_fraction", 0.0)),
                     "proposal_realized_fraction": float(probe_metrics.get("proposal_realized_fraction", 0.0)),
                     "proposal_effect_l2_mean": float(probe_metrics.get("proposal_effect_l2_mean", 0.0)),
                     "surprise_belief_shift_mean": float(probe_metrics.get("surprise_belief_shift_mean", 0.0)),
+                    "surprise_belief_shift_raw_mean": float(probe_metrics.get("surprise_belief_shift_raw_mean", 0.0)),
                     "surprise_policy_shift_mean": float(probe_metrics.get("surprise_policy_shift_mean", 0.0)),
+                    "surprise_policy_shift_raw_mean": float(probe_metrics.get("surprise_policy_shift_raw_mean", 0.0)),
+                    "surprise_belief_raw_fraction": float(probe_metrics.get("surprise_belief_raw_fraction", 0.0)),
+                    "surprise_policy_raw_fraction": float(probe_metrics.get("surprise_policy_raw_fraction", 0.0)),
                     "surprise_realization_ratio_mean": float(probe_metrics.get("surprise_realization_ratio_mean", 0.0)),
+                    "surprise_realization_ratio_raw_mean": float(probe_metrics.get("surprise_realization_ratio_raw_mean", 0.0)),
                     "feasibility_score": float(feasibility_score),
                     "failure_reasons": "|".join(str(x) for x in failure_reasons),
                 }
@@ -1093,6 +1196,17 @@ def report_quick_probe_bundle(
                 f"[probe] skipped {skipped_infeasible} candidate scenarios with infeasible base rollouts "
                 "before collecting probe rows."
             )
+        belief_total = _float_or_default(row.get("surprise_belief_shift_mean"), 0.0)
+        policy_total = _float_or_default(row.get("surprise_policy_shift_mean"), 0.0)
+        belief_raw = _float_or_default(row.get("surprise_belief_shift_raw_mean"), 0.0)
+        policy_raw = _float_or_default(row.get("surprise_policy_shift_raw_mean"), 0.0)
+        belief_raw_frac = 0.0 if belief_total <= 0.0 else float(np.clip(belief_raw / max(belief_total, 1e-12), 0.0, 1.0))
+        policy_raw_frac = 0.0 if policy_total <= 0.0 else float(np.clip(policy_raw / max(policy_total, 1e-12), 0.0, 1.0))
+        if (belief_total > 0.0 or policy_total > 0.0) and (max(belief_raw_frac, policy_raw_frac) < 0.10):
+            print(
+                "[probe] warning: surprise appears floor-dominated "
+                f"(raw belief frac={belief_raw_frac:.3f}, raw policy frac={policy_raw_frac:.3f})."
+            )
 
     if display_fn is not None:
         if len(bundle.quick_probe_metric_summary_df):
@@ -1118,6 +1232,9 @@ def report_quick_probe_bundle(
         print("        delta_l2_budget=", search_cfg.delta_l2_budget)
         print("        delta_clip=", search_cfg.delta_clip)
         print("        budget_evals=", search_cfg.budget_evals)
+        print("        perturb_persist_steps=", bundle.cfg.perturb_persist_steps)
+        print("        perturb_behavioral_interaction_gain=", bundle.cfg.perturb_behavioral_interaction_gain)
+        print("        perturb_hist_prim_selector_mode=", bundle.cfg.perturb_hist_prim_selector_mode)
 
     if bundle.final_collapsed:
         print("[probe] warning: quick probe remained collapsed after escalation attempts.")
