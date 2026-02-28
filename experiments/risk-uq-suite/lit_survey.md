@@ -58,6 +58,7 @@ Target operating-point criterion (ideal threshold-consistency condition):
 \mathbb{P}(Y=1 \mid \hat p \le \tau) \le \tau.
 \]
 
+This is a desirable operational target, not a guarantee implied by standard global calibration alone.
 In practice this is estimated with finite-sample uncertainty, so CI reporting is required.
 In practice, \(\mathrm{FS}_{\hat p}(\tau)\) is the primary operating-point safety diagnostic.
 
@@ -73,6 +74,7 @@ Global calibration can look good while local calibration near `tau` is poor.
 ## 2) Formal Definition: Decision-Grade Risk
 
 We use **decision-grade risk** as an operational composite criterion for threshold control.  
+Decision-grade is defined here relative to the thresholded acceptance rule `D(\hat p,\tau)`, not as a universal property across all controllers.
 A risk signal is decision-grade under this operational definition if all hold:
 1. Calibration (especially near `tau`),
 2. Discriminative power (candidate ranking quality),
@@ -130,6 +132,7 @@ Portfolio used: 27 papers (canonical + SOTA + closest priors + benchmarks).
 
 Recent-evidence caveat:
 - P23/P24/P27 are emerging and partly preprint-driven; they are included for recency and methodological relevance, not as settled consensus.
+- Core argumentative anchors for the main gap remain P01, P05, P07, P10, P15, and P20-P22.
 
 Citation-strength labels are qualitative: `very high`, `high`, `medium`, `emerging`.
 
@@ -344,7 +347,7 @@ What literature establishes reliably:
 1. uncertainty and risk constraints can improve behavior,
 2. calibration methods often improve probability quality,
 3. shift can break uncertainty reliability,
-4. closed-loop benchmarks make such evaluation feasible.
+4. closed-loop benchmarks make such evaluation practically feasible, though validity still depends on protocol design.
 
 What literature does not settle for our target setting:
 1. whether candidate-level threshold decisions are correct at operational `tau`,
@@ -363,7 +366,7 @@ Therefore, a decomposition-first, falsifiable methodology is justified.
 flowchart TD
     A["Candidate Context x"] --> B["Predicted Risk p_hat(x)"]
     B --> C["Decision D(p_hat,tau)"]
-    C --> D["Closed-loop Outcome Y"]
+    C --> D["Observed Outcome / Transition"]
     D --> I["Next-state Distribution x(t+1)"]
     I --> A
 
