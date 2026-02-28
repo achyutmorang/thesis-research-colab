@@ -102,9 +102,11 @@ def build_risk_dataset_from_runner(
     dataset_df = build_risk_dataset(rows)
     dataset_df = add_eval_splits(
         dataset_df,
-        holdout_fraction=0.20,
-        interaction_score_col='target_interaction_score',
-        shift_suites=getattr(cfg, 'uq_shift_suites', ('nominal_clean',)),
+        seed=int(getattr(cfg, 'global_seed', 17)),
+        train_fraction=0.70,
+        val_fraction=0.15,
+        high_interaction_fraction=0.20,
+        interaction_col='target_interaction_score',
     )
 
     artifact_paths: Dict[str, str] = {}
