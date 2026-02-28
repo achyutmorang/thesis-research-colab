@@ -8,23 +8,29 @@ from .spec import ExperimentPack, normalize_slug
 
 _PACKS: Sequence[ExperimentPack] = (
     ExperimentPack(
-        slug='closedloop-simulation',
-        title='Closed-Loop Simulation And Search',
-        objective='Run calibrated closed-loop search with resumable persistence and artifact export.',
+        slug='closedloop-core',
+        title='Closed-Loop Core (Simulation + Evaluation)',
+        objective='Run closed-loop simulation and post-hoc evaluation from one unified experiment pack.',
         notebooks=(
-            'experiments/closedloop-simulation/notebooks/closedloop_simulation_colab.ipynb',
+            'experiments/closedloop-core/notebooks/closedloop_simulation_colab.ipynb',
+            'experiments/closedloop-core/notebooks/closedloop_evaluation_colab.ipynb',
+            'experiments/closedloop-core/notebooks/compute_normalized_blindspot_discovery_colab.ipynb',
+            'experiments/closedloop-core/notebooks/counterfactual_risk_sensitivity_atlas_colab.ipynb',
         ),
         workflows=(
             'src/workflows/closedloop_flow.py',
         ),
         modules=(
             'src/closedloop',
+            'src/eval',
+            'src/eval_compute_normalized_discovery',
+            'src/eval_counterfactual_risk_sensitivity',
             'src/workflows/closedloop_flow.py',
         ),
         config_paths=(
-            'configs/experiments/closedloop-simulation.json',
+            'configs/experiments/closedloop-core.json',
         ),
-        tags=('closedloop', 'simulation', 'search', 'waymax', 'womd'),
+        tags=('closedloop', 'simulation', 'evaluation', 'search', 'waymax', 'womd'),
     ),
     ExperimentPack(
         slug='surprise-potential',
@@ -45,26 +51,6 @@ _PACKS: Sequence[ExperimentPack] = (
             'configs/experiments/surprise-potential.json',
         ),
         tags=('closedloop', 'surprise', 'counterfactual', 'diagnostics'),
-    ),
-    ExperimentPack(
-        slug='closedloop-evaluation',
-        title='Closed-Loop Evaluation',
-        objective='Run post-hoc evaluation over closed-loop artifacts with compute-normalized analysis.',
-        notebooks=(
-            'experiments/closedloop-evaluation/notebooks/closedloop_evaluation_colab.ipynb',
-            'experiments/closedloop-evaluation/notebooks/compute_normalized_blindspot_discovery_colab.ipynb',
-            'experiments/closedloop-evaluation/notebooks/counterfactual_risk_sensitivity_atlas_colab.ipynb',
-        ),
-        workflows=(),
-        modules=(
-            'src/eval',
-            'src/eval_compute_normalized_discovery',
-            'src/eval_counterfactual_risk_sensitivity',
-        ),
-        config_paths=(
-            'configs/experiments/closedloop-evaluation.json',
-        ),
-        tags=('evaluation', 'compute-normalized', 'counterfactual', 'analysis'),
     ),
     ExperimentPack(
         slug='risk-uq-suite',

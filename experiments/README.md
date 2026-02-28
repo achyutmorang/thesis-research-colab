@@ -9,9 +9,8 @@ Each pack describes one research track and points to:
 - pack-specific default config JSON
 
 ## Existing Packs
-- `closedloop-simulation`
+- `closedloop-core`
 - `surprise-potential`
-- `closedloop-evaluation`
 - `risk-uq-suite`
 
 ## Add A New Paper Idea

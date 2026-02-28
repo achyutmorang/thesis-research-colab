@@ -1,7 +1,7 @@
 {
-  "slug": "closedloop-simulation",
-  "title": "Closed-Loop Simulation And Search",
-  "objective": "Run calibration-gated closed-loop search with resumable shard execution.",
+  "slug": "closedloop-core",
+  "title": "Closed-Loop Core",
+  "objective": "Run closed-loop simulation plus post-hoc evaluation in one unified experiment pack.",
   "run": {
     "run_tag_prefix": "closedloop",
     "persist_root": "/content/drive/MyDrive/waymax_experiments/closedloop_runs/v1",
@@ -9,4 +9,3 @@
     "shard_id": "auto"
   }
 }
-
