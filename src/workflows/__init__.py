@@ -76,6 +76,7 @@ from .notebook_contract import (
     manifest_has_stage,
     run_risk_training_notebook_gates,
     validate_notebook_contract_manifest,
+    write_contract_storage_mirror,
     write_notebook_contract_manifest,
 )
 from src.experiments import (
@@ -154,6 +155,7 @@ __all__ = [
     "manifest_has_stage",
     "run_risk_training_notebook_gates",
     "validate_notebook_contract_manifest",
+    "write_contract_storage_mirror",
     "write_notebook_contract_manifest",
     "ExperimentPack",
     "list_experiment_packs",

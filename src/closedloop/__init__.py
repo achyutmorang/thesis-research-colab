@@ -41,6 +41,7 @@ _WORKFLOW_EXPORTS = [
     'manifest_has_stage',
     'run_risk_training_notebook_gates',
     'validate_notebook_contract_manifest',
+    'write_contract_storage_mirror',
     'write_notebook_contract_manifest',
 ]
 
@@ -161,6 +162,7 @@ _SYMBOL_MODULE: Dict[str, str] = {
     'manifest_has_stage': 'src.workflows.notebook_contract',
     'run_risk_training_notebook_gates': 'src.workflows.notebook_contract',
     'validate_notebook_contract_manifest': 'src.workflows.notebook_contract',
+    'write_contract_storage_mirror': 'src.workflows.notebook_contract',
     'write_notebook_contract_manifest': 'src.workflows.notebook_contract',
 }
 

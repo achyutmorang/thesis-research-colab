@@ -8,6 +8,17 @@ Train/calibrate risk models and run uncertainty-quantification benchmarks with p
 - `experiments/risk-uq-suite/notebooks/uq_benchmark_colab.ipynb`
 - `experiments/risk-uq-suite/notebooks/paper_tables_figures_colab.ipynb`
 
+## Experiment Config
+- `configs/experiments/risk-uq-suite.json`
+- Notebooks load mandatory run fields from this config:
+  - `RUN_NAME`
+  - `RUN_PREFIX`
+  - `PERSIST_ROOT`
+  - `N_SHARDS`
+  - `SHARD_ID`
+  - `RESUME_FROM_EXISTING`
+  - `RUN_ENABLED`
+
 ## Workflow Entrypoints
 - `src/workflows/risk_training_flow.py`
 - `src/workflows/uq_benchmark_flow.py`

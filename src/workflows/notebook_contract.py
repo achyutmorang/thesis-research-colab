@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import platform
+import shutil
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -63,6 +64,36 @@ def _resolve_git_commit(repo_dir: Optional[str], fallback: Optional[str]) -> str
 
 def _manifest_path(run_prefix: str) -> Path:
     return Path(f'{run_prefix}_notebook_contract_manifest.json')
+
+
+def _contract_run_dir(*, persist_root: str, run_prefix: str, run_name: str) -> Path:
+    root = Path(str(persist_root)).expanduser()
+    return root / f'{str(run_prefix)}_{str(run_name)}'
+
+
+def _atomic_write_json(path: Path, payload: Mapping[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + '.tmp')
+    tmp.write_text(json.dumps(dict(payload), indent=2, sort_keys=True, ensure_ascii=True))
+    os.replace(tmp, path)
+
+
+def _safe_json_read(path: Path) -> Dict[str, Any]:
+    if not path.exists():
+        return {}
+    try:
+        obj = json.loads(path.read_text())
+    except Exception:
+        return {}
+    return obj if isinstance(obj, dict) else {}
+
+
+def _copy_to(dst: Path, src: Path) -> bool:
+    if not src.exists():
+        return False
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(src, dst)
+    return True
 
 
 def _cfg_hash(cfg: Any, search_cfg: Any) -> str:
@@ -134,6 +165,170 @@ def validate_notebook_contract_manifest(
             reasons.append(f'missing_stage:{stage}')
 
     return len(reasons) == 0, reasons
+
+
+def write_contract_storage_mirror(
+    *,
+    persist_root: str,
+    run_prefix: str,
+    run_name: str,
+    run_prefix_path: str,
+    cfg: Any,
+    search_cfg: Any,
+    n_shards: int,
+    shard_id: int,
+    stage: str,
+    git_commit: str,
+    resume_from_existing: bool,
+    run_enabled: bool,
+    artifact_paths: Optional[Mapping[str, Any]] = None,
+    metrics_csv_path: Optional[str] = None,
+    extra_fields: Optional[Mapping[str, Any]] = None,
+) -> Dict[str, str]:
+    run_dir = _contract_run_dir(
+        persist_root=str(persist_root),
+        run_prefix=str(run_prefix),
+        run_name=str(run_name),
+    )
+    progress_dir = run_dir / 'progress'
+    checkpoints_dir = run_dir / 'checkpoints'
+    outputs_dir = run_dir / 'outputs'
+    artifacts_dir = outputs_dir / 'artifacts'
+
+    cfg_payload = _to_serializable(cfg)
+    search_payload = _to_serializable(search_cfg)
+    cfg_hash = _cfg_hash(cfg, search_cfg)
+    created_now = _utc_now_iso()
+
+    config_path = run_dir / 'config.json'
+    env_manifest_path = run_dir / 'env_manifest.json'
+    run_manifest_path = run_dir / 'run_manifest.json'
+    progress_path = progress_dir / f'shard_{int(shard_id)}.json'
+    latest_ckpt_path = checkpoints_dir / 'latest.json'
+    metrics_out_path = outputs_dir / 'metrics.csv'
+    artifact_index_path = artifacts_dir / 'artifact_index.json'
+
+    _atomic_write_json(
+        config_path,
+        {
+            'run_name': str(run_name),
+            'run_prefix': str(run_prefix),
+            'run_prefix_path': str(run_prefix_path),
+            'cfg_hash': str(cfg_hash),
+            'cfg': cfg_payload,
+            'search_cfg': search_payload,
+        },
+    )
+
+    env_prev = _safe_json_read(env_manifest_path)
+    env_payload = {
+        **env_prev,
+        'updated_utc': created_now,
+        'python_version': str(sys.version),
+        'platform': str(platform.platform()),
+        'git_commit': str(git_commit),
+        'cfg_hash': str(cfg_hash),
+        'run_name': str(run_name),
+        'run_prefix': str(run_prefix),
+        'run_prefix_path': str(run_prefix_path),
+        'colab_runtime_type': _detect_colab_runtime_type(),
+        'n_shards': int(max(1, int(n_shards))),
+        'shard_id': int(shard_id),
+        'packages': {
+            'numpy': _safe_version('numpy'),
+            'pandas': _safe_version('pandas'),
+            'torch': _safe_version('torch'),
+            'jax': _safe_version('jax'),
+        },
+    }
+    _atomic_write_json(env_manifest_path, env_payload)
+
+    run_prev = _safe_json_read(run_manifest_path)
+    run_payload = {
+        'run_name': str(run_name),
+        'run_prefix': str(run_prefix),
+        'run_prefix_path': str(run_prefix_path),
+        'created_utc': str(run_prev.get('created_utc', '')).strip() or created_now,
+        'updated_utc': created_now,
+        'git_commit': str(git_commit),
+        'config_hash': str(cfg_hash),
+        'python_version': str(sys.version.split()[0]),
+        'package_versions': dict(env_payload.get('packages', {})),
+        'runtime_type': _detect_colab_runtime_type(),
+        'n_shards': int(max(1, int(n_shards))),
+        'shard_id': int(shard_id),
+        'resume_from_existing': bool(resume_from_existing),
+        'run_enabled': bool(run_enabled),
+        'stage': str(stage),
+    }
+    if isinstance(extra_fields, Mapping) and extra_fields:
+        run_payload['extra_fields'] = _to_serializable(dict(extra_fields))
+    _atomic_write_json(run_manifest_path, run_payload)
+
+    progress_payload = {
+        'updated_utc': created_now,
+        'run_name': str(run_name),
+        'run_prefix': str(run_prefix),
+        'run_prefix_path': str(run_prefix_path),
+        'n_shards': int(max(1, int(n_shards))),
+        'shard_id': int(shard_id),
+        'stage': str(stage),
+        'resume_from_existing': bool(resume_from_existing),
+        'run_enabled': bool(run_enabled),
+    }
+    _atomic_write_json(progress_path, progress_payload)
+
+    checkpoints_dir.mkdir(parents=True, exist_ok=True)
+    _atomic_write_json(
+        latest_ckpt_path,
+        {
+            'updated_utc': created_now,
+            'run_prefix_path': str(run_prefix_path),
+            'stage': str(stage),
+            'resume_from_existing': bool(resume_from_existing),
+        },
+    )
+
+    outputs_dir.mkdir(parents=True, exist_ok=True)
+    copied_metrics = False
+    if metrics_csv_path:
+        copied_metrics = _copy_to(metrics_out_path, Path(str(metrics_csv_path)))
+    if not copied_metrics and (not metrics_out_path.exists()):
+        metrics_out_path.write_text('metric,value\nstage,0\n')
+
+    flat_artifacts: Dict[str, str] = {}
+    if isinstance(artifact_paths, Mapping):
+        for k, v in artifact_paths.items():
+            path_str = str(v).strip()
+            if path_str:
+                flat_artifacts[str(k)] = path_str
+    artifacts_dir.mkdir(parents=True, exist_ok=True)
+    _atomic_write_json(
+        artifact_index_path,
+        {
+            'updated_utc': created_now,
+            'artifact_count': int(len(flat_artifacts)),
+            'artifacts': [
+                {
+                    'key': str(k),
+                    'path': str(v),
+                    'exists': bool(Path(str(v)).exists()),
+                }
+                for k, v in sorted(flat_artifacts.items())
+            ],
+        },
+    )
+
+    return {
+        'contract_run_dir': str(run_dir),
+        'contract_config': str(config_path),
+        'contract_env_manifest': str(env_manifest_path),
+        'contract_run_manifest': str(run_manifest_path),
+        'contract_progress': str(progress_path),
+        'contract_checkpoint_latest': str(latest_ckpt_path),
+        'contract_outputs_metrics': str(metrics_out_path),
+        'contract_outputs_artifact_index': str(artifact_index_path),
+    }
 
 
 def run_risk_training_notebook_gates(

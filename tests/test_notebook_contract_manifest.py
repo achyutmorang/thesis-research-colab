@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 from pathlib import Path
 import sys
 from types import SimpleNamespace
@@ -90,3 +91,43 @@ def test_manifest_validation_detects_missing_stages(tmp_path: Path) -> None:
     )
     assert ok is False
     assert any(str(r).startswith('missing_stage:risk_training_completed') for r in reasons)
+
+
+def test_write_contract_storage_mirror_creates_expected_layout(tmp_path: Path) -> None:
+    persist_root = tmp_path / 'persist'
+    flat_run_prefix = str(tmp_path / 'risk_uq_20260228_010203')
+    metrics_path = tmp_path / 'metrics.csv'
+    metrics_path.write_text('metric,value\nece,0.1\n')
+
+    out = notebook_contract.write_contract_storage_mirror(
+        persist_root=str(persist_root),
+        run_prefix='risk_uq',
+        run_name='20260228_010203',
+        run_prefix_path=flat_run_prefix,
+        cfg=_cfg(),
+        search_cfg=_search_cfg(),
+        n_shards=1,
+        shard_id=0,
+        stage='risk_training_completed',
+        git_commit='abc123',
+        resume_from_existing=True,
+        run_enabled=True,
+        artifact_paths={'risk_dataset': f'{flat_run_prefix}_risk_dataset.parquet'},
+        metrics_csv_path=str(metrics_path),
+        extra_fields={'foo': 1},
+    )
+
+    run_dir = Path(out['contract_run_dir'])
+    assert run_dir.exists()
+    assert (run_dir / 'config.json').exists()
+    assert (run_dir / 'env_manifest.json').exists()
+    assert (run_dir / 'run_manifest.json').exists()
+    assert (run_dir / 'progress' / 'shard_0.json').exists()
+    assert (run_dir / 'checkpoints' / 'latest.json').exists()
+    assert (run_dir / 'outputs' / 'metrics.csv').exists()
+    assert (run_dir / 'outputs' / 'artifacts' / 'artifact_index.json').exists()
+
+    run_manifest = json.loads((run_dir / 'run_manifest.json').read_text())
+    assert run_manifest.get('run_name') == '20260228_010203'
+    assert run_manifest.get('run_prefix') == 'risk_uq'
+    assert run_manifest.get('git_commit') == 'abc123'
