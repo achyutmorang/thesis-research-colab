@@ -386,15 +386,18 @@ def _leakage_checks(df: pd.DataFrame, *, label_col: str) -> pd.DataFrame:
     # preserves AUROC, features may encode target too directly.
     score_col = 'planner_risk_combo_proxy' if 'planner_risk_combo_proxy' in df.columns else None
     if score_col is not None:
-        y = (_safe_float(df[label_col], default=0.0) > 0.5).astype(float)
-        s = _safe_prob(df[score_col], default=0.5)
+        # Use a positional index frame to avoid mixing DataFrame index labels with
+        # NumPy positional indexing after split/filter operations.
+        work = df.reset_index(drop=True)
+        y = (_safe_float(work[label_col], default=0.0) > 0.5).astype(float)
+        s = _safe_prob(work[score_col], default=0.5)
         base_auc = float(binary_auroc(s, y))
 
         shuffled = y.copy()
         rng = np.random.default_rng(17)
-        if ('scenario_id' in df.columns) and ('step_idx' in df.columns):
-            for _, idx in df.groupby(['scenario_id', 'step_idx'], sort=False).groups.items():
-                idx_arr = np.asarray(list(idx), dtype=int)
+        if ('scenario_id' in work.columns) and ('step_idx' in work.columns):
+            for idx in work.groupby(['scenario_id', 'step_idx'], sort=False).indices.values():
+                idx_arr = np.asarray(idx, dtype=int)
                 if idx_arr.size > 1:
                     shuffled[idx_arr] = shuffled[rng.permutation(idx_arr)]
         else:

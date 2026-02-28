@@ -115,3 +115,30 @@ def test_miscalibration_probe_flow_writes_artifacts_and_supports_resume(tmp_path
     assert loaded.loaded_from_existing
     assert not loaded.predictions_df.empty
     assert not loaded.proxy_calibration_df.empty
+
+
+def test_miscalibration_probe_handles_non_contiguous_indices_with_group_shuffle(tmp_path: Path) -> None:
+    run_prefix = str(tmp_path / 'miscal_probe_noncontig')
+    cfg = _cfg(run_prefix)
+    base = _synthetic_probe_df(n=180)
+
+    # Build >=2 candidates per (scenario_id, step_idx) so leakage shuffle path is exercised.
+    df = pd.concat(
+        [
+            base.assign(candidate_id=0, step_idx=0),
+            base.assign(candidate_id=1, step_idx=0),
+        ],
+        ignore_index=True,
+    )
+    # Make index non-consecutive/non-zero-based to reproduce historical bug.
+    df.index = np.arange(1000, 1000 + len(df), dtype=int)
+
+    bundle = flow.run_miscalibration_probe_flow(
+        cfg=cfg,
+        dataset_df=df,
+        run_prefix=run_prefix,
+        resume_mode='fresh',
+    )
+    assert not bundle.benchmark_bundle.summary_df.empty
+    assert not bundle.leakage_df.empty
+    assert flow.has_existing_miscalibration_probe_artifacts(run_prefix)
