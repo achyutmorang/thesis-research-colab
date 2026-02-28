@@ -69,6 +69,21 @@ In practice, `FS_p_hat(tau)` is the primary operating-point safety diagnostic.
 
 Global calibration can look good while local calibration near `tau` is poor.
 
+### 1.4 Core Hypothesis (Operational)
+
+Core hypothesis (`H_core`):
+```text
+In candidate-level thresholded control, errors in p_hat(x) quality
+(ranking and/or calibration near tau) produce measurable decision errors
+(false-safe, safe-reject, feasibility collapse), and these errors worsen under shift.
+```
+
+Operational implications:
+1. If local calibration near `tau` is poor, `FS_p_hat(tau)` or `SR_p_hat(tau)` should increase.
+2. If discrimination is weak (low within-step AUC), calibration alone should not recover decision quality.
+3. If calibration improves probability quality but not decision outcomes, the bottleneck is likely rule design or candidate quality.
+4. Under shift, at least one of calibration or decision metrics should degrade unless robustness mechanisms are present.
+
 ---
 
 ## 2) Formal Definition: Decision-Grade Risk
@@ -79,7 +94,7 @@ A risk signal is decision-grade under this operational definition if all hold:
 1. Calibration (especially near `tau`),
 2. Discriminative power (candidate ranking quality),
 3. Shift stability,
-4. Decision correctness and feasibility under `D(\hat p,tau)`.
+4. Decision correctness and feasibility under `D(p_hat,tau)`.
 
 ### 2.1 Metric Mapping
 
@@ -136,6 +151,22 @@ Recent-evidence caveat:
 
 Citation-strength labels are qualitative: `very high`, `high`, `medium`, `emerging`.
 
+### 4.1 Paper Categorization by Decision-Causal Role
+
+| Bucket | IDs | Typical decision variable | What this bucket contributes | Transfer risk to our setting |
+|---|---|---|---|---|
+| Calibration primitives | P01-P06 | threshold on mapped probability score | shows why raw confidence is not decision-grade by default | often open-loop, weak closed-loop causal evidence |
+| Threshold/constraint frameworks | P07-P12 | accept/reject threshold, constrained optimization parameter | formalizes how risk enters decisions (`tau`, risk budget, constraints) | often assumes risk signal is already valid |
+| Uncertainty/risk to control | P13-P17, P23-P27 | policy/trajectory cost-constrained action | demonstrates uncertainty-informed planning can improve outcomes | mostly trajectory/policy granularity, not candidate-step threshold audits |
+| Closed-loop AV benchmarks | P18-P22 | planner policy rollout in simulation | gives substrate for large-scale safety/efficiency evaluation | does not itself enforce calibration-to-decision auditing |
+| Shift-robust conformal extensions | P28-P29 | robust threshold/set filtering under shift | motivates robustness-aware risk control and stress testing | early evidence, limited candidate-level closed-loop validation |
+
+### 4.2 Critical Inclusion Notes
+
+1. A paper can be strong and still weakly transferable if its decision granularity differs (trajectory-level vs candidate-step).
+2. A paper can report closed-loop gains but still leave `tau`-level correctness (`FS/SR`) untested.
+3. We treat recent preprints as directional evidence, not settled proof.
+
 ---
 
 ## 5) Decision-Causal Literature Matrix (Critical)
@@ -177,6 +208,33 @@ Legend for contradiction vs our hypothesis:
 | P28 | CUQDS (Conformal UQ under distribution shift for trajectory prediction) | arXiv 2024 | Recent adjacent prior (emerging citation) | shift-aware conformal uncertainty sets for trajectory outcomes | decision support via uncertainty sets/coverage controls under shift | trajectory/set | shift assumptions are captured by calibration strategy | open-loop trajectory prediction eval | Partial | no candidate-level `D(p_hat,tau)` audit in closed-loop AV control |
 | P29 | Adversarially Robust Conformal Prediction for Interactive Safe Planning | arXiv 2025 | Recent robust CP direction (emerging citation) | robust conformal risk sets under interactive shift/adversarial response | thresholded/set-based safety filtering for planning | trajectory/set | robustness assumptions approximate interaction dynamics | simulation-focused | Partial | does not yet establish standardized candidate-level FS/SR/feasibility protocol in Waymax-style closed-loop reranking |
 
+### 5.1 Deep Extraction of Closest and Anchor Papers
+
+The table below adds decision-causal detail for papers most load-bearing to our framing.
+
+| ID | Decision rule (canonical form) | How uncertainty/risk enters | Probabilities assumed calibrated? | Decision-impact metrics reported | Critical limitation vs our target |
+|---|---|---|---|---|---|
+| P01 | `p_cal = sigmoid(logit/T)` then threshold/rank | post-hoc calibration map on model score | no; explicitly addresses miscalibration | ECE/NLL in classification settings | no closed-loop or candidate-step decision audit |
+| P05 | evaluate reliability under shifts, no control rule | uncertainty scores are stress-tested under OOD | no; tests degradation | calibration and error under shift | does not connect to planner action selection |
+| P07 | accept if confidence `>= theta` else reject | confidence acts as risk surrogate | often implicit | selective risk/coverage | single-sample decision, no temporal coupling |
+| P10 | `max J_R(pi)` s.t. `J_C(pi) <= d` | safety cost as constrained objective | implicit surrogate fidelity | reward-cost tradeoff in RL | policy-level, not candidate-level thresholded control |
+| P11 | choose parameter to satisfy risk target `alpha` | conformalized risk functional controls coverage/risk | assumes exchangeability-like conditions | risk-control guarantees | assumptions strained in adaptive closed-loop |
+| P12 | calibrate threshold/parameter for risk budget | conformal risk score enters constraint | partially; robust finite-sample framing | risk target satisfaction | not designed for step-level planner feedback loops |
+| P15 | `argmin E[C] + lambda * Risk(C)` | multimodal forecast uncertainty in planning cost | mostly implicit | safety/progress under interaction | no explicit calibration-to-decision link (`FS/SR`) |
+| P20 | stress-test planner decisions under perturbation | robustness signals through closed-loop stress suites | not a calibration paper | safety/robustness benchmark metrics | no candidate-level threshold accounting |
+| P22 | fast simulator rollout of planner policies | external method risk signals can be plugged in | N/A (substrate) | closed-loop scenario outcomes | no built-in decision-grade risk protocol |
+| P24 | chance-constrained MPC feasibility conditions | collision risk enters chance constraints | assumes model/propagation validity | collision/constraint violation tradeoff | constraints are model-dependent, not local-calibration audited |
+| P27 | conformal sets + reachability safety envelope | uncertainty set drives safety filtering | partially; conformal assumptions | safety certification style outcomes | set-level guarantees, limited candidate threshold diagnostics |
+| P29 | robust conformal filtering under interaction shift | adversarially robust uncertainty sets gate decisions | partially; robustness assumptions required | robust safety-focused metrics | early-stage evidence, no standard Waymax candidate-step protocol |
+
+### 5.2 Per-Bucket Critical Takeaways
+
+1. Calibration bucket (P01-P06): strong evidence that score-to-probability mapping matters, weak evidence that this alone fixes closed-loop decisions.
+2. Threshold/constraint bucket (P07-P12): strong decision-theoretic framing, but often relies on unverified risk signal quality.
+3. Risk-to-control bucket (P13-P17, P23-P27): strong safety-control integration, but mainly trajectory/policy granularity and sparse `tau`-local auditing.
+4. Benchmark bucket (P18-P22): strong substrate for rigorous evaluation, but methodology for decision-grade risk must be supplied externally.
+5. Shift-robust conformal bucket (P28-P29): promising for robustness, but still limited direct evidence at candidate-step decision granularity.
+
 ---
 
 ## 6) Unifying Abstraction Across Literature
@@ -211,6 +269,33 @@ Consequence:
 1. a method can look strong on aggregate trajectory metrics,
 2. yet still fail at candidate-level threshold correctness (`false_safe`, `safe_reject`, feasibility) where the controller actually commits actions.
 
+### 6.4 Cross-Paper Coverage Audit (29-paper coding)
+
+Based on coded attributes in Section 5 (conservative interpretation):
+
+| Audit dimension | Approximate coverage in surveyed set | Interpretation |
+|---|---|---|
+| Explicit decision variable present | `29/29` | enforced by inclusion criteria |
+| Uncertainty/risk directly used in decision | `29/29` | enforced by inclusion criteria |
+| Closed-loop evaluation reported | `~15/29` | many papers still open-loop or mixed |
+| Calibration quality explicitly evaluated | `~10/29` | calibration is often assumed rather than measured |
+| Shift robustness explicitly audited | `~11/29` | robustness increasingly present but heterogeneous |
+| Candidate-step granularity (our target) | `~4/29` | major representation gap |
+| Reports both FS-like and SR-like threshold errors | `~1-2/29` | decision correctness diagnostics are rarely complete |
+| Joint test of `calibration -> decision -> closed-loop` chain | `0/29` found in this survey coding | core conjunction remains missing |
+
+These counts are not a meta-analysis claim; they are a structured coding summary to expose where evidence is dense vs sparse.
+
+### 6.5 Assumption Stress Test for Our Setting
+
+| Common assumption in prior work | Why it can fail in our setting | Observable failure mode |
+|---|---|---|
+| Validation and deployment distributions are close | closed-loop feedback + perturbation shifts change state visitation | ECE stable globally but FS/SR degrade near `tau` |
+| Risk surrogate is monotone with true failure probability | candidate interactions can break monotonicity locally | low within-step AUC, unstable ranking by step |
+| Constraint/cost surrogate is faithful | proxy may optimize conservatism rather than true safety | high safe-reject and fallback |
+| Exchangeability/IID-like calibration conditions | adaptive policy alters future samples | weak finite-sample guarantee transfer under long rollouts |
+| Trajectory-level success implies step-level correctness | local decision errors can average out in aggregate metrics | hidden false-safe pockets despite acceptable scenario averages |
+
 ---
 
 ## 7) Balanced Scientific Analysis
@@ -218,27 +303,30 @@ Consequence:
 ### 7.1 Supporting evidence (for our concern)
 
 1. Calibration can degrade under shift (P05), so raw uncertainty is not always decision-ready.
-2. Threshold decisions are sensitive to score quality (P07-P09).
-3. Closed-loop risk-aware planners can still rely on surrogate assumptions not explicitly audited (P15-P17, P23-P29).
+2. Threshold decisions are sensitive to score quality and coverage/risk threshold design (P07-P09, P11-P12).
+3. Closed-loop risk-aware planners can improve outcomes while still using surrogate risk signals that are not explicitly calibration-audited (P15-P17, P23-P27).
+4. Recent robust conformal directions (P28-P29) support the importance of shift-aware decision protection, while still leaving candidate-step diagnostics underdeveloped.
 
 ### 7.2 Counter-evidence (against over-claiming)
 
 1. In stable regimes, simple calibration can be sufficient for threshold decisions (P01, P02, P06).
-2. Constraint-based optimization can succeed if safety-cost surrogate is faithful (P10).
-3. Risk-aware planners can improve outcomes without explicit probability calibration (P15, P17, P24, P26).
+2. Constraint-based optimization can succeed if the safety-cost surrogate is faithful (P10, P24).
+3. Risk-aware planners can improve outcomes without explicit probability calibration (P15, P17, P26).
+4. Benchmark-driven robustness gains can come from planner architecture changes rather than calibration improvements alone (P20-P22).
 
 ### 7.3 What is well-supported vs unclear
 
 Well-supported:
 1. calibration failures exist, especially under shift,
-2. decision rules matter,
-3. constraints can help.
+2. decision rules can dominate outcomes even with similar predictors,
+3. constraints can help when modeling assumptions hold.
 
 Unclear/under-tested in our exact setting:
 1. candidate-level signal strength under shift,
 2. tau-local calibration adequacy,
 3. whether decision failures are mostly signal, calibration, or rule design.
 4. whether recent risk-bounded planners (P23-P29) remain decision-correct at fixed candidate-level `tau`.
+5. whether improvements in global calibration consistently reduce false-safe at the operating threshold.
 
 Research questions induced by these gaps:
 1. `RQ1`: Is candidate-level risk signal strength sufficient under shift?
@@ -257,6 +345,16 @@ Research questions induced by these gaps:
 
 Inference discipline:
 - If outcomes worsen, literature does not justify blaming calibration alone without checking signal and decision rule.
+
+### 8.1 Cross-Paper Diagnostic Logic (What to Test First)
+
+| Observed empirical pattern | Most plausible source | Cross-paper support | Immediate falsification test |
+|---|---|---|---|
+| low AUROC/within-step AUC and high ECE | signal + calibration | P05, P07-P09 | oracle-risk ablation with same candidate set |
+| good ranking but high ECE/NLL near `tau` | calibration | P01, P02, P06, P25 | local calibration window analysis + post-hoc calibration |
+| calibrated metrics improve, decisions do not | decision rule | P10-P12, P24 | fixed-signal rule sweep (`tau`, scoring weights, fallback policy) |
+| low feasible-set and high fallback despite low failure | over-conservative thresholding | P07-P09, P24, P26 | `tau` sweep with SR and feasibility CIs |
+| nominal performance good, shift degrades sharply | shift instability / assumption break | P05, P20, P28-P29 | per-shift deltas with bootstrap CIs and stress-suite stratification |
 
 ---
 
@@ -311,6 +409,7 @@ This is the primary gap statement.
 Prior work provides strong components (calibration methods, risk-aware planning, constraint frameworks, and closed-loop benchmarks), but does not close this full conjunction in one protocol.
 
 This is a scoped gap about missing **linkage and evaluation protocol**, not a claim that prior methods are invalid.
+It directly operationalizes `H_core` from Section 1.4 into falsifiable evaluation requirements.
 
 ---
 
@@ -392,10 +491,10 @@ flowchart TD
 
 | Risk source | Decision rule | Purpose |
 |---|---|---|
-| Raw `\hat p` | Fixed baseline rule | Baseline operating point |
-| Calibrated `\hat p` | Same baseline rule | Isolate calibration effect |
+| Raw `p_hat` | Fixed baseline rule | Baseline operating point |
+| Calibrated `p_hat` | Same baseline rule | Isolate calibration effect |
 | Oracle-risk proxy | Same baseline rule | Upper-bound achievable with current rule |
-| Calibrated `\hat p` | Alternative rule | Isolate decision-rule effect |
+| Calibrated `p_hat` | Alternative rule | Isolate decision-rule effect |
 
 This grid is designed to attribute failures to signal quality, calibration quality, or decision-rule design.
 
