@@ -7,7 +7,7 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence
 import numpy as np
 import pandas as pd
 
-from src.closedloop.risk_benchmark import run_uq_benchmark
+from src.risk_model.benchmark import run_uq_benchmark
 from src.risk_model.artifacts import (
     save_risk_artifacts,
     save_risk_dataset_artifacts,

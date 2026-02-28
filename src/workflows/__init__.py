@@ -77,6 +77,14 @@ from .experiment_flow import (
     list_experiment_pack_table,
     load_experiment_config,
 )
+from .risk_uq_notebook_flow import (
+    RiskUQRunContextBundle,
+    RiskUQSimulationContextBundle,
+    build_risk_uq_simulation_context,
+    initialize_risk_uq_run_context,
+    report_risk_uq_run_context,
+    run_risk_uq_smoke_gates,
+)
 from .living_report import (
     update_living_report_from_miscalibration_probe,
     update_living_report_from_paper_export,
@@ -167,6 +175,12 @@ __all__ = [
     "bootstrap_experiment_pack",
     "load_experiment_config",
     "list_experiment_pack_table",
+    "RiskUQRunContextBundle",
+    "RiskUQSimulationContextBundle",
+    "initialize_risk_uq_run_context",
+    "report_risk_uq_run_context",
+    "build_risk_uq_simulation_context",
+    "run_risk_uq_smoke_gates",
     "update_living_report_from_miscalibration_probe",
     "update_living_report_from_paper_export",
     "update_living_report_from_risk_training",

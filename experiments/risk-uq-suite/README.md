@@ -7,6 +7,15 @@ Train/calibrate risk models and run uncertainty-quantification benchmarks with p
 - `experiments/risk-uq-suite/LIVING_REPORT.md`
 - Auto-updated by the risk-uq workflows to capture evolving problem framing, hypothesis status, and evidence snapshots.
 
+## Independence From Closedloop-Core Notebook Logic
+This track now uses risk-UQ-specific notebook orchestration and smoke gates:
+
+- `initialize_risk_uq_run_context(...)`
+- `build_risk_uq_simulation_context(...)`
+- `run_risk_uq_smoke_gates(...)`
+
+These replace inherited closedloop-core notebook flow gates and avoid surprise/counterfactual preflight coupling in the risk-UQ notebook path.
+
 ## Problem Statement
 In closed-loop planning, action selection depends on predicted risk/confidence. If these probabilities are miscalibrated, thresholded decisions can become false-safe (unsafe actions accepted) or overly conservative (safe actions rejected), especially under distribution shift. This track tests that failure mode, then evaluates whether calibrated risk estimates improve robustness and safety-progress tradeoffs.
 

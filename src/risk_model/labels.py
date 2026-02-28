@@ -4,7 +4,7 @@ from typing import Any, Dict, Iterable, Tuple
 
 import numpy as np
 
-from src.closedloop.metrics import compute_risk_metrics, risk_kwargs_from_cfg
+from .metrics import compute_risk_metrics, risk_kwargs_from_cfg
 
 
 def _offroad_proxy(valid: np.ndarray) -> float:

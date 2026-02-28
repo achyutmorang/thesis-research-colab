@@ -8,7 +8,7 @@ from typing import Any, Dict, Iterable, Mapping, Optional, Sequence, Tuple
 import numpy as np
 import pandas as pd
 
-from src.closedloop.risk_benchmark import BenchmarkBundle, binary_auroc, run_uq_benchmark
+from src.risk_model.benchmark import BenchmarkBundle, binary_auroc, run_uq_benchmark
 from src.risk_model.artifacts import save_risk_evaluation_artifacts
 from .risk_training_flow import build_risk_dataset_from_runner, load_existing_risk_dataset_artifact
 try:

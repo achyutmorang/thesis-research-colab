@@ -6,7 +6,7 @@ from typing import Any, Dict, Optional
 
 import pandas as pd
 
-from src.closedloop.risk_benchmark import BenchmarkBundle
+from src.risk_model.benchmark import BenchmarkBundle
 try:
     from .living_report import update_living_report_from_paper_export
 except ImportError:  # pragma: no cover - supports direct module loading in tests

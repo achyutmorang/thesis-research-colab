@@ -7,8 +7,8 @@ from typing import Any, Dict, Mapping, Optional, Sequence, Tuple
 import numpy as np
 import pandas as pd
 
-from src.closedloop.risk_benchmark import BenchmarkBundle, run_uq_benchmark, summarize_controller_tradeoff
-from src.closedloop.risk_control import select_action_with_calibrated_risk
+from src.risk_model.benchmark import BenchmarkBundle, run_uq_benchmark, summarize_controller_tradeoff
+from src.risk_model.control import select_action_with_calibrated_risk
 from src.risk_model.artifacts import load_risk_artifacts, save_risk_evaluation_artifacts
 from src.risk_model.inference import predict_calibrated_risk
 try:

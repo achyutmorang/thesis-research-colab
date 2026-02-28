@@ -4,7 +4,7 @@ from typing import Any, Dict, Iterable, Optional
 
 import numpy as np
 
-from src.closedloop.metrics import compute_finite_differences, compute_risk_metrics, risk_kwargs_from_cfg
+from .metrics import compute_finite_differences, compute_risk_metrics, risk_kwargs_from_cfg
 
 
 def _safe_float(value: Any, default: float = 0.0) -> float:
