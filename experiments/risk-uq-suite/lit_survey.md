@@ -53,7 +53,7 @@ Key decision error rates:
   \mathrm{SR}_{\hat p}(\tau) := \mathbb{P}(Y=0 \mid \hat p > \tau).
   \]
 
-Operational decision-correctness requirement at operating threshold:
+Target operating-point criterion (ideal threshold-consistency condition):
 \[
 \mathbb{P}(Y=1 \mid \hat p \le \tau) \le \tau.
 \]
@@ -72,7 +72,8 @@ Global calibration can look good while local calibration near `tau` is poor.
 
 ## 2) Formal Definition: Decision-Grade Risk
 
-A risk signal is **decision-grade** for threshold control if all hold:
+We use **decision-grade risk** as an operational composite criterion for threshold control.  
+A risk signal is decision-grade under this operational definition if all hold:
 1. Calibration (especially near `tau`),
 2. Discriminative power (candidate ranking quality),
 3. Shift stability,
@@ -234,6 +235,11 @@ Unclear/under-tested in our exact setting:
 3. whether decision failures are mostly signal, calibration, or rule design.
 4. whether recent risk-bounded planners (P23-P27) remain decision-correct at fixed candidate-level `tau`.
 
+Research questions induced by these gaps:
+1. `RQ1`: Is candidate-level risk signal strength sufficient under shift?
+2. `RQ2`: Is local calibration near `tau` sufficient for decision correctness?
+3. `RQ3`: Which failure source dominates: signal, calibration, or decision rule?
+
 ---
 
 ## 8) Failure-Source Separation (with Literature Mapping)
@@ -290,13 +296,14 @@ If a strong baseline risk signal already achieves low `false_safe`, low `safe_re
 
 ## 11) Refined Research Gap (Precise and Defensible)
 
-Prior work provides strong components (calibration methods, risk-aware planning, constraint frameworks, and closed-loop benchmarks), but rarely evaluates whether uncertainty-derived risk is decision-grade for candidate-level `tau`-threshold decisions in closed-loop AV settings under shift, while explicitly separating signal, calibration, and decision-rule failures.
-
 Conjunctive claim from this survey: we did not find prior work that jointly
 1. evaluates candidate-level `tau`-threshold correctness via `false_safe` / `safe_reject` / feasibility metrics,
 2. distinguishes global calibration from local calibration near operating `tau`,
 3. tests closed-loop behavior under controlled distribution shifts, and
 4. decomposes failures into signal vs calibration vs decision-rule components.
+
+This is the primary gap statement.  
+Prior work provides strong components (calibration methods, risk-aware planning, constraint frameworks, and closed-loop benchmarks), but does not close this full conjunction in one protocol.
 
 This is a scoped gap about missing **linkage and evaluation protocol**, not a claim that prior methods are invalid.
 
@@ -337,7 +344,7 @@ What literature establishes reliably:
 1. uncertainty and risk constraints can improve behavior,
 2. calibration methods often improve probability quality,
 3. shift can break uncertainty reliability,
-4. closed-loop benchmarks can evaluate practical outcomes.
+4. closed-loop benchmarks make such evaluation feasible.
 
 What literature does not settle for our target setting:
 1. whether candidate-level threshold decisions are correct at operational `tau`,
@@ -357,6 +364,8 @@ flowchart TD
     A["Candidate Context x"] --> B["Predicted Risk p_hat(x)"]
     B --> C["Decision D(p_hat,tau)"]
     C --> D["Closed-loop Outcome Y"]
+    D --> I["Next-state Distribution x(t+1)"]
+    I --> A
 
     B --> E["Signal Failure"]
     B --> F["Calibration Failure"]
