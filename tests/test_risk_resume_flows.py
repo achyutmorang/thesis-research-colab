@@ -135,6 +135,11 @@ def test_uq_benchmark_flow_resume_loads_existing_artifacts(tmp_path: Path) -> No
     )
     assert first.loaded_from_existing is False
     assert (tmp_path / 'uq_resume_smoke_uq_benchmark_summary.csv').exists()
+    assert (tmp_path / 'uq_resume_smoke_risk_control_per_step_trace.csv').exists()
+    assert (tmp_path / 'uq_resume_smoke_risk_control_per_scenario_results.csv').exists()
+    assert not first.controller_per_step_df.empty
+    assert not first.controller_per_scenario_df.empty
+    assert not first.controller_summary_df.empty
 
     second = uq_benchmark_flow.run_uq_benchmark_flow(
         cfg=cfg,
@@ -144,6 +149,7 @@ def test_uq_benchmark_flow_resume_loads_existing_artifacts(tmp_path: Path) -> No
     )
     assert second.loaded_from_existing is True
     assert not second.benchmark_bundle.summary_df.empty
+    assert not second.controller_per_step_df.empty
 
 
 def test_risk_training_flow_resume_uses_checkpoint_only_state(tmp_path: Path) -> None:

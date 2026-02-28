@@ -77,6 +77,9 @@ def test_miscalibration_probe_flow_writes_artifacts_and_supports_resume(tmp_path
     assert not first.benchmark_bundle.per_shift_df.empty
     assert not first.benchmark_bundle.reliability_df.empty
     assert not first.threshold_df.empty
+    assert not first.leakage_df.empty
+    assert not first.proxy_calibration_df.empty
+    assert 'planner_risk_combo_platt' in first.predictions_df.columns
     assert flow.has_existing_miscalibration_probe_artifacts(run_prefix)
 
     required_keys = {
@@ -86,6 +89,10 @@ def test_miscalibration_probe_flow_writes_artifacts_and_supports_resume(tmp_path
         'miscalibration_probe_selective_risk_curve',
         'miscalibration_probe_shift_gap_summary',
         'miscalibration_probe_threshold_diagnostics',
+        'miscalibration_probe_leakage_checks',
+        'miscalibration_probe_shift_profile',
+        'miscalibration_probe_class_balance',
+        'miscalibration_probe_proxy_calibration',
         'miscalibration_probe_predictions',
         'artifact_schema',
     }
@@ -102,7 +109,9 @@ def test_miscalibration_probe_flow_writes_artifacts_and_supports_resume(tmp_path
     assert second.loaded_from_existing
     assert not second.benchmark_bundle.summary_df.empty
     assert not second.threshold_df.empty
+    assert not second.leakage_df.empty
 
     loaded = flow.load_existing_miscalibration_probe_bundle(run_prefix)
     assert loaded.loaded_from_existing
     assert not loaded.predictions_df.empty
+    assert not loaded.proxy_calibration_df.empty
