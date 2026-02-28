@@ -23,20 +23,20 @@ Focus setting (explicitly narrow):
 Let `x` denote candidate-action context (scene state, candidate action, rollout features, uncertainty features).
 
 - True (latent) risk function:
-  \[
+  $$
   p(x) := \mathbb{P}(Y=1 \mid x),
-  \]
+  $$
   where `Y=1` indicates failure event (collision/offroad/failure proxy at chosen horizon).
 
 - Model-predicted risk used by the controller:
-  \[
+  $$
   \hat p(x) := f_{\theta}(x).
-  \]
+  $$
 
 - Operational threshold decision operator:
-  \[
+  $$
   D(\hat p,\tau) = \mathbf{1}[\hat p \le \tau],
-  \]
+  $$
   where `D=1` means candidate is accepted as safe under budget `tau`.
 
 ### 1.2 Decision Correctness at Operating Threshold
@@ -44,28 +44,28 @@ Let `x` denote candidate-action context (scene state, candidate action, rollout 
 Key decision error rates:
 
 - False-safe violation:
-  \[
+  $$
   \mathrm{FS}_{\hat p}(\tau) := \mathbb{P}(Y=1 \mid \hat p \le \tau).
-  \]
+  $$
 
 - Safe-reject rate:
-  \[
+  $$
   \mathrm{SR}_{\hat p}(\tau) := \mathbb{P}(Y=0 \mid \hat p > \tau).
-  \]
+  $$
 
 Target operating-point criterion (ideal threshold-consistency condition):
-\[
+$$
 \mathbb{P}(Y=1 \mid \hat p \le \tau) \le \tau.
-\]
+$$
 
 This is a desirable operational target, not a guarantee implied by standard global calibration alone.
 In practice this is estimated with finite-sample uncertainty, so CI reporting is required.
-In practice, \(\mathrm{FS}_{\hat p}(\tau)\) is the primary operating-point safety diagnostic.
+In practice, $\mathrm{FS}_{\hat p}(\tau)$ is the primary operating-point safety diagnostic.
 
 ### 1.3 Global vs Local Calibration
 
 - Global calibration: risk probabilities are reliable across the full probability range (e.g., ECE/reliability diagram over `[0,1]`).
-- Local calibration near `tau`: reliability is specifically correct around the action boundary `\hat p≈tau`, where accept/reject flips occur.
+- Local calibration near `tau`: reliability is specifically correct around the action boundary `p_hat ≈ tau`, where accept/reject flips occur.
 
 Global calibration can look good while local calibration near `tau` is poor.
 
@@ -74,7 +74,7 @@ Global calibration can look good while local calibration near `tau` is poor.
 ## 2) Formal Definition: Decision-Grade Risk
 
 We use **decision-grade risk** as an operational composite criterion for threshold control.  
-Decision-grade is defined here relative to the thresholded acceptance rule `D(\hat p,\tau)`, not as a universal property across all controllers.
+Decision-grade is defined here relative to the thresholded acceptance rule `D(p_hat, tau)`, not as a universal property across all controllers.
 A risk signal is decision-grade under this operational definition if all hold:
 1. Calibration (especially near `tau`),
 2. Discriminative power (candidate ranking quality),
@@ -97,14 +97,14 @@ A risk signal is decision-grade under this operational definition if all hold:
 
 ### Type 1: False-safe (unsafe acceptance)
 Accepting candidates under budget that still fail.
-- Indicator: high `P(Y=1 | \hat p<=tau)`.
+- Indicator: high `P(Y=1 | p_hat <= tau)`.
 
 ### Type 2: Safe-reject (over-conservatism)
 Rejecting candidates that would have been safe.
-- Indicator: high `P(Y=0 | \hat p>tau)`.
+- Indicator: high `P(Y=0 | p_hat > tau)`.
 
 ### Type 3: Feasible-set collapse
-No candidate satisfies `\hat p<=tau` at many steps.
+No candidate satisfies `p_hat <= tau` at many steps.
 - Indicators: low `feasible_set_rate`, high `fallback_rate`.
 
 ### Type 4: Shift instability
@@ -145,7 +145,7 @@ Legend for contradiction vs our hypothesis:
 - `Partial`: shows conditions where our hypothesis may fail.
 - `Untested`: does not directly test our setting.
 
-| ID | Paper | Venue/Year | Role | Risk signal `\hat p(x)` or surrogate | Decision formulation `D` | Granularity | Works well when | Key assumptions | Eval type | Contradiction? | Limitation for our setting |
+| ID | Paper | Venue/Year | Role | Risk signal `p_hat(x)` or surrogate | Decision formulation `D` | Granularity | Works well when | Key assumptions | Eval type | Contradiction? | Limitation for our setting |
 |---|---|---|---|---|---|---|---|---|---|---|---|
 | P01 | Guo et al. (Temp scaling) | ICML 2017 | Canonical | learned logits -> calibrated prob | thresholding by calibrated probs downstream | sample | in-domain moderate shift | val~deploy, IID-ish | open-loop | Partial | no closed-loop decision causality |
 | P02 | Niculescu-Mizil & Caruana (Platt/Isotonic) | ICML 2005 | Canonical | monotonic score->probability map | threshold on mapped probs | sample | static supervised settings | score-risk monotonicity | open-loop | Partial | no shift/closed-loop treatment |
@@ -180,15 +180,15 @@ Legend for contradiction vs our hypothesis:
 ## 6) Unifying Abstraction Across Literature
 
 All papers can be projected onto two objects:
-1. `\hat p(x)` (estimated risk signal, targeting latent `p(x)`)
-2. `D(\hat p,\tau)` (decision operator at operating threshold)
+1. `p_hat(x)` (estimated risk signal, targeting latent `p(x)`)
+2. `D(p_hat, tau)` (decision operator at operating threshold)
 
 ### 6.1 Where papers cluster
 
-- Papers modeling `\hat p(x)` but weakly auditing `D`:
+- Papers modeling `p_hat(x)` but weakly auditing `D`:
   P01-P06, P03-P05 (uncertainty/calibration emphasis).
 
-- Papers defining `D` but assuming `\hat p(x)` is adequate:
+- Papers defining `D` but assuming `p_hat(x)` is adequate:
   P07-P12, P10, P13, P16-P17.
 
 - Papers enabling closed-loop measurement but not this linkage:
@@ -197,9 +197,9 @@ All papers can be projected onto two objects:
 ### 6.2 Missing connection
 
 The under-tested link is:
-\[
+$$
 \text{quality of }\hat p(x) \;\Rightarrow\; \text{correctness of }D(\hat p,\tau) \;\Rightarrow\; \text{closed-loop outcomes under shift}.
-\]
+$$
 
 ### 6.3 Decision Granularity Mismatch
 
@@ -249,9 +249,9 @@ Research questions induced by these gaps:
 
 | Source | Definition | Literature support | Strength | What remains untested for us |
 |---|---|---|---|---|
-| Signal failure | weak `\hat p(x)` ranking/discrimination | indirectly discussed; direct candidate-level AV evidence sparse | Medium | within-step AUC and ranking stability under shift |
+| Signal failure | weak `p_hat(x)` ranking/discrimination | indirectly discussed; direct candidate-level AV evidence sparse | Medium | within-step AUC and ranking stability under shift |
 | Calibration failure | predictive score but wrong numeric probability | strongly supported (P01, P05, P06, P25) | High | local calibration near operating `tau` in closed-loop |
-| Decision-rule failure | good `\hat p(x)` but poor mapping to actions | selective + constrained methods imply this (P07-P10, P23-P24) | Medium | ablations isolating rule from model quality |
+| Decision-rule failure | good `p_hat(x)` but poor mapping to actions | selective + constrained methods imply this (P07-P10, P23-P24) | Medium | ablations isolating rule from model quality |
 
 Inference discipline:
 - If outcomes worsen, literature does not justify blaming calibration alone without checking signal and decision rule.
@@ -315,7 +315,7 @@ This is a scoped gap about missing **linkage and evaluation protocol**, not a cl
 ## 12) Methodology Justification (Class of Needed Solutions)
 
 A suitable methodological class should include:
-1. candidate-level risk estimation `\hat p(x)` with ranking diagnostics,
+1. candidate-level risk estimation `p_hat(x)` with ranking diagnostics,
 2. calibration targeted near operational `tau` (not only global ECE),
 3. explicit decision-audit metrics (`false_safe`, `safe_reject`, feasibility, fallback),
 4. closed-loop shift-suite evaluation,
@@ -382,7 +382,7 @@ flowchart TD
 |---|---|---|---|
 | Signal failure | Candidate-level ranking test per step and per shift | AUROC, AUPRC, within-step AUC | Low discrimination means better calibration alone is unlikely to fix control decisions |
 | Calibration failure | Global + local reliability analysis around `tau` | ECE, NLL, Brier, local bin error near `tau` | Large local error near `tau` implies threshold decisions are numerically unreliable |
-| Decision-rule failure | Hold `\hat p(x)` fixed, compare threshold/gating/reranking rules | `false_safe`, `safe_reject`, progress, comfort, fallback | If outcomes vary strongly by rule, mapping from risk to action is bottleneck |
+| Decision-rule failure | Hold `p_hat(x)` fixed, compare threshold/gating/reranking rules | `false_safe`, `safe_reject`, progress, comfort, fallback | If outcomes vary strongly by rule, mapping from risk to action is bottleneck |
 | Feasible-set collapse | Threshold sweep and feasible-candidate accounting | feasible_set_rate, fallback_rate, accepted count | Persistent low feasibility indicates over-conservative decision policy |
 | Shift instability | Repeat diagnostics across nominal and shift suites | delta ECE, delta FS/SR, delta feasibility | Large deltas indicate non-robust operating-point behavior |
 
