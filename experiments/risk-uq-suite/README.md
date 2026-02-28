@@ -4,6 +4,7 @@
 Train/calibrate risk models and run uncertainty-quantification benchmarks with paper tables/figures.
 
 ## Notebooks
+- `experiments/risk-uq-suite/notebooks/miscalibration_probe_colab.ipynb`
 - `experiments/risk-uq-suite/notebooks/risk_model_training_colab.ipynb`
 - `experiments/risk-uq-suite/notebooks/uq_benchmark_colab.ipynb`
 - `experiments/risk-uq-suite/notebooks/paper_tables_figures_colab.ipynb`
@@ -27,3 +28,7 @@ Train/calibrate risk models and run uncertainty-quantification benchmarks with p
 ## Core Modules
 - `src/risk_model/`
 - `src/workflows/`
+
+## Inspiration References
+- `experiments/risk-uq-suite/references/INSPIRATION_REPOS.md`
+- `experiments/risk-uq-suite/references/fetch_inspiration_repos.sh`

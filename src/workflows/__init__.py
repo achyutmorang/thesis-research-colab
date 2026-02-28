@@ -61,6 +61,12 @@ from .uq_benchmark_flow import (
     load_existing_uq_benchmark_bundle,
     run_uq_benchmark_flow,
 )
+from .miscalibration_probe_flow import (
+    MiscalibrationProbeBundle,
+    has_existing_miscalibration_probe_artifacts,
+    load_existing_miscalibration_probe_bundle,
+    run_miscalibration_probe_flow,
+)
 from .paper_export_flow import (
     PaperExportBundle,
     export_paper_tables_and_figures,
@@ -145,6 +151,10 @@ __all__ = [
     "has_existing_uq_benchmark_artifacts",
     "load_existing_uq_benchmark_bundle",
     "run_uq_benchmark_flow",
+    "MiscalibrationProbeBundle",
+    "has_existing_miscalibration_probe_artifacts",
+    "load_existing_miscalibration_probe_bundle",
+    "run_miscalibration_probe_flow",
     "PaperExportBundle",
     "export_paper_tables_and_figures",
     "ExperimentBootstrapBundle",

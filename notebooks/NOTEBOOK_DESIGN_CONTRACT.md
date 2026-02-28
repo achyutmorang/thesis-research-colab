@@ -9,6 +9,29 @@ Use this as the standard for any Colab notebook, regardless of topic.
 - Separate orchestration (notebook) from logic (`src/`).
 - Keep each notebook attached to one experiment pack (`experiments/<slug>/` + `configs/experiments/<slug>.json`).
 
+## Applicability
+- This contract is the **default** for long-running, artifact-heavy, resumable experiments.
+- If an experiment design is short, exploratory, and does not require persistence/resume guarantees, strict compliance is optional.
+- In those cases, use the "Lightweight profile" below and document the reason in the objective cell.
+
+## Execution Profiles
+### Full Profile (default)
+- Use the required order, mandatory config fields, persistent storage contract, and resume contract exactly as written below.
+
+### Lightweight Profile (allowed exception)
+- Allowed only when all are true:
+  - runtime is expected to be short and restart cost is low,
+  - no critical checkpoint state is required,
+  - outputs can be regenerated quickly.
+- Minimum requirements in lightweight mode:
+  - objective + hypothesis cell,
+  - explicit config cell,
+  - one fast-fail sanity cell,
+  - one export cell that writes at least a compact summary artifact.
+- Still recommended:
+  - keep logic in `src/`,
+  - keep cells idempotent where practical.
+
 ## Core Principles
 1. Notebook cells orchestrate; modules implement.
 2. Every step is idempotent.
