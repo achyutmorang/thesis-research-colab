@@ -123,18 +123,29 @@ def extract_rollout_summary_features(
     else:
         progress = 0.0
 
+    # Some safety metrics can be +inf when no collision course exists; convert to
+    # large finite sentinel values to keep downstream training/checkpointing robust.
+    ttc_cap = float(max(10.0, _safe_float(getattr(cfg, 'no_hazard_ttc_seconds', 3.0), default=10.0)))
+    dist_cap = float(max(50.0, _safe_float(getattr(cfg, 'no_hazard_dist_m', 8.0), default=50.0)))
+    min_ttc = _safe_float(risk.get('min_ttc', np.nan), default=np.nan)
+    min_dist = _safe_float(risk.get('min_dist', np.nan), default=np.nan)
+    if not np.isfinite(min_ttc):
+        min_ttc = ttc_cap
+    if not np.isfinite(min_dist):
+        min_dist = dist_cap
+
     return {
-        f'ego_speed_h{n_h}': float(np.nanmean(ego_vel)) if ego_vel.size > 0 else 0.0,
-        f'progress_h{n_h}': progress,
-        f'min_ttc_h{n_h}': float(risk['min_ttc']),
-        f'min_distance_h{n_h}': float(risk['min_dist']),
-        f'max_abs_acc_h{n_h}': float(np.nanmax(ego_acc)) if ego_acc.size > 0 else 0.0,
-        f'max_abs_jerk_h{n_h}': float(np.nanmax(ego_jerk)) if ego_jerk.size > 0 else 0.0,
+        f'ego_speed_h{n_h}': _safe_float(np.nanmean(ego_vel) if ego_vel.size > 0 else 0.0, default=0.0),
+        f'progress_h{n_h}': _safe_float(progress, default=0.0),
+        f'min_ttc_h{n_h}': _safe_float(min_ttc, default=ttc_cap),
+        f'min_distance_h{n_h}': _safe_float(min_dist, default=dist_cap),
+        f'max_abs_acc_h{n_h}': _safe_float(np.nanmax(ego_acc) if ego_acc.size > 0 else 0.0, default=0.0),
+        f'max_abs_jerk_h{n_h}': _safe_float(np.nanmax(ego_jerk) if ego_jerk.size > 0 else 0.0, default=0.0),
         f'route_deviation_h{n_h}': _safe_float(route_deviation_h, default=0.0),
         f'target_interaction_score': _safe_float(target_interaction_score, default=0.0),
-        f'risk_sks_short_h{n_h}': float(risk['risk_sks']),
-        f'collision_h{n_h}_proxy': float(risk['collision']),
-        f'failure_proxy_h{n_h}_proxy': float(risk['failure_extended_proxy']),
+        f'risk_sks_short_h{n_h}': _safe_float(risk.get('risk_sks', 0.0), default=0.0),
+        f'collision_h{n_h}_proxy': _safe_float(risk.get('collision', 0.0), default=0.0),
+        f'failure_proxy_h{n_h}_proxy': _safe_float(risk.get('failure_extended_proxy', 0.0), default=0.0),
     }
 
 
