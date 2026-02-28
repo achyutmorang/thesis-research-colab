@@ -94,3 +94,17 @@ def test_miscalibration_interpretation_flow_discovers_and_analyzes(tmp_path: Pat
         interpreted.verdict_df['claim'].astype(str).tolist()
     )
     assert str(interpreted.narrative).strip()
+
+    sweep_df = interp_flow.compute_threshold_sweep_diagnostics(
+        interpreted.source_bundle.predictions_df,
+        focus_label='failure_proxy_h15',
+        tau_values=(0.2, 0.4),
+        bootstrap_samples=32,
+        bootstrap_seed=11,
+    )
+    assert not sweep_df.empty
+    assert set(['tau', 'shift_suite', 'variant', 'variant_group']).issubset(sweep_df.columns)
+    assert set(['accept_rate', 'false_safe_cond', 'safe_reject_cond']).issubset(sweep_df.columns)
+    assert set(['feasible_set_rate', 'fallback_rate']).issubset(sweep_df.columns)
+    assert set(['accept_rate_ci_low', 'accept_rate_ci_high']).issubset(sweep_df.columns)
+    assert set(sweep_df['tau'].round(6).tolist()) == {0.2, 0.4}

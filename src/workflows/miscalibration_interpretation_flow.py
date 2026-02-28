@@ -8,6 +8,7 @@ import numpy as np
 import pandas as pd
 
 from .miscalibration_probe_flow import (
+    DEFAULT_VARIANTS,
     MiscalibrationProbeBundle,
     has_existing_miscalibration_probe_artifacts,
     load_existing_miscalibration_probe_bundle,
@@ -99,6 +100,242 @@ def discover_probe_run_prefixes(
     out = pd.DataFrame(rows).sort_values(['mtime_epoch'], ascending=False).head(int(max(1, limit)))
     out['mtime_utc'] = pd.to_datetime(out['mtime_epoch'], unit='s', utc=True).astype(str)
     return out[['run_prefix', 'summary_path', 'mtime_utc']].reset_index(drop=True)
+
+
+def resolve_threshold_sweep_variants(
+    predictions_df: pd.DataFrame,
+    *,
+    focus_label: str = 'failure_proxy_h15',
+) -> Dict[str, str]:
+    candidates = dict(DEFAULT_VARIANTS)
+
+    focus_key = str(focus_label).strip().lower()
+    if focus_key:
+        suffix = focus_key
+        candidates.update(
+            {
+                f'{focus_key}_model_raw': f'risk_raw_{suffix}',
+                f'{focus_key}_model_cal': f'risk_cal_{suffix}',
+            }
+        )
+
+    out: Dict[str, str] = {}
+    for variant, prob_col in candidates.items():
+        if str(prob_col) in predictions_df.columns:
+            out[str(variant)] = str(prob_col)
+    return out
+
+
+def _safe_prob_array(values: Any, *, default: float = 0.5) -> np.ndarray:
+    arr = np.asarray(pd.to_numeric(values, errors='coerce'), dtype=float)
+    arr = np.where(np.isfinite(arr), arr, float(default))
+    return np.clip(arr, 1e-6, 1.0 - 1e-6)
+
+
+def _safe_label_array(values: Any) -> np.ndarray:
+    arr = np.asarray(pd.to_numeric(values, errors='coerce'), dtype=float)
+    arr = np.where(np.isfinite(arr), arr, 0.0)
+    return (arr > 0.5).astype(float)
+
+
+def _decision_metrics_from_arrays(
+    probs: np.ndarray,
+    labels: np.ndarray,
+    *,
+    tau: float,
+    step_keys: Optional[np.ndarray] = None,
+) -> Dict[str, float]:
+    p = _safe_prob_array(probs, default=0.5)
+    y = _safe_label_array(labels)
+    n_rows = int(p.size)
+    if n_rows <= 0:
+        return {
+            'n_rows': 0.0,
+            'positive_rate': np.nan,
+            'accept_count': 0.0,
+            'reject_count': 0.0,
+            'accept_rate': np.nan,
+            'reject_rate': np.nan,
+            'mean_predicted_risk': np.nan,
+            'empirical_failure_rate': np.nan,
+            'risk_gap_empirical_minus_predicted': np.nan,
+            'false_safe_rate': np.nan,
+            'safe_rejected_rate': np.nan,
+            'false_safe_cond': np.nan,
+            'safe_reject_cond': np.nan,
+            'empirical_failure_given_accepted': np.nan,
+            'budget_violated': np.nan,
+            'feasible_set_rate': np.nan,
+            'fallback_rate': np.nan,
+        }
+
+    tau_f = float(np.clip(float(tau), 0.0, 1.0))
+    accepted = p <= tau_f
+    rejected = ~accepted
+    accept_count = int(np.sum(accepted))
+    reject_count = int(np.sum(rejected))
+
+    mean_pred = float(np.mean(p))
+    empirical_failure = float(np.mean(y))
+    false_safe_joint = float(np.mean(accepted & (y > 0.5)))
+    safe_rejected_joint = float(np.mean(rejected & (y <= 0.5)))
+    false_safe_cond = float(np.mean(y[accepted])) if accept_count > 0 else np.nan
+    safe_reject_cond = float(np.mean((y <= 0.5)[rejected])) if reject_count > 0 else np.nan
+
+    feasible_set_rate = np.nan
+    fallback_rate = np.nan
+    if step_keys is not None and len(step_keys) == n_rows:
+        step_df = pd.DataFrame({'step_key': step_keys, 'accepted': accepted.astype(np.int32)})
+        if not step_df.empty:
+            feasible_set_rate = float(step_df.groupby('step_key', sort=False)['accepted'].max().mean())
+            fallback_rate = float(1.0 - feasible_set_rate)
+
+    return {
+        'n_rows': float(n_rows),
+        'positive_rate': empirical_failure,
+        'accept_count': float(accept_count),
+        'reject_count': float(reject_count),
+        'accept_rate': float(accept_count / max(1, n_rows)),
+        'reject_rate': float(reject_count / max(1, n_rows)),
+        'mean_predicted_risk': mean_pred,
+        'empirical_failure_rate': empirical_failure,
+        'risk_gap_empirical_minus_predicted': float(empirical_failure - mean_pred),
+        'false_safe_rate': false_safe_joint,
+        'safe_rejected_rate': safe_rejected_joint,
+        'false_safe_cond': false_safe_cond,
+        'safe_reject_cond': safe_reject_cond,
+        'empirical_failure_given_accepted': false_safe_cond,
+        'budget_violated': float(
+            bool(np.isfinite(false_safe_cond) and (false_safe_cond > tau_f))
+        ),
+        'feasible_set_rate': feasible_set_rate,
+        'fallback_rate': fallback_rate,
+    }
+
+
+def _bootstrap_ci(values: List[float]) -> tuple[float, float]:
+    arr = np.asarray(values, dtype=float)
+    arr = arr[np.isfinite(arr)]
+    if arr.size <= 0:
+        return float('nan'), float('nan')
+    lo = float(np.quantile(arr, 0.025))
+    hi = float(np.quantile(arr, 0.975))
+    return lo, hi
+
+
+def compute_threshold_sweep_diagnostics(
+    predictions_df: pd.DataFrame,
+    *,
+    focus_label: str = 'failure_proxy_h15',
+    tau_values: Optional[Sequence[float]] = None,
+    variants: Optional[Dict[str, str]] = None,
+    bootstrap_samples: int = 0,
+    bootstrap_seed: int = 17,
+) -> pd.DataFrame:
+    if predictions_df.empty:
+        return pd.DataFrame()
+
+    label_col = str(focus_label)
+    if label_col not in predictions_df.columns:
+        raise ValueError(f'focus label column not found in predictions: {label_col!r}')
+
+    work = predictions_df.copy()
+    if 'shift_suite' not in work.columns:
+        work['shift_suite'] = 'nominal_clean'
+    else:
+        work['shift_suite'] = work['shift_suite'].fillna('nominal_clean').astype(str)
+
+    variant_map = dict(variants or resolve_threshold_sweep_variants(work, focus_label=label_col))
+    variant_map = {str(k): str(v) for k, v in variant_map.items() if str(v) in work.columns}
+    if len(variant_map) <= 0:
+        raise ValueError('No valid probability columns found for tau sweep diagnostics.')
+
+    if tau_values is None:
+        tau_arr = np.linspace(0.05, 0.80, 16)
+    else:
+        tau_arr = np.asarray(list(tau_values), dtype=float)
+        tau_arr = tau_arr[np.isfinite(tau_arr)]
+        if tau_arr.size <= 0:
+            raise ValueError('tau_values is empty after numeric filtering.')
+    tau_arr = np.clip(tau_arr, 0.0, 1.0)
+    tau_arr = np.unique(np.round(tau_arr.astype(float), 6))
+
+    rng = np.random.default_rng(int(bootstrap_seed))
+    rows: List[Dict[str, Any]] = []
+    ci_metrics = (
+        'accept_rate',
+        'false_safe_rate',
+        'safe_rejected_rate',
+        'false_safe_cond',
+        'safe_reject_cond',
+        'feasible_set_rate',
+        'fallback_rate',
+    )
+
+    for shift_suite, shift_df in work.groupby('shift_suite', sort=True):
+        labels = _safe_label_array(shift_df[label_col])
+
+        step_keys: Optional[np.ndarray] = None
+        if ('scenario_id' in shift_df.columns) and ('step_idx' in shift_df.columns):
+            step_keys = (
+                shift_df['scenario_id'].astype(str).to_numpy(dtype=object)
+                + '::'
+                + shift_df['step_idx'].astype(str).to_numpy(dtype=object)
+            )
+
+        if 'scenario_id' in shift_df.columns:
+            unit_ids = shift_df['scenario_id'].astype(str).to_numpy(dtype=object)
+        elif step_keys is not None:
+            unit_ids = step_keys
+        else:
+            unit_ids = np.asarray([str(i) for i in range(len(shift_df))], dtype=object)
+
+        unique_units, inv = np.unique(unit_ids, return_inverse=True)
+        unit_indices = [np.where(inv == i)[0] for i in range(len(unique_units))]
+
+        for variant, prob_col in variant_map.items():
+            probs = _safe_prob_array(shift_df[prob_col], default=0.5)
+            variant_group = str(_variant_group(pd.Series([variant])).iloc[0])
+
+            for tau in tau_arr:
+                metrics = _decision_metrics_from_arrays(
+                    probs,
+                    labels,
+                    tau=float(tau),
+                    step_keys=step_keys,
+                )
+                row = {
+                    'shift_suite': str(shift_suite),
+                    'variant': str(variant),
+                    'variant_group': variant_group,
+                    'label': label_col,
+                    'tau': float(tau),
+                    'probability_column': str(prob_col),
+                    **metrics,
+                }
+
+                n_boot = int(max(0, int(bootstrap_samples)))
+                if n_boot > 0 and len(unit_indices) > 1:
+                    boot_values: Dict[str, List[float]] = {k: [] for k in ci_metrics}
+                    for _ in range(n_boot):
+                        sampled = rng.integers(0, len(unit_indices), size=len(unit_indices))
+                        idx = np.concatenate([unit_indices[int(i)] for i in sampled], axis=0)
+                        boot_metrics = _decision_metrics_from_arrays(
+                            probs[idx],
+                            labels[idx],
+                            tau=float(tau),
+                            step_keys=(step_keys[idx] if step_keys is not None else None),
+                        )
+                        for key in ci_metrics:
+                            boot_values[key].append(float(boot_metrics.get(key, np.nan)))
+                    for key in ci_metrics:
+                        lo, hi = _bootstrap_ci(boot_values[key])
+                        row[f'{key}_ci_low'] = lo
+                        row[f'{key}_ci_high'] = hi
+
+                rows.append(row)
+
+    return pd.DataFrame(rows)
 
 
 def analyze_miscalibration_probe_bundle(
@@ -313,4 +550,3 @@ def load_and_analyze_miscalibration_probe(
         focus_label=str(focus_label),
         threshold=float(threshold),
     )
-

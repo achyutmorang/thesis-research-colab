@@ -70,8 +70,10 @@ from .miscalibration_probe_flow import (
 from .miscalibration_interpretation_flow import (
     MiscalibrationInterpretationBundle,
     analyze_miscalibration_probe_bundle,
+    compute_threshold_sweep_diagnostics,
     discover_probe_run_prefixes,
     load_and_analyze_miscalibration_probe,
+    resolve_threshold_sweep_variants,
 )
 from .paper_export_flow import (
     PaperExportBundle,
@@ -179,6 +181,8 @@ __all__ = [
     "discover_probe_run_prefixes",
     "analyze_miscalibration_probe_bundle",
     "load_and_analyze_miscalibration_probe",
+    "resolve_threshold_sweep_variants",
+    "compute_threshold_sweep_diagnostics",
     "PaperExportBundle",
     "export_paper_tables_and_figures",
     "ExperimentBootstrapBundle",
