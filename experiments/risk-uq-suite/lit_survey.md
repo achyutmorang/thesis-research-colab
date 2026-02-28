@@ -22,15 +22,20 @@ Focus setting (explicitly narrow):
 
 Let `x` denote candidate-action context (scene state, candidate action, rollout features, uncertainty features).
 
-- Risk function:
+- True (latent) risk function:
   \[
   p(x) := \mathbb{P}(Y=1 \mid x),
   \]
   where `Y=1` indicates failure event (collision/offroad/failure proxy at chosen horizon).
 
-- Threshold decision operator:
+- Model-predicted risk used by the controller:
   \[
-  D(p,\tau) = \mathbf{1}[p \le \tau],
+  \hat p(x) := f_{\theta}(x).
+  \]
+
+- Operational threshold decision operator:
+  \[
+  D(\hat p,\tau) = \mathbf{1}[\hat p \le \tau],
   \]
   where `D=1` means candidate is accepted as safe under budget `tau`.
 
@@ -40,23 +45,25 @@ Key decision error rates:
 
 - False-safe violation:
   \[
-  \mathrm{FS}(\tau) := \mathbb{P}(Y=1 \mid p \le \tau).
+  \mathrm{FS}_{\hat p}(\tau) := \mathbb{P}(Y=1 \mid \hat p \le \tau).
   \]
 
 - Safe-reject rate:
   \[
-  \mathrm{SR}(\tau) := \mathbb{P}(Y=0 \mid p > \tau).
+  \mathrm{SR}_{\hat p}(\tau) := \mathbb{P}(Y=0 \mid \hat p > \tau).
   \]
 
-Decision-correctness requirement at operating threshold:
+Operational decision-correctness requirement at operating threshold:
 \[
-\mathbb{P}(Y=1 \mid p \le \tau) \le \tau.
+\mathbb{P}(Y=1 \mid \hat p \le \tau) \le \tau.
 \]
+
+In practice this is estimated with finite-sample uncertainty, so CI reporting is required.
 
 ### 1.3 Global vs Local Calibration
 
 - Global calibration: risk probabilities are reliable across the full probability range (e.g., ECE/reliability diagram over `[0,1]`).
-- Local calibration near `tau`: reliability is specifically correct around the action boundary `p≈tau`, where accept/reject flips occur.
+- Local calibration near `tau`: reliability is specifically correct around the action boundary `\hat p≈tau`, where accept/reject flips occur.
 
 Global calibration can look good while local calibration near `tau` is poor.
 
@@ -68,7 +75,7 @@ A risk signal is **decision-grade** for threshold control if all hold:
 1. Calibration (especially near `tau`),
 2. Discriminative power (candidate ranking quality),
 3. Shift stability,
-4. Decision correctness and feasibility under `D(p,tau)`.
+4. Decision correctness and feasibility under `D(\hat p,tau)`.
 
 ### 2.1 Metric Mapping
 
@@ -86,14 +93,14 @@ A risk signal is **decision-grade** for threshold control if all hold:
 
 ### Type 1: False-safe (unsafe acceptance)
 Accepting candidates under budget that still fail.
-- Indicator: high `P(Y=1 | p<=tau)`.
+- Indicator: high `P(Y=1 | \hat p<=tau)`.
 
 ### Type 2: Safe-reject (over-conservatism)
 Rejecting candidates that would have been safe.
-- Indicator: high `P(Y=0 | p>tau)`.
+- Indicator: high `P(Y=0 | \hat p>tau)`.
 
 ### Type 3: Feasible-set collapse
-No candidate satisfies `p<=tau` at many steps.
+No candidate satisfies `\hat p<=tau` at many steps.
 - Indicators: low `feasible_set_rate`, high `fallback_rate`.
 
 ### Type 4: Shift instability
@@ -129,10 +136,10 @@ Legend for contradiction vs our hypothesis:
 - `Partial`: shows conditions where our hypothesis may fail.
 - `Untested`: does not directly test our setting.
 
-| ID | Paper | Venue/Year | Role | Risk model `p(x)` | Decision formulation `D` | Granularity | Works well when | Key assumptions | Eval type | Contradiction? | Limitation for our setting |
+| ID | Paper | Venue/Year | Role | Risk signal `\hat p(x)` or surrogate | Decision formulation `D` | Granularity | Works well when | Key assumptions | Eval type | Contradiction? | Limitation for our setting |
 |---|---|---|---|---|---|---|---|---|---|---|---|
 | P01 | Guo et al. (Temp scaling) | ICML 2017 | Canonical | learned logits -> calibrated prob | thresholding by calibrated probs downstream | sample | in-domain moderate shift | val~deploy, IID-ish | open-loop | Partial | no closed-loop decision causality |
-| P02 | Platt/Isotonic | ICML 2005 | Canonical | monotonic score->probability map | threshold on mapped probs | sample | static supervised settings | score-risk monotonicity | open-loop | Partial | no shift/closed-loop treatment |
+| P02 | Niculescu-Mizil & Caruana (Platt/Isotonic) | ICML 2005 | Canonical | monotonic score->probability map | threshold on mapped probs | sample | static supervised settings | score-risk monotonicity | open-loop | Partial | no shift/closed-loop treatment |
 | P03 | Dropout as Bayesian Approx | ICML 2016 | Canonical | MC-dropout predictive distribution | utility/risk-based action from predictive stats | step/sample | moderate epistemic uncertainty | dropout approx posterior | mixed (mostly open-loop) | Untested | no tau-level correctness analysis |
 | P04 | Deep Ensembles | NeurIPS 2017 | Canonical | ensemble mean/variance predictive probs | decision from mean/confidence | sample | broad supervised tasks | diverse members approximate epistemic | open-loop | Untested | no candidate-level tau audit |
 | P05 | Ovadia et al. (UQ under shift) | NeurIPS 2019 | Canonical | various predictive uncertainty models | evaluate confidence reliability under shift | sample | distribution shift diagnostics | benchmark shifts representative | open-loop | No | not linked to planner/control rule |
@@ -159,15 +166,15 @@ Legend for contradiction vs our hypothesis:
 ## 6) Unifying Abstraction Across Literature
 
 All papers can be projected onto two objects:
-1. `p(x)` (risk model)
-2. `D` (decision operator)
+1. `\hat p(x)` (estimated risk signal, targeting latent `p(x)`)
+2. `D(\hat p,\tau)` (decision operator at operating threshold)
 
 ### 6.1 Where papers cluster
 
-- Papers modeling `p(x)` but weakly auditing `D`:
+- Papers modeling `\hat p(x)` but weakly auditing `D`:
   P01-P06, P03-P05 (uncertainty/calibration emphasis).
 
-- Papers defining `D` but assuming `p(x)` is adequate:
+- Papers defining `D` but assuming `\hat p(x)` is adequate:
   P07-P12, P10, P13, P16-P17.
 
 - Papers enabling closed-loop measurement but not this linkage:
@@ -177,8 +184,16 @@ All papers can be projected onto two objects:
 
 The under-tested link is:
 \[
-\text{quality of }p(x) \;\Rightarrow\; \text{correctness of }D(p,\tau) \;\Rightarrow\; \text{closed-loop outcomes under shift}.
+\text{quality of }\hat p(x) \;\Rightarrow\; \text{correctness of }D(\hat p,\tau) \;\Rightarrow\; \text{closed-loop outcomes under shift}.
 \]
+
+### 6.3 Decision Granularity Mismatch
+
+Most prior works report success at trajectory-level or policy-level decisions, while our target is step-time candidate-level acceptance/rejection under `tau`.
+
+Consequence:
+1. a method can look strong on aggregate trajectory metrics,
+2. yet still fail at candidate-level threshold correctness (`false_safe`, `safe_reject`, feasibility) where the controller actually commits actions.
 
 ---
 
@@ -214,9 +229,9 @@ Unclear/under-tested in our exact setting:
 
 | Source | Definition | Literature support | Strength | What remains untested for us |
 |---|---|---|---|---|
-| Signal failure | weak `p(x)` ranking/discrimination | indirectly discussed; direct candidate-level AV evidence sparse | Medium | within-step AUC and ranking stability under shift |
+| Signal failure | weak `\hat p(x)` ranking/discrimination | indirectly discussed; direct candidate-level AV evidence sparse | Medium | within-step AUC and ranking stability under shift |
 | Calibration failure | predictive score but wrong numeric probability | strongly supported (P01, P05, P06) | High | local calibration near operating `tau` in closed-loop |
-| Decision-rule failure | good `p(x)` but poor mapping to actions | selective + constrained methods imply this (P07-P10) | Medium | ablations isolating rule from model quality |
+| Decision-rule failure | good `\hat p(x)` but poor mapping to actions | selective + constrained methods imply this (P07-P10) | Medium | ablations isolating rule from model quality |
 
 Inference discipline:
 - If outcomes worsen, literature does not justify blaming calibration alone without checking signal and decision rule.
@@ -228,6 +243,11 @@ Inference discipline:
 1. Learned planners are increasingly deployed in closed-loop simulation pipelines.
 2. Large-scale simulators (Waymax, WOSAC, nuPlan, SafeBench) make threshold-level diagnostics feasible.
 3. Safety claims are moving from aggregate metrics toward operational decision correctness.
+
+### 9.1 Closed-Loop Dependence Caveat
+
+Closed-loop data are policy-dependent and non-IID: decisions at time `t` alter future state visitation and therefore future data distribution.  
+Implication: classical calibration/conformal guarantees derived under IID or exchangeability can weaken unless dependence-aware protocols are used.
 
 ---
 
@@ -251,11 +271,21 @@ Existing uncertainty-derived risk signals are sufficient for threshold-based dec
 3. degradation/instability under shift,
 4. significant gains after calibration or rule redesign with same candidate set.
 
+### What would refute this research program?
+
+If a strong baseline risk signal already achieves low `false_safe`, low `safe_reject`, and low fallback across nominal and shift suites, and extra calibration/auditing yields negligible improvement, then the proposed decision-grade auditing layer provides little additional value.
+
 ---
 
 ## 11) Refined Research Gap (Precise and Defensible)
 
 Prior work provides strong components (calibration methods, risk-aware planning, constraint frameworks, and closed-loop benchmarks), but rarely evaluates whether uncertainty-derived risk is decision-grade for candidate-level `tau`-threshold decisions in closed-loop AV settings under shift, while explicitly separating signal, calibration, and decision-rule failures.
+
+Conjunctive claim from this survey: we did not find prior work that jointly
+1. evaluates candidate-level `tau`-threshold correctness via `false_safe` / `safe_reject` / feasibility metrics,
+2. distinguishes global calibration from local calibration near operating `tau`,
+3. tests closed-loop behavior under controlled distribution shifts, and
+4. decomposes failures into signal vs calibration vs decision-rule components.
 
 This is a scoped gap about missing **linkage and evaluation protocol**, not a claim that prior methods are invalid.
 
@@ -264,7 +294,7 @@ This is a scoped gap about missing **linkage and evaluation protocol**, not a cl
 ## 12) Methodology Justification (Class of Needed Solutions)
 
 A suitable methodological class should include:
-1. candidate-level risk estimation `p(x)` with ranking diagnostics,
+1. candidate-level risk estimation `\hat p(x)` with ranking diagnostics,
 2. calibration targeted near operational `tau` (not only global ECE),
 3. explicit decision-audit metrics (`false_safe`, `safe_reject`, feasibility, fallback),
 4. closed-loop shift-suite evaluation,
@@ -317,7 +347,7 @@ All referenced PDFs are stored under:
 | ID | Local PDF |
 |---|---|
 | P01 | `guo_2017.pdf` |
-| P02 | `obtaining_calibrated_probabilities_boosting_2012.pdf` |
+| P02 | `niculescu_mizil_caruana_2005.pdf` |
 | P03 | `dropout_bayesian_2016.pdf` |
 | P04 | `deep_ensembles_2017.pdf` |
 | P05 | `ovadia_2019.pdf` |
