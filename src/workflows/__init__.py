@@ -55,6 +55,12 @@ from .paper_export_flow import (
     PaperExportBundle,
     export_paper_tables_and_figures,
 )
+from .notebook_contract import (
+    load_notebook_contract_manifest,
+    manifest_has_stage,
+    validate_notebook_contract_manifest,
+    write_notebook_contract_manifest,
+)
 
 __all__ = [
     "ExportBundle",
@@ -104,4 +110,8 @@ __all__ = [
     "run_uq_benchmark_flow",
     "PaperExportBundle",
     "export_paper_tables_and_figures",
+    "load_notebook_contract_manifest",
+    "manifest_has_stage",
+    "validate_notebook_contract_manifest",
+    "write_notebook_contract_manifest",
 ]

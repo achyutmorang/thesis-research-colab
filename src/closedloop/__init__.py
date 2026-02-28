@@ -37,6 +37,10 @@ _WORKFLOW_EXPORTS = [
     'run_uq_benchmark_flow',
     'summarize_and_export_if_available',
     'train_and_calibrate_risk_model',
+    'load_notebook_contract_manifest',
+    'manifest_has_stage',
+    'validate_notebook_contract_manifest',
+    'write_notebook_contract_manifest',
 ]
 
 __all__ = [
@@ -152,6 +156,10 @@ _SYMBOL_MODULE: Dict[str, str] = {
     'run_uq_benchmark_flow': 'src.workflows.uq_benchmark_flow',
     'PaperExportBundle': 'src.workflows.paper_export_flow',
     'export_paper_tables_and_figures': 'src.workflows.paper_export_flow',
+    'load_notebook_contract_manifest': 'src.workflows.notebook_contract',
+    'manifest_has_stage': 'src.workflows.notebook_contract',
+    'validate_notebook_contract_manifest': 'src.workflows.notebook_contract',
+    'write_notebook_contract_manifest': 'src.workflows.notebook_contract',
 }
 
 
