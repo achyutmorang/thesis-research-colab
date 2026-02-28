@@ -73,6 +73,9 @@ def train_risk_ensemble(
     max_epochs: int = 50,
     patience: int = 8,
     seed: int = 17,
+    checkpoint_prefix: Optional[str] = None,
+    checkpoint_every_epochs: int = 1,
+    resume_from_checkpoints: bool = True,
 ) -> RiskTrainingBundle:
     if dataset_df.empty:
         raise ValueError('dataset_df is empty.')
@@ -113,7 +116,15 @@ def train_risk_ensemble(
         seed=seed,
     )
     model = NumpyEnsembleMLP(cfg)
-    histories = model.fit(x_train, y_train, x_val, y_val)
+    histories = model.fit(
+        x_train,
+        y_train,
+        x_val,
+        y_val,
+        checkpoint_prefix=checkpoint_prefix,
+        checkpoint_every_epochs=int(max(1, checkpoint_every_epochs)),
+        resume_from_checkpoints=bool(resume_from_checkpoints),
+    )
 
     pred = model.predict_with_uncertainty(x_val)
     val_metrics = _validation_metrics(pred['mean_logits'], y_val, label_columns)
@@ -123,6 +134,8 @@ def train_risk_ensemble(
             'best_epoch': int(h.best_epoch),
             'best_val_loss': float(h.best_val_loss),
             'epochs_ran': int(h.epochs_ran),
+            'resumed_from_checkpoint': int(bool(h.resumed_from_checkpoint)),
+            'checkpoint_path': str(h.checkpoint_path),
         }
         for h in histories
     ])

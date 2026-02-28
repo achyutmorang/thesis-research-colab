@@ -175,6 +175,8 @@ class ClosedLoopConfig:
     risk_model_batch_size: int = 1024
     risk_model_max_epochs: int = 50
     risk_model_patience: int = 8
+    risk_model_checkpoint_every_epochs: int = 1
+    risk_model_resume_from_checkpoints: bool = True
     risk_calibration_method: str = 'temperature'
     risk_conformal_alpha: float = 0.10
 

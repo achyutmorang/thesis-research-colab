@@ -8,6 +8,8 @@ from types import SimpleNamespace
 import numpy as np
 import pandas as pd
 
+from src.risk_model.train import train_risk_ensemble
+
 
 def _load_module(module_name: str, rel_path: str):
     root = Path(__file__).resolve().parents[1]
@@ -46,6 +48,8 @@ def _cfg(run_prefix: str) -> SimpleNamespace:
         risk_model_batch_size=64,
         risk_model_max_epochs=4,
         risk_model_patience=2,
+        risk_model_checkpoint_every_epochs=1,
+        risk_model_resume_from_checkpoints=True,
         uq_eval_probability_bins=10,
     )
 
@@ -140,3 +144,36 @@ def test_uq_benchmark_flow_resume_loads_existing_artifacts(tmp_path: Path) -> No
     )
     assert second.loaded_from_existing is True
     assert not second.benchmark_bundle.summary_df.empty
+
+
+def test_risk_training_flow_resume_uses_checkpoint_only_state(tmp_path: Path) -> None:
+    run_prefix = str(tmp_path / 'risk_resume_ckpt_only')
+    cfg = _cfg(run_prefix)
+    df = _dataset()
+
+    train_risk_ensemble(
+        df,
+        label_columns=LABEL_COLS,
+        ensemble_size=int(cfg.risk_model_ensemble_size),
+        hidden_dims=tuple(cfg.risk_model_hidden_dims),
+        dropout=float(cfg.risk_model_dropout),
+        learning_rate=float(cfg.risk_model_learning_rate),
+        batch_size=int(cfg.risk_model_batch_size),
+        max_epochs=int(cfg.risk_model_max_epochs),
+        patience=int(cfg.risk_model_patience),
+        seed=int(cfg.global_seed),
+        checkpoint_prefix=run_prefix,
+        checkpoint_every_epochs=1,
+        resume_from_checkpoints=True,
+    )
+    assert not (tmp_path / 'risk_resume_ckpt_only_risk_model_metadata.json').exists()
+    assert risk_training_flow.has_existing_risk_training_checkpoints(run_prefix) is True
+
+    resumed = risk_training_flow.run_risk_training_flow(
+        cfg=cfg,
+        dataset_df=df,
+        run_prefix=run_prefix,
+        resume_mode='resume',
+    )
+    assert resumed.loaded_from_existing is False
+    assert (tmp_path / 'risk_resume_ckpt_only_risk_model_metadata.json').exists()

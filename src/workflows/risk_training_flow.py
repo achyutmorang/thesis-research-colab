@@ -105,6 +105,12 @@ def has_existing_risk_model_artifacts(run_prefix: str) -> bool:
     )
 
 
+def has_existing_risk_training_checkpoints(run_prefix: str) -> bool:
+    root = Path(run_prefix).parent
+    pattern = Path(run_prefix).name + '_risk_train_ckpt_member_*.npz'
+    return any(root.glob(pattern))
+
+
 def load_existing_risk_training_bundle(
     run_prefix: str,
     dataset_df: Optional[pd.DataFrame] = None,
@@ -271,8 +277,16 @@ def train_and_calibrate_risk_model(
     cfg: Any,
     *,
     run_prefix: Optional[str] = None,
+    checkpoint_prefix: Optional[str] = None,
+    checkpoint_every_epochs: Optional[int] = None,
+    resume_from_checkpoints: Optional[bool] = None,
 ) -> RiskTrainingFlowBundle:
     run_prefix = run_prefix or cfg.run_prefix
+    checkpoint_prefix = checkpoint_prefix or run_prefix
+    checkpoint_every_epochs = int(max(1, checkpoint_every_epochs if checkpoint_every_epochs is not None else int(getattr(cfg, 'risk_model_checkpoint_every_epochs', 1))))
+    if resume_from_checkpoints is None:
+        resume_from_checkpoints = bool(getattr(cfg, 'risk_model_resume_from_checkpoints', True))
+
     train_bundle = train_risk_ensemble(
         dataset_df,
         label_columns=list(DEFAULT_LABEL_COLUMNS),
@@ -284,6 +298,9 @@ def train_and_calibrate_risk_model(
         max_epochs=int(getattr(cfg, 'risk_model_max_epochs', 50)),
         patience=int(getattr(cfg, 'risk_model_patience', 8)),
         seed=int(getattr(cfg, 'global_seed', 17)),
+        checkpoint_prefix=checkpoint_prefix,
+        checkpoint_every_epochs=checkpoint_every_epochs,
+        resume_from_checkpoints=bool(resume_from_checkpoints),
     )
     scalers, conformal_thresholds, calibration_predictions = _build_calibration_outputs(train_bundle)
     artifact_paths = save_risk_artifacts(run_prefix, train_bundle, scalers, conformal_thresholds)
@@ -335,14 +352,15 @@ def run_risk_training_flow(
 
     existing_dataset_df = load_existing_risk_dataset_artifact(run_prefix)
     existing_model_ready = has_existing_risk_model_artifacts(run_prefix)
+    existing_checkpoint_ready = has_existing_risk_training_checkpoints(run_prefix)
     if mode == 'resume':
         if dataset_df is None and existing_dataset_df.empty:
             raise FileNotFoundError(
                 f"resume_mode='resume' but dataset artifact not found for run_prefix={run_prefix!r}."
             )
-        if (not existing_model_ready) and bool(not force_retrain_model):
+        if (not existing_model_ready) and (not existing_checkpoint_ready) and bool(not force_retrain_model):
             raise FileNotFoundError(
-                f"resume_mode='resume' but risk model artifacts are incomplete for run_prefix={run_prefix!r}."
+                f"resume_mode='resume' but no completed artifacts or checkpoints were found for run_prefix={run_prefix!r}."
             )
 
     if dataset_df is None:
@@ -377,6 +395,14 @@ def run_risk_training_flow(
         existing_bundle.dataset_bundle = dataset_bundle
         return existing_bundle
 
-    bundle = train_and_calibrate_risk_model(dataset_df, cfg, run_prefix=run_prefix)
+    should_resume_checkpoints = bool(getattr(cfg, 'risk_model_resume_from_checkpoints', True)) and bool(mode != 'fresh')
+    bundle = train_and_calibrate_risk_model(
+        dataset_df,
+        cfg,
+        run_prefix=run_prefix,
+        checkpoint_prefix=run_prefix,
+        checkpoint_every_epochs=int(getattr(cfg, 'risk_model_checkpoint_every_epochs', 1)),
+        resume_from_checkpoints=should_resume_checkpoints,
+    )
     bundle.dataset_bundle = dataset_bundle
     return bundle

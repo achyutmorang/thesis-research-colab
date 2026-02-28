@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 
@@ -76,3 +78,37 @@ def test_train_risk_ensemble_produces_expected_validation_columns() -> None:
         assert f'logit_{col}' in bundle.validation_predictions.columns
         assert f'prob_{col}' in bundle.validation_predictions.columns
         assert f'epistemic_{col}' in bundle.validation_predictions.columns
+
+
+def test_train_risk_ensemble_reuses_completed_member_checkpoints(tmp_path: Path) -> None:
+    df = _synthetic_dataset()
+    run_prefix = str(tmp_path / 'risk_model_ckpt_reuse')
+
+    first = train_risk_ensemble(
+        df,
+        ensemble_size=2,
+        hidden_dims=(32, 16),
+        max_epochs=4,
+        patience=2,
+        batch_size=64,
+        seed=19,
+        checkpoint_prefix=run_prefix,
+        checkpoint_every_epochs=1,
+        resume_from_checkpoints=True,
+    )
+    assert not first.train_summary.empty
+
+    second = train_risk_ensemble(
+        df,
+        ensemble_size=2,
+        hidden_dims=(32, 16),
+        max_epochs=4,
+        patience=2,
+        batch_size=64,
+        seed=19,
+        checkpoint_prefix=run_prefix,
+        checkpoint_every_epochs=1,
+        resume_from_checkpoints=True,
+    )
+    resumed_flags = second.train_summary['resumed_from_checkpoint'].astype(int).to_numpy()
+    assert np.all(resumed_flags == 1)
