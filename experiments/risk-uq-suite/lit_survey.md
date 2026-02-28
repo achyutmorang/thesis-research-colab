@@ -348,6 +348,45 @@ Therefore, a decomposition-first, falsifiable methodology is justified.
 
 ---
 
+## 15) Visual Taxonomy and Experiment Roadmap
+
+### 15.1 Failure Taxonomy Diagram
+
+```mermaid
+flowchart TD
+    A["Candidate Context x"] --> B["Predicted Risk p_hat(x)"]
+    B --> C["Decision D(p_hat,tau)"]
+    C --> D["Closed-loop Outcome Y"]
+
+    B --> E["Signal Failure"]
+    B --> F["Calibration Failure"]
+    C --> G["Decision-rule Failure"]
+    D --> H["Shift Instability"]
+```
+
+### 15.2 Failure Source to Experiment Map
+
+| Failure source | Diagnostic experiment | Primary metrics | Pass/fail interpretation |
+|---|---|---|---|
+| Signal failure | Candidate-level ranking test per step and per shift | AUROC, AUPRC, within-step AUC | Low discrimination means better calibration alone is unlikely to fix control decisions |
+| Calibration failure | Global + local reliability analysis around `tau` | ECE, NLL, Brier, local bin error near `tau` | Large local error near `tau` implies threshold decisions are numerically unreliable |
+| Decision-rule failure | Hold `\hat p(x)` fixed, compare threshold/gating/reranking rules | `false_safe`, `safe_reject`, progress, comfort, fallback | If outcomes vary strongly by rule, mapping from risk to action is bottleneck |
+| Feasible-set collapse | Threshold sweep and feasible-candidate accounting | feasible_set_rate, fallback_rate, accepted count | Persistent low feasibility indicates over-conservative decision policy |
+| Shift instability | Repeat diagnostics across nominal and shift suites | delta ECE, delta FS/SR, delta feasibility | Large deltas indicate non-robust operating-point behavior |
+
+### 15.3 Minimal Causal Ablation Grid
+
+| Risk source | Decision rule | Purpose |
+|---|---|---|
+| Raw `\hat p` | Fixed baseline rule | Baseline operating point |
+| Calibrated `\hat p` | Same baseline rule | Isolate calibration effect |
+| Oracle-risk proxy | Same baseline rule | Upper-bound achievable with current rule |
+| Calibrated `\hat p` | Alternative rule | Isolate decision-rule effect |
+
+This grid is designed to attribute failures to signal quality, calibration quality, or decision-rule design.
+
+---
+
 ## Local PDF Directory
 
 All referenced PDFs are stored under:
