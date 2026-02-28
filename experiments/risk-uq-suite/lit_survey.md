@@ -122,16 +122,16 @@ Inclusion criteria (strict):
 2. uncertainty/risk influences decision,
 3. paper reports decision-impact outcomes.
 
-Portfolio used: 27 papers (canonical + SOTA + closest priors + benchmarks).
+Portfolio used: 29 papers (canonical + SOTA + closest priors + benchmarks).
 
 - Calibration methods: P01-P06
 - Uncertainty-aware planning/prediction-to-control: P13-P17
 - Risk-constrained/threshold frameworks: P07-P12
 - Closed-loop AV benchmarks: P18-P22
-- Recent additions (2023-2025): P23-P27
+- Recent additions (2023-2025): P23-P29
 
 Recent-evidence caveat:
-- P23/P24/P27 are emerging and partly preprint-driven; they are included for recency and methodological relevance, not as settled consensus.
+- P23/P24/P27/P28/P29 are emerging and partly preprint-driven; they are included for recency and methodological relevance, not as settled consensus.
 - Core argumentative anchors for the main gap remain P01, P05, P07, P10, P15, and P20-P22.
 
 Citation-strength labels are qualitative: `very high`, `high`, `medium`, `emerging`.
@@ -150,7 +150,7 @@ Legend for contradiction vs our hypothesis:
 | P01 | Guo et al. (Temp scaling) | ICML 2017 | Canonical | learned logits -> calibrated prob | thresholding by calibrated probs downstream | sample | in-domain moderate shift | val~deploy, IID-ish | open-loop | Partial | no closed-loop decision causality |
 | P02 | Niculescu-Mizil & Caruana (Platt/Isotonic) | ICML 2005 | Canonical | monotonic score->probability map | threshold on mapped probs | sample | static supervised settings | score-risk monotonicity | open-loop | Partial | no shift/closed-loop treatment |
 | P03 | Dropout as Bayesian Approx | ICML 2016 | Canonical | MC-dropout predictive distribution | utility/risk-based action from predictive stats | step/sample | moderate epistemic uncertainty | dropout approx posterior | mixed (mostly open-loop) | Untested | no tau-level correctness analysis |
-| P04 | Deep Ensembles | NeurIPS 2017 | Canonical | ensemble mean/variance predictive probs | decision from mean/confidence | sample | broad supervised tasks | diverse members approximate epistemic | open-loop | Untested | no candidate-level tau audit |
+| P04 | Lakshminarayanan et al. (Deep Ensembles) | NeurIPS 2017 | Canonical | ensemble mean/variance predictive probs | decision from mean/confidence | sample | broad supervised tasks | diverse members approximate epistemic | open-loop | Untested | no candidate-level tau audit |
 | P05 | Ovadia et al. (UQ under shift) | NeurIPS 2019 | Canonical | various predictive uncertainty models | evaluate confidence reliability under shift | sample | distribution shift diagnostics | benchmark shifts representative | open-loop | No | not linked to planner/control rule |
 | P06 | Dirichlet Calibration | NeurIPS 2019 | Canonical | parametric map on probability simplex | thresholding on remapped probs | sample | multiclass calibration tasks | calibration split representativeness | open-loop | Partial | no closed-loop decision linkage |
 | P07 | Selective Classification | NeurIPS 2017 | Canonical | confidence score as risk proxy | accept if `s>=θ`, reject otherwise | sample/candidate | strong confidence ranking | stationary setting | open-loop | Partial | no temporal coupling/closed-loop dynamics |
@@ -167,13 +167,15 @@ Legend for contradiction vs our hypothesis:
 | P18 | CARLA | CoRL 2017 | Benchmark | method-defined | policy rollout in simulator | closed-loop step | benchmarking planners/policies | simulator realism | closed-loop | Untested | no built-in tau decision diagnostics |
 | P19 | nuPlan | NeurIPS D&B 2021 | Benchmark | method-defined | planner action/trajectory loop | closed-loop scenario | large scenario suites | benchmark representativeness | closed-loop | Untested | calibration-decision linkage absent |
 | P20 | SafeBench | NeurIPS D&B 2022 | Benchmark + SOTA | method-defined under stressors | policy decisions under adversarial/shifted conditions | closed-loop scenario | robustness stress tests | stress suite relevance | closed-loop | No | does not isolate signal vs calibration vs rule |
-| P21 | WOSAC | NeurIPS D&B 2023 | Benchmark + SOTA | method-defined interactive agent policy | closed-loop multi-agent action generation | closed-loop scenario | large-scale interaction eval | benchmark metric alignment | closed-loop | Untested | no candidate-level threshold auditing |
-| P22 | Waymax | arXiv 2023 | Benchmark substrate | method-defined | fast closed-loop policy rollout | closed-loop step/scenario | large controlled sweeps | simulator shift knobs meaningful | closed-loop | Untested | methodology for decision-grade risk external |
+| P21 | Waymo Open Sim Agents Challenge (WOSAC) | NeurIPS D&B 2023 | Benchmark + SOTA | method-defined interactive agent policy | closed-loop multi-agent action generation | closed-loop scenario | large-scale interaction eval | benchmark metric alignment | closed-loop | Untested | no candidate-level threshold auditing |
+| P22 | Gulino et al. (Waymax) | arXiv 2023 | Benchmark substrate | method-defined | fast closed-loop policy rollout | closed-loop step/scenario | large controlled sweeps | simulator shift knobs meaningful | closed-loop | Untested | methodology for decision-grade risk external |
 | P23 | RACP: Risk-Aware Contingency Planning with Multi-Modal Predictions | arXiv 2024 (accepted T-IV) | Recent SOTA (emerging citation) | Bayesian belief-weighted multimodal risk | contingency plan minimizing expected+risk-aware cost | trajectory/step | multimodal interaction uncertainty with close-loop replanning | forecast beliefs remain informative | closed-loop simulation | Partial | no explicit tau-local calibration and FS/SR audit |
 | P24 | Recursively Feasible Chance-constrained MPC under GMM Uncertainty | arXiv 2024 (TCST 2025) | Recent SOTA (emerging citation) | chance-constrained collision risk under GMM forecasts | optimize trajectory with chance constraints and recursive feasibility conditions | trajectory | multimodal uncertainty with valid propagation assumptions | uncertainty propagation assumptions hold | closed-loop simulation | Partial | guarantees tied to model assumptions; limited candidate-level threshold analysis |
 | P25 | Localized Adaptive Risk Control (L-ARC) | NeurIPS 2024 | Recent SOTA (low but fast-growing citation) | localized risk estimate with online threshold function | adaptive threshold update to satisfy local/marginal risk targets | sample/set | non-stationary subgroup risk with online updates | feedback and localization kernels represent subpopulations | open-loop/sequential calibration | Partial | not evaluated in AV closed-loop candidate selection |
 | P26 | RADIUS: Risk-Aware, Real-Time, Reachability-Based Motion Planning | RSS 2023 | Recent SOTA (emerging citation) | reachability-derived collision risk upper bound | optimize trajectory under explicit risk threshold constraint | trajectory/step | bounded-risk planning with reachable-set approximation | reachability over-approximation is valid and tractable | closed-loop simulation + hardware | Partial | risk bound is conservative surrogate, not calibrated probabilistic score near tau |
-| P27 | Multi-Agent Reachability Calibration with Conformal Prediction (MARC) | arXiv 2023 | Recent adjacent prior (emerging citation) | conformal prediction sets + reachability risk envelope | certify planning safety using calibrated prediction sets | trajectory/set | forecasting errors are calibratable and exchangeability-like assumptions hold | simulation + physical vehicle demo | closed-loop safety certification | Partial | focuses on set guarantees, not candidate-level FS/SR decomposition at fixed tau |
+| P27 | Muthali et al. (MARC: Multi-Agent Reachability Calibration with Conformal Prediction) | arXiv 2023 | Recent adjacent prior (emerging citation) | conformal prediction sets + reachability risk envelope | certify planning safety using calibrated prediction sets | trajectory/set | forecasting errors are calibratable and exchangeability-like assumptions hold | simulation + physical vehicle demo | closed-loop safety certification | Partial | focuses on set guarantees, not candidate-level FS/SR decomposition at fixed tau |
+| P28 | CUQDS (Conformal UQ under distribution shift for trajectory prediction) | arXiv 2024 | Recent adjacent prior (emerging citation) | shift-aware conformal uncertainty sets for trajectory outcomes | decision support via uncertainty sets/coverage controls under shift | trajectory/set | shift assumptions are captured by calibration strategy | open-loop trajectory prediction eval | Partial | no candidate-level `D(p_hat,tau)` audit in closed-loop AV control |
+| P29 | Adversarially Robust Conformal Prediction for Interactive Safe Planning | arXiv 2025 | Recent robust CP direction (emerging citation) | robust conformal risk sets under interactive shift/adversarial response | thresholded/set-based safety filtering for planning | trajectory/set | robustness assumptions approximate interaction dynamics | simulation-focused | Partial | does not yet establish standardized candidate-level FS/SR/feasibility protocol in Waymax-style closed-loop reranking |
 
 ---
 
@@ -217,7 +219,7 @@ Consequence:
 
 1. Calibration can degrade under shift (P05), so raw uncertainty is not always decision-ready.
 2. Threshold decisions are sensitive to score quality (P07-P09).
-3. Closed-loop risk-aware planners can still rely on surrogate assumptions not explicitly audited (P15-P17, P23-P27).
+3. Closed-loop risk-aware planners can still rely on surrogate assumptions not explicitly audited (P15-P17, P23-P29).
 
 ### 7.2 Counter-evidence (against over-claiming)
 
@@ -236,7 +238,7 @@ Unclear/under-tested in our exact setting:
 1. candidate-level signal strength under shift,
 2. tau-local calibration adequacy,
 3. whether decision failures are mostly signal, calibration, or rule design.
-4. whether recent risk-bounded planners (P23-P27) remain decision-correct at fixed candidate-level `tau`.
+4. whether recent risk-bounded planners (P23-P29) remain decision-correct at fixed candidate-level `tau`.
 
 Research questions induced by these gaps:
 1. `RQ1`: Is candidate-level risk signal strength sufficient under shift?
@@ -435,3 +437,5 @@ All referenced PDFs are stored under:
 | P25 | `localized_adaptive_risk_control_2024.pdf` |
 | P26 | `radius_2023.pdf` |
 | P27 | `marc_2023.pdf` |
+| P28 | not yet mirrored locally (`cuqds_2024.pdf` expected) |
+| P29 | not yet mirrored locally (`adversarial_robust_conformal_interactive_planning_2025.pdf` expected) |
