@@ -59,6 +59,7 @@ Operational decision-correctness requirement at operating threshold:
 \]
 
 In practice this is estimated with finite-sample uncertainty, so CI reporting is required.
+In practice, \(\mathrm{FS}_{\hat p}(\tau)\) is the primary operating-point safety diagnostic.
 
 ### 1.3 Global vs Local Calibration
 
@@ -118,12 +119,16 @@ Inclusion criteria (strict):
 2. uncertainty/risk influences decision,
 3. paper reports decision-impact outcomes.
 
-Portfolio used: 22 papers (canonical + SOTA + closest priors + benchmarks).
+Portfolio used: 27 papers (canonical + SOTA + closest priors + benchmarks).
 
 - Calibration methods: P01-P06
 - Uncertainty-aware planning/prediction-to-control: P13-P17
 - Risk-constrained/threshold frameworks: P07-P12
 - Closed-loop AV benchmarks: P18-P22
+- Recent additions (2023-2025): P23-P27
+
+Recent-evidence caveat:
+- P23/P24/P27 are emerging and partly preprint-driven; they are included for recency and methodological relevance, not as settled consensus.
 
 Citation-strength labels are qualitative: `very high`, `high`, `medium`, `emerging`.
 
@@ -160,6 +165,11 @@ Legend for contradiction vs our hypothesis:
 | P20 | SafeBench | NeurIPS D&B 2022 | Benchmark + SOTA | method-defined under stressors | policy decisions under adversarial/shifted conditions | closed-loop scenario | robustness stress tests | stress suite relevance | closed-loop | No | does not isolate signal vs calibration vs rule |
 | P21 | WOSAC | NeurIPS D&B 2023 | Benchmark + SOTA | method-defined interactive agent policy | closed-loop multi-agent action generation | closed-loop scenario | large-scale interaction eval | benchmark metric alignment | closed-loop | Untested | no candidate-level threshold auditing |
 | P22 | Waymax | arXiv 2023 | Benchmark substrate | method-defined | fast closed-loop policy rollout | closed-loop step/scenario | large controlled sweeps | simulator shift knobs meaningful | closed-loop | Untested | methodology for decision-grade risk external |
+| P23 | RACP: Risk-Aware Contingency Planning with Multi-Modal Predictions | arXiv 2024 (accepted T-IV) | Recent SOTA (emerging citation) | Bayesian belief-weighted multimodal risk | contingency plan minimizing expected+risk-aware cost | trajectory/step | multimodal interaction uncertainty with close-loop replanning | forecast beliefs remain informative | closed-loop simulation | Partial | no explicit tau-local calibration and FS/SR audit |
+| P24 | Recursively Feasible Chance-constrained MPC under GMM Uncertainty | arXiv 2024 (TCST 2025) | Recent SOTA (emerging citation) | chance-constrained collision risk under GMM forecasts | optimize trajectory with chance constraints and recursive feasibility conditions | trajectory | multimodal uncertainty with valid propagation assumptions | uncertainty propagation assumptions hold | closed-loop simulation | Partial | guarantees tied to model assumptions; limited candidate-level threshold analysis |
+| P25 | Localized Adaptive Risk Control (L-ARC) | NeurIPS 2024 | Recent SOTA (low but fast-growing citation) | localized risk estimate with online threshold function | adaptive threshold update to satisfy local/marginal risk targets | sample/set | non-stationary subgroup risk with online updates | feedback and localization kernels represent subpopulations | open-loop/sequential calibration | Partial | not evaluated in AV closed-loop candidate selection |
+| P26 | RADIUS: Risk-Aware, Real-Time, Reachability-Based Motion Planning | RSS 2023 | Recent SOTA (emerging citation) | reachability-derived collision risk upper bound | optimize trajectory under explicit risk threshold constraint | trajectory/step | bounded-risk planning with reachable-set approximation | reachability over-approximation is valid and tractable | closed-loop simulation + hardware | Partial | risk bound is conservative surrogate, not calibrated probabilistic score near tau |
+| P27 | Multi-Agent Reachability Calibration with Conformal Prediction (MARC) | arXiv 2023 | Recent adjacent prior (emerging citation) | conformal prediction sets + reachability risk envelope | certify planning safety using calibrated prediction sets | trajectory/set | forecasting errors are calibratable and exchangeability-like assumptions hold | simulation + physical vehicle demo | closed-loop safety certification | Partial | focuses on set guarantees, not candidate-level FS/SR decomposition at fixed tau |
 
 ---
 
@@ -203,13 +213,13 @@ Consequence:
 
 1. Calibration can degrade under shift (P05), so raw uncertainty is not always decision-ready.
 2. Threshold decisions are sensitive to score quality (P07-P09).
-3. Closed-loop risk-aware planners can still rely on surrogate assumptions not explicitly audited (P15-P17).
+3. Closed-loop risk-aware planners can still rely on surrogate assumptions not explicitly audited (P15-P17, P23-P27).
 
 ### 7.2 Counter-evidence (against over-claiming)
 
 1. In stable regimes, simple calibration can be sufficient for threshold decisions (P01, P02, P06).
 2. Constraint-based optimization can succeed if safety-cost surrogate is faithful (P10).
-3. Risk-aware planners can improve outcomes without explicit probability calibration (P15, P17).
+3. Risk-aware planners can improve outcomes without explicit probability calibration (P15, P17, P24, P26).
 
 ### 7.3 What is well-supported vs unclear
 
@@ -222,6 +232,7 @@ Unclear/under-tested in our exact setting:
 1. candidate-level signal strength under shift,
 2. tau-local calibration adequacy,
 3. whether decision failures are mostly signal, calibration, or rule design.
+4. whether recent risk-bounded planners (P23-P27) remain decision-correct at fixed candidate-level `tau`.
 
 ---
 
@@ -230,8 +241,8 @@ Unclear/under-tested in our exact setting:
 | Source | Definition | Literature support | Strength | What remains untested for us |
 |---|---|---|---|---|
 | Signal failure | weak `\hat p(x)` ranking/discrimination | indirectly discussed; direct candidate-level AV evidence sparse | Medium | within-step AUC and ranking stability under shift |
-| Calibration failure | predictive score but wrong numeric probability | strongly supported (P01, P05, P06) | High | local calibration near operating `tau` in closed-loop |
-| Decision-rule failure | good `\hat p(x)` but poor mapping to actions | selective + constrained methods imply this (P07-P10) | Medium | ablations isolating rule from model quality |
+| Calibration failure | predictive score but wrong numeric probability | strongly supported (P01, P05, P06, P25) | High | local calibration near operating `tau` in closed-loop |
+| Decision-rule failure | good `\hat p(x)` but poor mapping to actions | selective + constrained methods imply this (P07-P10, P23-P24) | Medium | ablations isolating rule from model quality |
 
 Inference discipline:
 - If outcomes worsen, literature does not justify blaming calibration alone without checking signal and decision rule.
@@ -368,3 +379,8 @@ All referenced PDFs are stored under:
 | P20 | `safebench_2022.pdf` |
 | P21 | `wosac_2023.pdf` |
 | P22 | `waymax_2023.pdf` |
+| P23 | `racp_2024.pdf` |
+| P24 | `safe_ccmpc_gmm_2024.pdf` |
+| P25 | `localized_adaptive_risk_control_2024.pdf` |
+| P26 | `radius_2023.pdf` |
+| P27 | `marc_2023.pdf` |
