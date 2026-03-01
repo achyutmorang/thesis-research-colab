@@ -40,6 +40,7 @@ This paper track reuses ideas from established open repositories while keeping i
   - RACP-style reranking `score = progress - lambda * risk_proxy`
   - chance-constrained hard gate (`risk_proxy <= tau`)
   - conformal-style effective-threshold gate from validation split.
+  - implementation entrypoint: `src/workflows/planner_method_variant_flow.py`
 
 ## Availability Notes
 

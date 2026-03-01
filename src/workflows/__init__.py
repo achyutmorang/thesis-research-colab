@@ -93,6 +93,12 @@ from .risk_uq_notebook_flow import (
     report_risk_uq_run_context,
     run_risk_uq_smoke_gates,
 )
+from .planner_method_variant_flow import (
+    DEFAULT_CONTROLLER_VARIANTS as PLANNER_METHOD_DEFAULT_CONTROLLER_VARIANTS,
+    DEFAULT_RACP_LAMBDAS as PLANNER_METHOD_DEFAULT_RACP_LAMBDAS,
+    PlannerMethodVariantAuditBundle,
+    run_planner_method_variant_audit,
+)
 from .living_report import (
     update_living_report_from_miscalibration_probe,
     update_living_report_from_paper_export,
@@ -195,6 +201,10 @@ __all__ = [
     "report_risk_uq_run_context",
     "build_risk_uq_simulation_context",
     "run_risk_uq_smoke_gates",
+    "PlannerMethodVariantAuditBundle",
+    "PLANNER_METHOD_DEFAULT_CONTROLLER_VARIANTS",
+    "PLANNER_METHOD_DEFAULT_RACP_LAMBDAS",
+    "run_planner_method_variant_audit",
     "update_living_report_from_miscalibration_probe",
     "update_living_report_from_paper_export",
     "update_living_report_from_risk_training",

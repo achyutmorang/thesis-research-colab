@@ -92,6 +92,7 @@ Research feasibility:
 - `experiments/risk-uq-suite/notebooks/miscalibration_interpretation_colab.ipynb`
 - `experiments/risk-uq-suite/notebooks/decision_audit/cross_signal_decision_audit_colab.ipynb`
 - `experiments/risk-uq-suite/notebooks/decision_audit/oracle_bottleneck_colab.ipynb`
+- `experiments/risk-uq-suite/notebooks/decision_audit/planner_practice_method_benchmark_colab.ipynb`
 - `experiments/risk-uq-suite/notebooks/risk_model_training_colab.ipynb`
 - `experiments/risk-uq-suite/notebooks/uq_benchmark_colab.ipynb`
 - `experiments/risk-uq-suite/notebooks/paper_tables_figures_colab.ipynb`
@@ -101,9 +102,10 @@ Research feasibility:
 2. `miscalibration_interpretation_colab.ipynb`
 3. `decision_audit/cross_signal_decision_audit_colab.ipynb`
 4. `decision_audit/oracle_bottleneck_colab.ipynb`
-5. `risk_model_training_colab.ipynb`
-6. `uq_benchmark_colab.ipynb`
-7. `paper_tables_figures_colab.ipynb`
+5. `decision_audit/planner_practice_method_benchmark_colab.ipynb` (run later, after stable evidence on LatentDriver)
+6. `risk_model_training_colab.ipynb`
+7. `uq_benchmark_colab.ipynb`
+8. `paper_tables_figures_colab.ipynb`
 
 ## Experiment Config
 - `configs/experiments/risk-uq-suite.json`
