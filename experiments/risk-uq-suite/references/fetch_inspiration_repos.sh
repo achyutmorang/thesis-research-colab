@@ -26,5 +26,9 @@ clone_or_update temperature_scaling https://github.com/gpleiss/temperature_scali
 clone_or_update uncertainty_baselines https://github.com/google/uncertainty-baselines.git
 clone_or_update plancp https://github.com/Jiankai-Sun/PlanCP.git
 clone_or_update icp https://github.com/tedhuang96/icp.git
+clone_or_update rap https://github.com/TRI-ML/RAP.git
+clone_or_update racp https://github.com/KhMustafa/Risk-aware-contingency-planning-with-multi-modal-predictions.git
+clone_or_update radius https://github.com/roahmlab/RADIUS.git
+clone_or_update cuqds https://github.com/HuiqunHuang/CUQDS.git
 
 echo "Fetched inspiration repos under: ${BASE_DIR}"

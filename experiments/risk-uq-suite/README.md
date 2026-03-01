@@ -90,6 +90,8 @@ Research feasibility:
 ## Notebooks
 - `experiments/risk-uq-suite/notebooks/miscalibration_probe_colab.ipynb`
 - `experiments/risk-uq-suite/notebooks/miscalibration_interpretation_colab.ipynb`
+- `experiments/risk-uq-suite/notebooks/decision_audit/cross_signal_decision_audit_colab.ipynb`
+- `experiments/risk-uq-suite/notebooks/decision_audit/oracle_bottleneck_colab.ipynb`
 - `experiments/risk-uq-suite/notebooks/risk_model_training_colab.ipynb`
 - `experiments/risk-uq-suite/notebooks/uq_benchmark_colab.ipynb`
 - `experiments/risk-uq-suite/notebooks/paper_tables_figures_colab.ipynb`
@@ -97,9 +99,11 @@ Research feasibility:
 ## Suggested Run Order
 1. `miscalibration_probe_colab.ipynb`
 2. `miscalibration_interpretation_colab.ipynb`
-3. `risk_model_training_colab.ipynb`
-4. `uq_benchmark_colab.ipynb`
-5. `paper_tables_figures_colab.ipynb`
+3. `decision_audit/cross_signal_decision_audit_colab.ipynb`
+4. `decision_audit/oracle_bottleneck_colab.ipynb`
+5. `risk_model_training_colab.ipynb`
+6. `uq_benchmark_colab.ipynb`
+7. `paper_tables_figures_colab.ipynb`
 
 ## Experiment Config
 - `configs/experiments/risk-uq-suite.json`
@@ -138,6 +142,7 @@ Research feasibility:
 2. Explicit calibration-to-control bridge (raw vs calibrated risk used in action selection diagnostics).
 3. Standardized nominal-plus-shift evaluation pack with reliability and threshold-budget diagnostics.
 4. Reproducible Colab-first orchestration (resume, manifests, persistent artifacts, paper export path).
+5. Multi-controller decision-audit variants: chance-constrained gating, RACP-style risk-penalized reranking, and conformal-style effective-threshold control.
 
 ## Inspiration References
 - `experiments/risk-uq-suite/references/INSPIRATION_REPOS.md`
