@@ -5,6 +5,7 @@ Audit causal links from risk estimates to action decisions using fixed candidate
 
 ## Notebooks
 - `decision_audit_artifact_builder_colab.ipynb`: Runs the closed-loop probe producer stage and writes all prerequisite artifacts to persistent Drive storage for audit notebooks (fresh on first launch, then auto-resume after Colab restart via Drive run-tag sentinel).
+- `decision_audit_artifact_builder_harder_colab.ipynb`: Harder producer preset with larger scenario/eval support and stronger high-interaction pressure so downstream tau-sweep and bottleneck estimates are more statistically decisive.
 - `cross_signal_decision_audit_colab.ipynb`: Compares multiple risk/uncertainty signals (raw + calibrated) with tau-sweep diagnostics.
 - `oracle_bottleneck_colab.ipynb`: Decomposes bottlenecks into signal/calibration vs decision rule vs candidate quality.
 - `planner_practice_method_benchmark_colab.ipynb`: Future-facing benchmark for paper-inspired controller families (chance-gate, RACP-style rerank, conformal gate).
@@ -19,10 +20,15 @@ Audit causal links from risk estimates to action decisions using fixed candidate
 Provides decision-grade evidence before closed-loop paper claims.
 
 ## Recommended Run Sequence (Decision-Audit-Only Path)
-1. `decision_audit_artifact_builder_colab.ipynb`
+1. `decision_audit_artifact_builder_harder_colab.ipynb` (recommended for decisive evidence)
 2. `cross_signal_decision_audit_colab.ipynb`
 3. `oracle_bottleneck_colab.ipynb`
 4. `planner_practice_method_benchmark_colab.ipynb`
+
+## Alternative Fast Path
+1. `decision_audit_artifact_builder_colab.ipynb`
+2. `cross_signal_decision_audit_colab.ipynb`
+3. `oracle_bottleneck_colab.ipynb`
 
 ## Latest Output Interpretation (from committed notebook cell outputs)
 
