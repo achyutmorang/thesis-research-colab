@@ -16,3 +16,28 @@ Audit causal links from risk estimates to action decisions using fixed candidate
 
 ## Role In Risk-UQ-Suite
 Provides decision-grade evidence before closed-loop paper claims.
+
+## Latest Output Interpretation (from committed notebook cell outputs)
+
+### Evidence snapshot
+- `cross_signal_decision_audit_colab.ipynb` has saved outputs for focus label `failure_proxy_h15` at `tau=0.2`.
+- Signals evaluated in saved run:
+  - `belief_kl`, `combo`, `entropy`, `inv_distance`, `inv_ttc`, `stdmax`, `top1`
+- Split sizes in saved outputs:
+  - `calibration_rows = 520`
+  - `evaluation_rows = 520`
+  - `variant_count = 21`
+- Tau-sweep diagnostics are heavily data-limited in the saved run:
+  - `tau_sweep_df rows = 672`
+  - `inconclusive tau rows = 635`
+- Near-budget pattern (from final summary tables):
+  - Raw combo can collapse acceptance (`accept_rate ~ 0.0`, `fallback ~ 1.0` in reported rows).
+  - Calibrated combo variants show materially higher acceptance (`~0.60-0.65`) with lower fallback (`~0.35-0.40`) in reported rows.
+
+### Evolved understanding at decision-audit stage
+- Current evidence points to a conservative-decision failure mode under raw proxy thresholds.
+- Calibration can improve decision usability (feasibility/acceptance), but many rows remain statistically inconclusive due to low event/support counts.
+- Saved outputs in this repo do not yet contain executed results for:
+  - `oracle_bottleneck_colab.ipynb`
+  - `planner_practice_method_benchmark_colab.ipynb`
+  Their interpretation remains pending committed execution outputs.
