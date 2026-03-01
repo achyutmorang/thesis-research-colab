@@ -538,5 +538,5 @@ All referenced PDFs are stored under:
 | P25 | `localized_adaptive_risk_control_2024.pdf` |
 | P26 | `radius_2023.pdf` |
 | P27 | `marc_2023.pdf` |
-| P28 | not yet mirrored locally (`cuqds_2024.pdf` expected) |
-| P29 | not yet mirrored locally (`adversarial_robust_conformal_interactive_planning_2025.pdf` expected) |
+| P28 | `cuqds_2024.pdf` |
+| P29 | `adversarial_robust_conformal_interactive_planning_2025.pdf` |
