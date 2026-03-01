@@ -59,6 +59,7 @@ P(Y = 1 | p_hat <= tau) <= tau
 ```
 
 This is a desirable operational target, not a guarantee implied by standard global calibration alone.
+It is the natural operating-point analogue of probabilistic safety consistency under thresholded acceptance, not a theorem from standard calibration alone.
 In practice this is estimated with finite-sample uncertainty, so CI reporting is required.
 In practice, `FS_p_hat(tau)` is the primary operating-point safety diagnostic.
 
@@ -90,6 +91,7 @@ Operational implications:
 
 We use **decision-grade risk** as an operational composite criterion for threshold control.  
 Decision-grade is defined here relative to the thresholded acceptance rule `D(p_hat, tau)`, not as a universal property across all controllers.
+We use it as a practical acceptance standard for thresholded candidate control in this specific setting.
 A risk signal is decision-grade under this operational definition if all hold:
 1. Calibration (especially near `tau`),
 2. Discriminative power (candidate ranking quality),
