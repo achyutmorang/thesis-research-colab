@@ -86,6 +86,7 @@ Research feasibility:
 ## Notebooks
 - `experiments/risk-uq-suite/notebooks/00_probe/miscalibration_probe_colab.ipynb`
 - `experiments/risk-uq-suite/notebooks/00_probe/miscalibration_interpretation_colab.ipynb`
+- `experiments/risk-uq-suite/notebooks/10_decision_audit/decision_audit_artifact_builder_colab.ipynb`
 - `experiments/risk-uq-suite/notebooks/10_decision_audit/cross_signal_decision_audit_colab.ipynb`
 - `experiments/risk-uq-suite/notebooks/10_decision_audit/oracle_bottleneck_colab.ipynb`
 - `experiments/risk-uq-suite/notebooks/10_decision_audit/planner_practice_method_benchmark_colab.ipynb`
@@ -96,12 +97,13 @@ Research feasibility:
 ## Suggested Run Order
 1. `00_probe/miscalibration_probe_colab.ipynb`
 2. `00_probe/miscalibration_interpretation_colab.ipynb`
-3. `10_decision_audit/cross_signal_decision_audit_colab.ipynb`
-4. `10_decision_audit/oracle_bottleneck_colab.ipynb`
-5. `10_decision_audit/planner_practice_method_benchmark_colab.ipynb` (run later, after stable evidence on LatentDriver)
-6. `20_modeling/risk_model_training_colab.ipynb`
-7. `30_benchmark/uq_benchmark_colab.ipynb`
-8. `40_paper_exports/paper_tables_figures_colab.ipynb`
+3. `10_decision_audit/decision_audit_artifact_builder_colab.ipynb` (if you want decision-audit artifacts without re-running `00_probe` notebooks)
+4. `10_decision_audit/cross_signal_decision_audit_colab.ipynb`
+5. `10_decision_audit/oracle_bottleneck_colab.ipynb`
+6. `10_decision_audit/planner_practice_method_benchmark_colab.ipynb` (run later, after stable evidence on LatentDriver)
+7. `20_modeling/risk_model_training_colab.ipynb`
+8. `30_benchmark/uq_benchmark_colab.ipynb`
+9. `40_paper_exports/paper_tables_figures_colab.ipynb`
 
 ## Experiment Config
 - `configs/experiments/risk-uq-suite.json`

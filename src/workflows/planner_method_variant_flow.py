@@ -1154,7 +1154,7 @@ def run_planner_method_variant_audit(
     )
     if pred_df.empty:
         raise FileNotFoundError(
-            "No prediction artifacts available. Run miscalibration probe first or set analysis_run_prefix(es) to existing runs."
+            "No prediction artifacts available. Run decision_audit_artifact_builder_colab.ipynb (or 00_probe/miscalibration_probe_colab.ipynb) first, or set analysis_run_prefix(es) to existing runs."
         )
     if str(focus_label) not in pred_df.columns:
         raise ValueError(f"Focus label missing from predictions: {focus_label!r}")
@@ -1241,4 +1241,3 @@ def run_planner_method_variant_audit(
     if bool(write_artifacts):
         bundle.artifact_paths = _export_artifacts(bundle)
     return bundle
-
