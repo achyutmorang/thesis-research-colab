@@ -3,6 +3,9 @@
 ## Objective
 Train/calibrate risk models and run uncertainty-quantification benchmarks with paper tables/figures.
 
+## First-Principles Guide
+- `experiments/risk-uq-suite/FIRST_PRINCIPLES_GUIDE.md`
+
 ## Independence From Closedloop-Core Notebook Logic
 This track now uses risk-UQ-specific notebook orchestration and smoke gates:
 
