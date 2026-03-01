@@ -4,7 +4,7 @@
 Audit causal links from risk estimates to action decisions using fixed candidate sets and multiple controller/risk formulations.
 
 ## Notebooks
-- `decision_audit_artifact_builder_colab.ipynb`: Runs the closed-loop probe producer stage and writes all prerequisite artifacts to persistent Drive storage for audit notebooks.
+- `decision_audit_artifact_builder_colab.ipynb`: Runs the closed-loop probe producer stage and writes all prerequisite artifacts to persistent Drive storage for audit notebooks (fresh on first launch, then auto-resume after Colab restart via Drive run-tag sentinel).
 - `cross_signal_decision_audit_colab.ipynb`: Compares multiple risk/uncertainty signals (raw + calibrated) with tau-sweep diagnostics.
 - `oracle_bottleneck_colab.ipynb`: Decomposes bottlenecks into signal/calibration vs decision rule vs candidate quality.
 - `planner_practice_method_benchmark_colab.ipynb`: Future-facing benchmark for paper-inspired controller families (chance-gate, RACP-style rerank, conformal gate).
