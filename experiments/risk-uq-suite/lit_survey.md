@@ -139,11 +139,11 @@ Inclusion criteria (strict):
 2. uncertainty/risk influences decision,
 3. paper reports decision-impact outcomes.
 
-Portfolio used: 29 papers (canonical + SOTA + closest priors + benchmarks).
+Portfolio used: 30 papers (canonical + SOTA + closest priors + benchmarks).
 
 - Calibration methods: P01-P06
 - Uncertainty-aware planning/prediction-to-control: P13-P17
-- Risk-constrained/threshold frameworks: P07-P12
+- Risk-constrained/threshold frameworks: P07-P12, P30
 - Closed-loop AV benchmarks: P18-P22
 - Recent additions (2023-2025): P23-P29
 
@@ -158,7 +158,7 @@ Citation-strength labels are qualitative: `very high`, `high`, `medium`, `emergi
 | Bucket | IDs | Typical decision variable | What this bucket contributes | Transfer risk to our setting |
 |---|---|---|---|---|
 | Calibration primitives | P01-P06 | threshold on mapped probability score | shows why raw confidence is not decision-grade by default | often open-loop, weak closed-loop causal evidence |
-| Threshold/constraint frameworks | P07-P12 | accept/reject threshold, constrained optimization parameter | formalizes how risk enters decisions (`tau`, risk budget, constraints) | often assumes risk signal is already valid |
+| Threshold/constraint frameworks | P07-P12, P30 | accept/reject threshold, constrained optimization parameter | formalizes how risk enters decisions (`tau`, risk budget, constraints) | often assumes risk signal is already valid |
 | Uncertainty/risk to control | P13-P17, P23-P27 | policy/trajectory cost-constrained action | demonstrates uncertainty-informed planning can improve outcomes | mostly trajectory/policy granularity, not candidate-step threshold audits |
 | Closed-loop AV benchmarks | P18-P22 | planner policy rollout in simulation | gives substrate for large-scale safety/efficiency evaluation | does not itself enforce calibration-to-decision auditing |
 | Shift-robust conformal extensions | P28-P29 | robust threshold/set filtering under shift | motivates robustness-aware risk control and stress testing | early evidence, limited candidate-level closed-loop validation |
@@ -191,7 +191,8 @@ Legend for contradiction vs our hypothesis:
 | P09 | Deep Gamblers | NeurIPS 2019 | Canonical | confidence + reservation utility | bet/reject decision from utility | sample/candidate | controlled classification | utility matches decision costs | open-loop | Untested | no closed-loop control grounding |
 | P10 | CPO | ICML 2017 | Canonical | expected safety cost surrogate | `max J_R` s.t. `J_C<=d` | policy/trajectory | good cost surrogate and stable optimization | constraint cost faithful | closed-loop RL | Partial | policy-level not candidate-level tau |
 | P11 | RCPS | NeurIPS 2021 | Canonical | calibrated risk functional over sets | choose set parameter for risk target `alpha` | sample/set | exchangeable data | exchangeability | open-loop | No | assumptions strained in adaptive closed-loop |
-| P12 | Conformal Risk Control | 2022 | Canonical | conformalized risk scores | calibrate threshold/parameter to hit risk budget | sample/set | non-adaptive settings | calibration assumptions | open-loop | Partial | closed-loop dependence unmodeled |
+| P12 | Conformal Risk Control (Angelopoulos et al.) | ICLR 2024 | Canonical | conformalized risk scores | calibrate threshold/parameter to hit risk budget | sample/set | non-adaptive settings | calibration assumptions | open-loop | Partial | closed-loop dependence unmodeled |
+| P30 | Planning on a (Risk) Budget (Huang et al.) | arXiv 2021 | Closest prior (budgeted planning) | explicit trajectory risk proxy with budgeted objective | optimize performance under a fixed risk budget | trajectory/step | risk surrogate is informative and budget tuning is representative | risk-proxy fidelity and scenario representativeness | closed-loop simulation | Partial | no candidate-level FS/SR or local-`tau` calibration audit |
 | P13 | Policy Gradient for Coherent Risk | NeurIPS 2015 | Canonical formal risk | coherent risk measure (e.g., CVaR) of return | optimize policy under risk functional | policy | stable return/risk estimates | risk estimator and PG assumptions | closed-loop RL | Untested | not thresholded candidate decisions |
 | P14 | PETS | NeurIPS 2018 | Canonical uncertainty-control | model uncertainty in dynamics rollouts | MPC: `argmin E[cost]` | step/trajectory | model-valid regions | learned model fidelity | closed-loop control | Partial | no explicit risk calibration around tau |
 | P15 | RAP | CoRL 2022 | Closest prior + SOTA | risk-sensitive objective over uncertain forecasts | `argmin E[C]+λRisk(C)` | trajectory/step | interaction regimes in paper | risk functional transfers across scenes | closed-loop planning | No | no explicit FS/SR/tau-local audit |
@@ -222,6 +223,7 @@ The table below adds decision-causal detail for papers most load-bearing to our 
 | P10 | `max J_R(pi)` s.t. `J_C(pi) <= d` | safety cost as constrained objective | implicit surrogate fidelity | reward-cost tradeoff in RL | policy-level, not candidate-level thresholded control |
 | P11 | choose parameter to satisfy risk target `alpha` | conformalized risk functional controls coverage/risk | assumes exchangeability-like conditions | risk-control guarantees | assumptions strained in adaptive closed-loop |
 | P12 | calibrate threshold/parameter for risk budget | conformal risk score enters constraint | partially; robust finite-sample framing | risk target satisfaction | not designed for step-level planner feedback loops |
+| P30 | optimize planning objective under explicit risk budget | risk proxy enters hard/soft budget constraint | mostly implicit | safety-performance tradeoff in planning | lacks candidate-step threshold correctness diagnostics |
 | P15 | `argmin E[C] + lambda * Risk(C)` | multimodal forecast uncertainty in planning cost | mostly implicit | safety/progress under interaction | no explicit calibration-to-decision link (`FS/SR`) |
 | P20 | stress-test planner decisions under perturbation | robustness signals through closed-loop stress suites | not a calibration paper | safety/robustness benchmark metrics | no candidate-level threshold accounting |
 | P22 | fast simulator rollout of planner policies | external method risk signals can be plugged in | N/A (substrate) | closed-loop scenario outcomes | no built-in decision-grade risk protocol |
@@ -232,7 +234,7 @@ The table below adds decision-causal detail for papers most load-bearing to our 
 ### 5.2 Per-Bucket Critical Takeaways
 
 1. Calibration bucket (P01-P06): strong evidence that score-to-probability mapping matters, weak evidence that this alone fixes closed-loop decisions.
-2. Threshold/constraint bucket (P07-P12): strong decision-theoretic framing, but often relies on unverified risk signal quality.
+2. Threshold/constraint bucket (P07-P12, P30): strong decision-theoretic framing, but often relies on unverified risk signal quality.
 3. Risk-to-control bucket (P13-P17, P23-P27): strong safety-control integration, but mainly trajectory/policy granularity and sparse `tau`-local auditing.
 4. Benchmark bucket (P18-P22): strong substrate for rigorous evaluation, but methodology for decision-grade risk must be supplied externally.
 5. Shift-robust conformal bucket (P28-P29): promising for robustness, but still limited direct evidence at candidate-step decision granularity.
@@ -251,7 +253,7 @@ All papers can be projected onto two objects:
   P01-P06, P03-P05 (uncertainty/calibration emphasis).
 
 - Papers defining `D` but assuming `p_hat(x)` is adequate:
-  P07-P12, P10, P13, P16-P17.
+  P07-P12, P30, P10, P13, P16-P17.
 
 - Papers enabling closed-loop measurement but not this linkage:
   P18-P22.
@@ -277,14 +279,14 @@ Based on coded attributes in Section 5 (conservative interpretation):
 
 | Audit dimension | Approximate coverage in surveyed set | Interpretation |
 |---|---|---|
-| Explicit decision variable present | `29/29` | enforced by inclusion criteria |
-| Uncertainty/risk directly used in decision | `29/29` | enforced by inclusion criteria |
-| Closed-loop evaluation reported | `~15/29` | many papers still open-loop or mixed |
-| Calibration quality explicitly evaluated | `~10/29` | calibration is often assumed rather than measured |
-| Shift robustness explicitly audited | `~11/29` | robustness increasingly present but heterogeneous |
-| Candidate-step granularity (our target) | `~4/29` | major representation gap |
-| Reports both FS-like and SR-like threshold errors | `~1-2/29` | decision correctness diagnostics are rarely complete |
-| Joint test of `calibration -> decision -> closed-loop` chain | `0/29` found in this survey coding | core conjunction remains missing |
+| Explicit decision variable present | `30/30` | enforced by inclusion criteria |
+| Uncertainty/risk directly used in decision | `30/30` | enforced by inclusion criteria |
+| Closed-loop evaluation reported | `~16/30` | many papers still open-loop or mixed |
+| Calibration quality explicitly evaluated | `~10/30` | calibration is often assumed rather than measured |
+| Shift robustness explicitly audited | `~11/30` | robustness increasingly present but heterogeneous |
+| Candidate-step granularity (our target) | `~4/30` | major representation gap |
+| Reports both FS-like and SR-like threshold errors | `~1-2/30` | decision correctness diagnostics are rarely complete |
+| Joint test of `calibration -> decision -> closed-loop` chain | `0/30` found in this survey coding | core conjunction remains missing |
 
 These counts are not a meta-analysis claim; they are a structured coding summary to expose where evidence is dense vs sparse.
 
@@ -354,7 +356,7 @@ Inference discipline:
 |---|---|---|---|
 | low AUROC/within-step AUC and high ECE | signal + calibration | P05, P07-P09 | oracle-risk ablation with same candidate set |
 | good ranking but high ECE/NLL near `tau` | calibration | P01, P02, P06, P25 | local calibration window analysis + post-hoc calibration |
-| calibrated metrics improve, decisions do not | decision rule | P10-P12, P24 | fixed-signal rule sweep (`tau`, scoring weights, fallback policy) |
+| calibrated metrics improve, decisions do not | decision rule | P10-P12, P30, P24 | fixed-signal rule sweep (`tau`, scoring weights, fallback policy) |
 | low feasible-set and high fallback despite low failure | over-conservative thresholding | P07-P09, P24, P26 | `tau` sweep with SR and feasibility CIs |
 | nominal performance good, shift degrades sharply | shift instability / assumption break | P05, P20, P28-P29 | per-shift deltas with bootstrap CIs and stress-suite stratification |
 
@@ -522,7 +524,7 @@ All referenced PDFs are stored under:
 | P09 | `deep_gamblers_2019.pdf` |
 | P10 | `cpo_2017.pdf` |
 | P11 | `rcps_2021.pdf` |
-| P12 | `crc_2022.pdf` |
+| P12 | `conformal_risk_control_iclr_2024.pdf` |
 | P13 | `policy_gradient_coherent_risk_2015.pdf` |
 | P14 | `pets_2018.pdf` |
 | P15 | `rap_corl_2022.pdf` |
@@ -540,3 +542,4 @@ All referenced PDFs are stored under:
 | P27 | `marc_2023.pdf` |
 | P28 | `cuqds_2024.pdf` |
 | P29 | `adversarial_robust_conformal_interactive_planning_2025.pdf` |
+| P30 | `planning_risk_budget_2021.pdf` |

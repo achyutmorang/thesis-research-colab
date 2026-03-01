@@ -1,7 +1,7 @@
 # Alternate Literature Survey: Decision-Causal Risk for Closed-Loop AV (Risk-UQ Suite)
 
 This is an alternate, gap-focused survey designed to complement `lit_survey.md`.
-It keeps the same paper universe (P01-P29), but emphasizes paper-by-paper critical transferability to our setting:
+It keeps the same paper universe (P01-P30), but emphasizes paper-by-paper critical transferability to our setting:
 - candidate-level action selection,
 - thresholded decision rule `D(p_hat, tau)`,
 - closed-loop execution,
@@ -9,12 +9,12 @@ It keeps the same paper universe (P01-P29), but emphasizes paper-by-paper critic
 
 ## 0) Reference Availability Check
 
-All 29 referenced PDFs were verified locally under:
+All 30 referenced PDFs were verified locally under:
 `experiments/risk-uq-suite/references/pdfs/`
 
 Validation status:
-- `total references`: 29
-- `present`: 29
+- `total references`: 30
+- `present`: 30
 - `missing`: 0
 - `invalid header`: 0
 
@@ -85,7 +85,7 @@ Primary question per paper:
 - Transfer to us: supports trying multiple calibrators, not just one.
 - Limitation vs gap: no closed-loop control impact analysis.
 
-## 2.2 Thresholded / Budgeted Decision Frameworks (P07-P12)
+## 2.2 Thresholded / Budgeted Decision Frameworks (P07-P12, P30)
 
 ### P07 - Geifman and El-Yaniv, Selective Classification (NeurIPS 2017)
 - Problem solved: abstain when uncertain under risk constraints.
@@ -127,13 +127,21 @@ Primary question per paper:
 - Transfer to us: formal basis for budgeted risk control.
 - Limitation vs gap: guarantees weaken in adaptive closed-loop dependence.
 
-### P12 - Conformal Risk Control (2022)
+### P12 - Conformal Risk Control (Angelopoulos et al., ICLR 2024)
 - Problem solved: control task-level risk via conformalized thresholds.
 - Method: calibration of decision parameter to satisfy risk target.
 - What works: explicit risk budget interpretation.
 - Key assumption: calibration/deployment alignment and non-adaptive conditions.
 - Transfer to us: supports conformal threshold variants.
 - Limitation vs gap: limited candidate-level closed-loop evaluation.
+
+### P30 - Planning on a (Risk) Budget (Huang et al., 2021)
+- Problem solved: planning under uncertainty with explicit safety-performance compromise.
+- Method: risk-budgeted planning objective/constraints to target non-conservative behavior under bounded risk.
+- What works: demonstrates explicit budget tuning can avoid both naive optimism and excessive conservatism.
+- Key assumption: chosen risk surrogate and budget parameter reflect true operational hazards/costs.
+- Transfer to us: direct conceptual anchor for tau-threshold/budget framing and conservatism-efficiency analysis.
+- Limitation vs gap: does not provide candidate-level `false_safe/safe_reject/feasible_set` audit under closed-loop shift suites.
 
 ## 2.3 Uncertainty-to-Control / Risk-Aware Planning (P13-P17)
 
@@ -358,6 +366,7 @@ If we need direct method-style baselines in code for this project track, stronge
 1. P23 (RACP-style): risk-penalized reranking objective.
 2. P24 (chance-constrained MPC spirit): threshold-gated feasibility controller.
 3. P29/P12 family (conformal-style): calibrated threshold/budget controller.
+4. P30 (risk-budget planning): explicit safety-performance budget baseline.
 
 These anchor three controller families that map cleanly to current notebooks:
 - risk-penalized score controllers,
