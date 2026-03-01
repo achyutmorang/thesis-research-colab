@@ -7,10 +7,6 @@ from typing import Any, Dict, Optional
 import pandas as pd
 
 from src.risk_model.benchmark import BenchmarkBundle
-try:
-    from .living_report import update_living_report_from_paper_export
-except ImportError:  # pragma: no cover - supports direct module loading in tests
-    from src.workflows.living_report import update_living_report_from_paper_export
 
 
 @dataclass
@@ -99,11 +95,4 @@ def export_paper_tables_and_figures(
         'coverage_risk_table': _save_frame(output / 'coverage_risk_table.csv', benchmark_bundle.selective_curve_df),
     }
     exported.update(_maybe_render_figures(output, benchmark_bundle))
-    exported.update(
-        update_living_report_from_paper_export(
-            cfg=cfg,
-            run_prefix=run_prefix,
-            exported_paths=exported,
-        )
-    )
     return PaperExportBundle(output_dir=str(output), exported_paths=exported)

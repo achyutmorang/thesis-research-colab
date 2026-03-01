@@ -20,10 +20,6 @@ from src.risk_model.calibration import (
 )
 from src.risk_model.dataset import add_eval_splits, build_risk_dataset
 from src.risk_model.train import RiskTrainingBundle, train_risk_ensemble
-try:
-    from .living_report import update_living_report_from_risk_training
-except ImportError:  # pragma: no cover - supports direct module loading in tests
-    from src.workflows.living_report import update_living_report_from_risk_training
 
 
 @dataclass
@@ -397,18 +393,6 @@ def run_risk_training_flow(
     if can_reuse_model:
         existing_bundle = load_existing_risk_training_bundle(run_prefix=run_prefix, dataset_df=dataset_df)
         existing_bundle.dataset_bundle = dataset_bundle
-        cal_summary = pd.DataFrame()
-        if existing_bundle.calibration_bundle is not None:
-            cal_summary = existing_bundle.calibration_bundle.summary_df
-        existing_bundle.artifact_paths.update(
-            update_living_report_from_risk_training(
-                cfg=cfg,
-                run_prefix=run_prefix,
-                train_summary_df=existing_bundle.training_bundle.train_summary,
-                calibration_summary_df=cal_summary,
-                artifact_paths=existing_bundle.artifact_paths,
-            )
-        )
         return existing_bundle
 
     should_resume_checkpoints = bool(getattr(cfg, 'risk_model_resume_from_checkpoints', True)) and bool(mode != 'fresh')
@@ -421,16 +405,4 @@ def run_risk_training_flow(
         resume_from_checkpoints=should_resume_checkpoints,
     )
     bundle.dataset_bundle = dataset_bundle
-    cal_summary = pd.DataFrame()
-    if bundle.calibration_bundle is not None:
-        cal_summary = bundle.calibration_bundle.summary_df
-    bundle.artifact_paths.update(
-        update_living_report_from_risk_training(
-            cfg=cfg,
-            run_prefix=run_prefix,
-            train_summary_df=bundle.training_bundle.train_summary,
-            calibration_summary_df=cal_summary,
-            artifact_paths=bundle.artifact_paths,
-        )
-    )
     return bundle

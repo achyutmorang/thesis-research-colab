@@ -3,10 +3,6 @@
 ## Objective
 Train/calibrate risk models and run uncertainty-quantification benchmarks with paper tables/figures.
 
-## Living Report
-- `experiments/risk-uq-suite/LIVING_REPORT.md`
-- Auto-updated by the risk-uq workflows to capture evolving problem framing, hypothesis status, and evidence snapshots.
-
 ## Independence From Closedloop-Core Notebook Logic
 This track now uses risk-UQ-specific notebook orchestration and smoke gates:
 

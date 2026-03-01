@@ -11,10 +11,6 @@ from src.risk_model.benchmark import BenchmarkBundle, run_uq_benchmark, summariz
 from src.risk_model.control import select_action_with_calibrated_risk
 from src.risk_model.artifacts import load_risk_artifacts, save_risk_evaluation_artifacts
 from src.risk_model.inference import predict_calibrated_risk
-try:
-    from .living_report import update_living_report_from_uq_benchmark
-except ImportError:  # pragma: no cover - supports direct module loading in tests
-    from src.workflows.living_report import update_living_report_from_uq_benchmark
 
 
 @dataclass
@@ -264,16 +260,6 @@ def run_uq_benchmark_flow(
     run_prefix = run_prefix or cfg.run_prefix
     if bool((mode in {'auto', 'resume'}) and (not force_rerun) and has_existing_uq_benchmark_artifacts(run_prefix)):
         existing = load_existing_uq_benchmark_bundle(run_prefix)
-        existing.artifact_paths.update(
-            update_living_report_from_uq_benchmark(
-                cfg=cfg,
-                run_prefix=run_prefix,
-                summary_df=existing.benchmark_bundle.summary_df,
-                per_shift_df=existing.benchmark_bundle.per_shift_df,
-                controller_summary_df=existing.controller_summary_df,
-                artifact_paths=existing.artifact_paths,
-            )
-        )
         return existing
 
     if dataset_df.empty:
@@ -335,16 +321,6 @@ def run_uq_benchmark_flow(
             'risk_control_per_scenario_results': controller_per_scenario_df,
             'risk_control_summary': controller_summary_df,
         },
-    )
-    artifact_paths.update(
-        update_living_report_from_uq_benchmark(
-            cfg=cfg,
-            run_prefix=run_prefix,
-            summary_df=benchmark_bundle.summary_df,
-            per_shift_df=benchmark_bundle.per_shift_df,
-            controller_summary_df=controller_summary_df,
-            artifact_paths=artifact_paths,
-        )
     )
     return UQBenchmarkFlowBundle(
         predictions_df=pred_df,
