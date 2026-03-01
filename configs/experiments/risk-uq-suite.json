@@ -4,9 +4,9 @@
   "objective": "Train, calibrate, and benchmark risk models with reproducible paper exports.",
   "run": {
     "run_name": "",
-    "run_prefix": "risk_uq",
-    "run_tag_prefix": "risk_uq",
-    "persist_root": "/content/drive/MyDrive/waymax_experiments/risk_uq_runs/v1",
+    "run_prefix": "risk_uq_v2",
+    "run_tag_prefix": "risk_uq_v2",
+    "persist_root": "/content/drive/MyDrive/waymax_experiments/risk_uq_runs/v2",
     "n_shards": 1,
     "shard_id": "auto",
     "resume_from_existing": true,
