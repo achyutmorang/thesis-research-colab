@@ -30,11 +30,11 @@ from .config import (
 from .planner_backends import (
     _choose_target_non_ego,
     closed_loop_rollout_selected,
-    latent_belief_kl_from_dist_trace,
     perturb_initial_state,
     dist_trace_change_stats,
     dist_trace_diagnostics,
     make_closed_loop_components,
+    rollout_belief_surprise_from_trace,
 )
 from .metrics import (
     compute_counterfactual_surprise_score,
@@ -539,15 +539,20 @@ def run_quick_surprise_probe(
                     planner_bundle=planner_bundle,
                     seed=base_seed,
                 )
-                if planner_bundle['planner_type'] == 'latentdriver':
+                if planner_bundle['planner_type'] in {'latentdriver', 'unimm_style'}:
                     base_dist_diag = dist_trace_diagnostics(base_dist_trace)
-                    base_surprise_abs_raw, _ = latent_belief_kl_from_dist_trace(
+                    base_surprise_abs_raw, base_belief_diag, base_belief_source = rollout_belief_surprise_from_trace(
                         trace=base_dist_trace,
-                        skip_fallback_steps=bool(cfg.predictive_kl_skip_fallback_steps),
+                        actions=base_actions,
+                        action_valid=base_action_valid,
+                        cfg=cfg,
+                        planner_kind=str(planner_bundle['planner_type']),
+                        metric_hint=str(getattr(cfg, 'planner_surprise_name', 'latent_belief_kl')),
                     )
+                    base_dist_diag.update(base_belief_diag)
                     if np.isfinite(base_surprise_abs_raw):
                         base_surprise_abs = float(base_surprise_abs_raw)
-                        base_surprise_source = 'latent_belief_kl'
+                        base_surprise_source = str(base_belief_source)
                     else:
                         base_surprise_abs = 0.0
                         base_surprise_source = 'base_no_belief_pairs_zero'
@@ -593,15 +598,22 @@ def run_quick_surprise_probe(
             ) -> Tuple[float, float, Dict[str, float], Dict[str, float], str]:
                 base_info = base_rollouts[int(repeat_id)]
                 action_surprise = np.nan
-                if planner_bundle['planner_type'] == 'latentdriver':
-                    p_surprise_abs, belief_diag = latent_belief_kl_from_dist_trace(
+                if planner_bundle['planner_type'] in {'latentdriver', 'unimm_style'}:
+                    p_surprise_abs, belief_diag, belief_source = rollout_belief_surprise_from_trace(
                         trace=p_dist_trace,
-                        skip_fallback_steps=bool(cfg.predictive_kl_skip_fallback_steps),
+                        actions=p_actions,
+                        action_valid=p_action_valid,
+                        cfg=cfg,
+                        planner_kind=str(planner_bundle['planner_type']),
+                        metric_hint=str(getattr(cfg, 'planner_surprise_name', 'latent_belief_kl')),
                     )
                     p_dist_diag = dist_trace_diagnostics(p_dist_trace)
                     p_dist_diag.update(belief_diag)
                     trace_diag = dist_trace_change_stats(p_dist_trace, base_info['base_dist_trace'])
-                    surprise_source = 'latent_belief_kl'
+                    trace_diag['rollout_posterior_kl_mean'] = float(
+                        belief_diag.get('unimm_rollout_kl_mean', p_surprise_abs)
+                    ) if np.isfinite(p_surprise_abs) else np.nan
+                    surprise_source = str(belief_source)
 
                     if (not np.isfinite(p_surprise_abs)) or (float(p_surprise_abs) <= 1e-12):
                         action_surprise = planner_action_surprise_kl(
@@ -617,7 +629,7 @@ def run_quick_surprise_probe(
                                 surprise_source = 'action_kl_fallback'
                             else:
                                 surprise_source = 'action_kl_no_belief_pairs'
-                        elif float(belief_diag.get('belief_kl_step_count', 0.0)) <= 0.0:
+                        elif float(belief_diag.get('belief_kl_step_count', 0.0)) <= 0.0 and float(belief_diag.get('unimm_step_count', 0.0)) <= 0.0:
                             p_surprise_abs = np.nan
                 else:
                     p_surprise_abs = planner_action_surprise_kl(
@@ -712,7 +724,7 @@ def run_quick_surprise_probe(
                     chosen_meta = {}
 
                 token_shift_l2 = np.nan
-                if planner_bundle['planner_type'] == 'latentdriver':
+                if planner_bundle['planner_type'] in {'latentdriver', 'unimm_style'}:
                     try:
                         ld_adapter = planner_bundle['ld_adapter']
                         base_tok = np.asarray(ld_adapter.encode_tokens(rec['state'], selected_idx), dtype=float)
@@ -839,6 +851,7 @@ def run_quick_surprise_probe(
                         'step_mean_l2_all_mean': float(trace_diag.get('step_mean_l2_all_mean', np.nan)),
                         'step_w2_mean': float(trace_diag.get('step_w2_mean', np.nan)),
                         'step_w2_all_mean': float(trace_diag.get('step_w2_all_mean', np.nan)),
+                        'rollout_posterior_kl_mean': float(trace_diag.get('rollout_posterior_kl_mean', np.nan)),
                         'step_logit_l1_mean': float(trace_diag.get('step_logit_l1_mean', np.nan)),
                         'step_logit_l1_all_mean': float(trace_diag.get('step_logit_l1_all_mean', np.nan)),
                         'probe_error': '',
@@ -888,6 +901,7 @@ def run_quick_surprise_probe(
                 'step_mean_l2_all_mean': np.nan,
                 'step_w2_mean': np.nan,
                 'step_w2_all_mean': np.nan,
+                'rollout_posterior_kl_mean': np.nan,
                 'step_logit_l1_mean': np.nan,
                 'step_logit_l1_all_mean': np.nan,
                 'proposal_rollout_feasible': 0,
@@ -956,6 +970,7 @@ def run_quick_surprise_probe(
             'trace_pair_ratio_all_mean': np.nan,
             'step_mean_l2_all_mean': np.nan,
             'step_w2_all_mean': np.nan,
+            'rollout_posterior_kl_mean': np.nan,
             'step_logit_l1_all_mean': np.nan,
             'surprise_belief_shift_mean': np.nan,
             'surprise_belief_shift_raw_mean': np.nan,
@@ -1011,6 +1026,7 @@ def run_quick_surprise_probe(
         'trace_pair_ratio_all_mean': _safe_col_nanmean(probe_df, 'trace_pair_ratio_all'),
         'step_mean_l2_all_mean': _safe_col_nanmean(probe_df, 'step_mean_l2_all_mean'),
         'step_w2_all_mean': _safe_col_nanmean(probe_df, 'step_w2_all_mean'),
+        'rollout_posterior_kl_mean': _safe_col_nanmean(probe_df, 'rollout_posterior_kl_mean'),
         'step_logit_l1_all_mean': _safe_col_nanmean(probe_df, 'step_logit_l1_all_mean'),
         'surprise_belief_shift_mean': _safe_col_nanmean(probe_df, 'surprise_belief_shift'),
         'surprise_belief_shift_raw_mean': _safe_col_nanmean(probe_df, 'surprise_belief_shift_raw'),

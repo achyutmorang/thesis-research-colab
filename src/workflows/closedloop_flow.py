@@ -48,19 +48,32 @@ def _float_or_default(value: Any, default: float = 0.0) -> float:
 
 def _normalize_planner_backend(value: Any) -> str:
     backend = str(value).strip().lower()
-    if backend != "latentdriver":
-        raise ValueError(f"Unsupported planner backend={value!r}. Only latentdriver is supported.")
-    return backend
+    aliases = {
+        "latentdriver": "latentdriver",
+        "ld": "latentdriver",
+        "unimm_style": "unimm_style",
+        "unimm-style": "unimm_style",
+        "unimm_proxy": "unimm_style",
+        "unimm-proxy": "unimm_style",
+        "unimm": "unimm_style",
+    }
+    resolved = aliases.get(backend)
+    if resolved is None:
+        raise ValueError(
+            f"Unsupported planner backend={value!r}. "
+            "Allowed: latentdriver, unimm_style."
+        )
+    return resolved
 
 
 def configure_experiment_profile(
     cfg: ClosedLoopConfig,
-    planner_backend: str = "latentdriver",
-    planner_surprise_name: str = "latent_belief_kl",
+    planner_backend: str = "unimm_style",
+    planner_surprise_name: str = "unimm_rollout_kl",
 ) -> pd.DataFrame:
     backend = _normalize_planner_backend(planner_backend)
     cfg.planner_kind = backend
-    cfg.planner_name = "latentdriver_waypoint_sdc"
+    cfg.planner_name = "unimm_style_waypoint_sdc" if backend == "unimm_style" else "latentdriver_waypoint_sdc"
     cfg.latentdriver_use_all_vehicle_tokens = True
     cfg.latentdriver_vehicle_token_cap = 128
     cfg.latentdriver_encode_in_ego_frame = True
@@ -89,7 +102,31 @@ def configure_experiment_profile(
     cfg.perturb_behavioral_lateral_gain = 1.20
     cfg.perturb_behavioral_interaction_gain = 1.25
     cfg.perturb_behavioral_toward_ego_blend = 0.65
-    cfg.planner_surprise_name = str(planner_surprise_name).strip().lower()
+    if backend == "unimm_style":
+        cfg.planner_surprise_name = (
+            str(planner_surprise_name).strip().lower()
+            if str(planner_surprise_name).strip()
+            else "unimm_rollout_kl"
+        )
+        if cfg.planner_surprise_name == "latent_belief_kl":
+            cfg.planner_surprise_name = "unimm_rollout_kl"
+        # Stronger perturbation profile to maximize interaction realizations.
+        cfg.counterfactual_family = "hist_prim"
+        cfg.perturb_target_top_k = max(3, int(cfg.perturb_target_top_k))
+        cfg.perturb_hist_prim_selector_mode = "interaction_band"
+        cfg.perturb_persist_steps = max(4, int(cfg.perturb_persist_steps))
+        cfg.perturb_behavioral_longitudinal_gain = max(1.35, float(cfg.perturb_behavioral_longitudinal_gain))
+        cfg.perturb_behavioral_lateral_gain = max(1.45, float(cfg.perturb_behavioral_lateral_gain))
+        cfg.perturb_behavioral_interaction_gain = max(1.75, float(cfg.perturb_behavioral_interaction_gain))
+        cfg.unimm_mode_temperature = 1.0
+        cfg.unimm_likelihood_temperature = 1.0
+        cfg.unimm_action_sigma_floor = 0.05
+        cfg.unimm_skip_fallback_steps = True
+        cfg.unimm_horizon_discount = 0.98
+        cfg.surprise_belief_source_mode = "b4"
+    else:
+        cfg.planner_surprise_name = str(planner_surprise_name).strip().lower()
+        cfg.surprise_belief_source_mode = "auto"
 
     rows = [
         {"group": "planner", "key": "backend", "value": cfg.planner_kind},
@@ -104,6 +141,14 @@ def configure_experiment_profile(
             {"group": "latentdriver", "key": "vehicle_token_cap", "value": int(cfg.latentdriver_vehicle_token_cap)},
             {"group": "latentdriver", "key": "encode_in_ego_frame", "value": bool(cfg.latentdriver_encode_in_ego_frame)},
             {"group": "latentdriver", "key": "encode_yaw_degrees", "value": bool(cfg.latentdriver_encode_yaw_degrees)},
+        ])
+    if cfg.planner_kind == "unimm_style":
+        rows.extend([
+            {"group": "unimm_style", "key": "surprise_metric", "value": cfg.planner_surprise_name},
+            {"group": "unimm_style", "key": "mode_temperature", "value": float(cfg.unimm_mode_temperature)},
+            {"group": "unimm_style", "key": "likelihood_temperature", "value": float(cfg.unimm_likelihood_temperature)},
+            {"group": "unimm_style", "key": "action_sigma_floor", "value": float(cfg.unimm_action_sigma_floor)},
+            {"group": "unimm_style", "key": "horizon_discount", "value": float(cfg.unimm_horizon_discount)},
         ])
     return pd.DataFrame(rows)
 
@@ -438,8 +483,8 @@ def initialize_run_context(
     latentdriver_log_forward_errors: bool = True,
     latentdriver_log_forward_errors_max: int = 10,
     run_tag_prefix: str = "closedloop",
-    planner_backend: str = "latentdriver",
-    planner_surprise_name: str = "latent_belief_kl",
+    planner_backend: str = "unimm_style",
+    planner_surprise_name: str = "unimm_rollout_kl",
     method_labels: Optional[Sequence[str]] = None,
     auto_generate_run_tag_if_empty: bool = True,
     resume_mode: str = "auto",
@@ -759,12 +804,14 @@ def _normalize_probe_belief_modes(modes: Optional[Sequence[str]], fallback: str)
             "step_moment_kl_all_mean": "b1",
             "step_moment_kl_mean": "b2",
             "rollout_belief_delta": "b3",
+            "rollout_posterior_kl_mean": "b4",
             "b1_only": "b1",
             "b2_only": "b2",
             "b3_only": "b3",
+            "b4_only": "b4",
         }
         key = alias.get(key, key)
-        if key not in {"auto", "b1", "b2", "b3"}:
+        if key not in {"auto", "b1", "b2", "b3", "b4"}:
             key = "auto"
         if key in seen:
             continue

@@ -7,10 +7,10 @@ import numpy as np
 from .config import SearchConfig, ClosedLoopConfig
 from .planner_backends import (
     closed_loop_rollout_selected,
-    latent_belief_kl_from_dist_trace,
     dist_trace_change_stats,
     dist_trace_diagnostics,
     project_delta_vec,
+    rollout_belief_surprise_from_trace,
 )
 from .metrics import (
     compute_counterfactual_surprise_score,
@@ -58,19 +58,26 @@ def evaluate_delta_closed_loop(
         sigma=0.25,
     )
 
-    if planner_bundle['planner_type'] == 'latentdriver':
-        proposal_surprise_abs, belief_diag = latent_belief_kl_from_dist_trace(
+    if planner_bundle['planner_type'] in {'latentdriver', 'unimm_style'}:
+        proposal_surprise_abs, belief_diag, belief_source = rollout_belief_surprise_from_trace(
             trace=dist_trace,
-            skip_fallback_steps=bool(cfg.predictive_kl_skip_fallback_steps),
+            actions=actions,
+            action_valid=action_valid,
+            cfg=cfg,
+            planner_kind=str(planner_bundle['planner_type']),
+            metric_hint=str(getattr(cfg, 'planner_surprise_name', 'latent_belief_kl')),
         )
         dist_diag = dist_trace_diagnostics(dist_trace)
         dist_diag.update(belief_diag)
         trace_change_diag = dist_trace_change_stats(dist_trace, base_metrics['base_dist_trace'])
-        surprise_source = 'latent_belief_kl_raw'
+        trace_change_diag['rollout_posterior_kl_mean'] = float(
+            belief_diag.get('unimm_rollout_kl_mean', proposal_surprise_abs)
+        ) if np.isfinite(proposal_surprise_abs) else np.nan
+        surprise_source = str(belief_source) + '_raw'
         if (not np.isfinite(proposal_surprise_abs)) or (float(proposal_surprise_abs) <= 1e-12):
             if np.isfinite(action_surprise) and float(action_surprise) > 1e-12:
                 proposal_surprise_abs = float(action_surprise)
-                if float(belief_diag.get('belief_kl_step_count', 0.0)) > 0.0:
+                if float(belief_diag.get('belief_kl_step_count', 0.0)) > 0.0 or float(belief_diag.get('unimm_step_count', 0.0)) > 0.0:
                     surprise_source = 'action_kl_fallback_raw'
                 else:
                     surprise_source = 'action_kl_no_belief_pairs_raw'
@@ -254,10 +261,14 @@ def optimize_method_closed_loop(
     )
     base_risk = compute_risk_metrics(base_xy, base_valid, **risk_kwargs_from_cfg(cfg))
     base_surprise_abs = 0.0
-    if planner_bundle['planner_type'] == 'latentdriver':
-        base_surprise_raw, _ = latent_belief_kl_from_dist_trace(
+    if planner_bundle['planner_type'] in {'latentdriver', 'unimm_style'}:
+        base_surprise_raw, _, _ = rollout_belief_surprise_from_trace(
             trace=base_dist_trace,
-            skip_fallback_steps=bool(cfg.predictive_kl_skip_fallback_steps),
+            actions=base_actions,
+            action_valid=base_action_valid,
+            cfg=cfg,
+            planner_kind=str(planner_bundle['planner_type']),
+            metric_hint=str(getattr(cfg, 'planner_surprise_name', 'latent_belief_kl')),
         )
         if np.isfinite(base_surprise_raw):
             base_surprise_abs = float(base_surprise_raw)

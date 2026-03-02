@@ -77,14 +77,19 @@ class ClosedLoopConfig:
     enable_intervention_proxy: bool = True
 
     # Closed-loop planner settings
-    planner_kind: str = 'latentdriver'  # latentdriver
+    # Supported values:
+    # - latentdriver: direct LatentDriver belief/predictive channels.
+    # - unimm_style: UniMM-style rollout posterior belief update signal,
+    #   while still using the LatentDriver actor runtime under-the-hood.
+    planner_kind: str = 'latentdriver'  # latentdriver | unimm_style
     planner_name: str = 'latentdriver_waypoint_sdc'
 
     # Planner-dependent surprise settings
-    planner_surprise_name: str = 'latent_belief_kl'  # latent_belief_kl | predictive_kl | predictive_w2 | predictive_seq_kl | predictive_seq_w2 | action_kl
+    planner_surprise_name: str = 'latent_belief_kl'  # latent_belief_kl | unimm_rollout_kl | predictive_kl | predictive_w2 | predictive_seq_kl | predictive_seq_w2 | action_kl
     # Belief-source mode for the composite surprise term B_raw:
-    # auto | b1 | b2 | b3
-    # b1=step_moment_kl_all_mean, b2=step_moment_kl_mean, b3=rollout_belief_delta.
+    # auto | b1 | b2 | b3 | b4
+    # b1=step_moment_kl_all_mean, b2=step_moment_kl_mean,
+    # b3=rollout_belief_delta, b4=rollout_posterior_kl_mean (UniMM-style).
     surprise_belief_source_mode: str = 'auto'
     predictive_kl_estimator: str = 'mixture_mc'  # 'mixture_mc' or 'moment_match'
     predictive_kl_mc_samples: int = 192
@@ -97,6 +102,14 @@ class ClosedLoopConfig:
     surprise_counterfactual_floor_weight: float = 0.02
     surprise_counterfactual_response_weight: float = 0.35
     surprise_counterfactual_use_additive_score: bool = True
+    # UniMM-style rollout posterior update controls:
+    # q_t(mode) ∝ p_t(mode) * p(a_t | mode) and surprise_t = KL(q_t || p_t).
+    unimm_mode_temperature: float = 1.0
+    unimm_likelihood_temperature: float = 1.0
+    unimm_action_sigma_floor: float = 0.05
+    unimm_skip_fallback_steps: bool = True
+    unimm_horizon_discount: float = 1.0
+    unimm_posterior_kl_floor: float = 0.0
 
     # LatentDriver integration
     latentdriver_repo_path: str = '/content/LatentDriver'
@@ -330,7 +343,7 @@ def scan_latentdriver_checkpoints(search_roots: Optional[List[str]] = None) -> p
 
 
 def resolve_latentdriver_checkpoint(cfg: ClosedLoopConfig) -> Tuple[ClosedLoopConfig, pd.DataFrame]:
-    if cfg.planner_kind != 'latentdriver':
+    if not planner_uses_latentdriver_backend(cfg.planner_kind):
         return cfg, pd.DataFrame()
 
     configured = Path(cfg.latentdriver_ckpt_path)
@@ -359,9 +372,27 @@ def _normalize_planner_kind(value: Optional[str]) -> Optional[str]:
     kind = str(value).strip().lower()
     if kind in {'', 'auto'}:
         return None
-    if kind != 'latentdriver':
-        raise ValueError(f'Unsupported planner_kind={value!r}. Only latentdriver is supported.')
-    return kind
+    aliases = {
+        'latentdriver': 'latentdriver',
+        'ld': 'latentdriver',
+        'unimm': 'unimm_style',
+        'unimm_style': 'unimm_style',
+        'unimm-style': 'unimm_style',
+        'unimm_proxy': 'unimm_style',
+        'unimm-proxy': 'unimm_style',
+    }
+    normalized = aliases.get(kind)
+    if normalized is None:
+        raise ValueError(
+            f"Unsupported planner_kind={value!r}. "
+            "Allowed: latentdriver, unimm_style."
+        )
+    return normalized
+
+
+def planner_uses_latentdriver_backend(planner_kind: str) -> bool:
+    key = str(planner_kind).strip().lower()
+    return key in {'latentdriver', 'unimm_style'}
 
 
 def initialize_configs(planner_kind_override: Optional[str] = None) -> Tuple[ClosedLoopConfig, SearchConfig, pd.DataFrame]:
@@ -369,7 +400,12 @@ def initialize_configs(planner_kind_override: Optional[str] = None) -> Tuple[Clo
     planner_kind = _normalize_planner_kind(planner_kind_override)
     if planner_kind is not None:
         cfg.planner_kind = planner_kind
-        cfg.planner_name = 'latentdriver_waypoint_sdc'
+        if cfg.planner_kind == 'unimm_style':
+            cfg.planner_name = 'unimm_style_waypoint_sdc'
+            if str(cfg.planner_surprise_name).strip().lower() in {'', 'latent_belief_kl'}:
+                cfg.planner_surprise_name = 'unimm_rollout_kl'
+        else:
+            cfg.planner_name = 'latentdriver_waypoint_sdc'
 
     search_cfg = SearchConfig()
     if bool(cfg.latentdriver_force_context_from_history):

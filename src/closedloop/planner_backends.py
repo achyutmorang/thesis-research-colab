@@ -1526,6 +1526,159 @@ def latent_belief_kl_from_dist_trace(
     }
 
 
+def unimm_rollout_belief_kl_from_trace(
+    trace: List[Optional[Dict[str, np.ndarray]]],
+    actions: np.ndarray,
+    action_valid: np.ndarray,
+    mode_temperature: float = 1.0,
+    likelihood_temperature: float = 1.0,
+    action_sigma_floor: float = 0.05,
+    skip_fallback_steps: bool = True,
+    horizon_discount: float = 1.0,
+    posterior_kl_floor: float = 0.0,
+    eps: float = 1e-8,
+) -> Tuple[float, Dict[str, float]]:
+    """UniMM-style per-rollout belief update surprise.
+
+    Each step treats mixture weights as prior mode belief p_t(k).
+    Posterior is q_t(k) ∝ p_t(k) * p(a_t | k), where a_t is realized action.
+    Surprise is the horizon-averaged KL(q_t || p_t).
+    """
+    temp_mode = float(max(1e-6, mode_temperature))
+    temp_like = float(max(1e-6, likelihood_temperature))
+    sigma_floor = float(max(1e-6, action_sigma_floor))
+    gamma = float(np.clip(horizon_discount, 0.0, 1.0))
+    floor_kl = float(max(0.0, posterior_kl_floor))
+
+    acts = np.asarray(actions, dtype=float)
+    if acts.ndim == 1:
+        acts = acts.reshape(1, -1)
+    valid = np.asarray(action_valid, dtype=bool).reshape(-1)
+    n_steps = int(min(len(trace), acts.shape[0], valid.shape[0]))
+    if n_steps <= 0:
+        return np.nan, {
+            'unimm_step_count': 0.0,
+            'unimm_step_ratio': 0.0,
+            'unimm_weighted_step_count': 0.0,
+            'unimm_post_shift_l1_mean': np.nan,
+            'unimm_kl_p95': np.nan,
+            'unimm_rollout_kl_mean': np.nan,
+            'unimm_source': 'unimm_rollout_kl',
+        }
+
+    step_kl_vals: List[float] = []
+    step_shift_vals: List[float] = []
+    step_weights: List[float] = []
+    paired_steps = 0
+
+    for t in range(n_steps):
+        dist = trace[t]
+        if not isinstance(dist, dict):
+            continue
+        if not bool(valid[t]):
+            continue
+        paired_steps += 1
+        if bool(skip_fallback_steps) and _trace_step_is_fallback(dist):
+            continue
+
+        w, means, stds = _sanitize_diag_gmm(dist, eps=max(eps, 1e-8))
+        a = np.asarray(acts[t], dtype=float).reshape(-1)
+        d = int(min(a.shape[0], means.shape[1], stds.shape[1]))
+        if d <= 0:
+            continue
+        a = a[:d]
+        means = means[:, :d]
+        stds = np.maximum(stds[:, :d], sigma_floor)
+
+        prior_logits = np.log(np.maximum(w, eps)) / temp_mode
+        diff = a[None, :] - means
+        var = np.maximum(stds, eps) ** 2
+        log_det = np.sum(np.log(2.0 * np.pi * var), axis=1)
+        quad = np.sum((diff ** 2) / var, axis=1)
+        log_like = -0.5 * (log_det + quad)
+
+        post_logits = prior_logits + (log_like / temp_like)
+        prior = _softmax_np(prior_logits)
+        post = _softmax_np(post_logits)
+
+        step_kl = float(np.sum(post * (np.log(np.maximum(post, eps)) - np.log(np.maximum(prior, eps)))))
+        step_kl = float(max(floor_kl, step_kl)) if np.isfinite(step_kl) else np.nan
+        if not np.isfinite(step_kl):
+            continue
+
+        weight_t = float(gamma ** t) if gamma < 1.0 else 1.0
+        step_kl_vals.append(step_kl)
+        step_shift_vals.append(float(np.sum(np.abs(post - prior))))
+        step_weights.append(weight_t)
+
+    if len(step_kl_vals) <= 0:
+        return np.nan, {
+            'unimm_step_count': 0.0,
+            'unimm_step_ratio': 0.0,
+            'unimm_weighted_step_count': 0.0,
+            'unimm_post_shift_l1_mean': np.nan,
+            'unimm_kl_p95': np.nan,
+            'unimm_rollout_kl_mean': np.nan,
+            'unimm_source': 'unimm_rollout_kl',
+        }
+
+    weights_arr = np.asarray(step_weights, dtype=float)
+    vals_arr = np.asarray(step_kl_vals, dtype=float)
+    shift_arr = np.asarray(step_shift_vals, dtype=float)
+    wsum = float(np.sum(weights_arr))
+    if wsum <= 0.0:
+        score = float(np.mean(vals_arr))
+    else:
+        score = float(np.sum(weights_arr * vals_arr) / wsum)
+
+    return score, {
+        'unimm_step_count': float(vals_arr.size),
+        'unimm_step_ratio': float(vals_arr.size / max(n_steps, 1)),
+        'unimm_weighted_step_count': float(np.sum(weights_arr)),
+        'unimm_post_shift_l1_mean': float(np.mean(shift_arr)) if shift_arr.size > 0 else np.nan,
+        'unimm_kl_p95': float(np.quantile(vals_arr, 0.95)),
+        'unimm_rollout_kl_mean': float(score),
+        'unimm_source': 'unimm_rollout_kl',
+    }
+
+
+def rollout_belief_surprise_from_trace(
+    trace: List[Optional[Dict[str, np.ndarray]]],
+    actions: np.ndarray,
+    action_valid: np.ndarray,
+    cfg: Optional[ClosedLoopConfig] = None,
+    planner_kind: str = 'latentdriver',
+    metric_hint: str = 'latent_belief_kl',
+) -> Tuple[float, Dict[str, float], str]:
+    metric_key = str(metric_hint).strip().lower()
+    kind_key = str(planner_kind).strip().lower()
+    use_unimm = (
+        kind_key == 'unimm_style'
+        or metric_key in {'unimm_rollout_kl', 'rollout_belief_kl', 'posterior_belief_kl', 'unimm_belief_kl'}
+    )
+
+    if use_unimm:
+        cfg_obj = cfg if cfg is not None else ClosedLoopConfig()
+        val, diag = unimm_rollout_belief_kl_from_trace(
+            trace=trace,
+            actions=actions,
+            action_valid=action_valid,
+            mode_temperature=float(getattr(cfg_obj, 'unimm_mode_temperature', 1.0)),
+            likelihood_temperature=float(getattr(cfg_obj, 'unimm_likelihood_temperature', 1.0)),
+            action_sigma_floor=float(getattr(cfg_obj, 'unimm_action_sigma_floor', 0.05)),
+            skip_fallback_steps=bool(getattr(cfg_obj, 'unimm_skip_fallback_steps', True)),
+            horizon_discount=float(getattr(cfg_obj, 'unimm_horizon_discount', 1.0)),
+            posterior_kl_floor=float(getattr(cfg_obj, 'unimm_posterior_kl_floor', 0.0)),
+        )
+        return val, diag, 'unimm_rollout_kl'
+
+    val, diag = latent_belief_kl_from_dist_trace(
+        trace=trace,
+        skip_fallback_steps=bool(getattr(cfg, 'predictive_kl_skip_fallback_steps', True)) if cfg is not None else True,
+    )
+    return val, diag, 'latent_belief_kl'
+
+
 class LatentDriverPredictiveKLAdapter:
     def __init__(self, cfg: ClosedLoopConfig):
         self.cfg = cfg
@@ -2305,8 +2458,12 @@ def make_closed_loop_components(base_state: Any, planner_kind: str, planner_name
         'sdc_idx': sdc_idx,
     }
 
-    if planner_kind != 'latentdriver':
-        raise ValueError(f'Unsupported planner_kind={planner_kind!r}. Only latentdriver is supported.')
+    planner_kind_key = str(planner_kind).strip().lower()
+    if planner_kind_key not in {'latentdriver', 'unimm_style'}:
+        raise ValueError(
+            f"Unsupported planner_kind={planner_kind!r}. "
+            "Allowed: latentdriver, unimm_style."
+        )
 
     adapter = get_latentdriver_adapter(cfg)
     planner_actor = adapter.build_control_actor(is_controlled_func=planner_mask_fn)
@@ -2323,12 +2480,12 @@ def make_closed_loop_components(base_state: Any, planner_kind: str, planner_name
         raise ValueError(f'Unknown latentdriver_action_type: {cfg.latentdriver_action_type}')
 
     planner_bundle.update({
-        'planner_type': 'latentdriver',
+        'planner_type': planner_kind_key,
         'planner_actor': planner_actor,
         'sdc_fallback_actor': sdc_fallback_actor,
         'control_dynamics_model': control_dynamics_model,
         'ld_adapter': adapter,
-        'planner_used': 'LatentDriverPredictiveKL',
+        'planner_used': 'UniMMStyleBeliefProxy' if planner_kind_key == 'unimm_style' else 'LatentDriverPredictiveKL',
     })
 
     if planner_bundle['planner_used'] != planner_name:
@@ -2382,8 +2539,11 @@ def latentdriver_current_action_and_dist(
     cfg: ClosedLoopConfig,
 ) -> Tuple[np.ndarray, Dict[str, np.ndarray]]:
     planner_type = planner_bundle['planner_type']
-    if planner_type != 'latentdriver':
-        raise ValueError(f'Unsupported planner_type={planner_type!r}. Only latentdriver is supported.')
+    if planner_type not in {'latentdriver', 'unimm_style'}:
+        raise ValueError(
+            f"Unsupported planner_type={planner_type!r}. "
+            "Only latentdriver/unimm_style are supported."
+        )
 
     ld_adapter = planner_bundle['ld_adapter']
     ld_state_hist, ld_action_hist = _warm_start_latentdriver_histories(
@@ -2456,8 +2616,11 @@ def closed_loop_rollout_action_prefix(
         rollout_steps = int(max(1, horizon_steps if horizon_steps is not None else cfg.future_steps))
         action_dim = None
 
-        if planner_type != 'latentdriver':
-            raise ValueError(f'Unsupported planner_type={planner_type!r}. Only latentdriver is supported.')
+        if planner_type not in {'latentdriver', 'unimm_style'}:
+            raise ValueError(
+                f"Unsupported planner_type={planner_type!r}. "
+                "Only latentdriver/unimm_style are supported."
+            )
 
         planner_actor = planner_bundle['planner_actor']
         sdc_fallback_actor = planner_bundle['sdc_fallback_actor']
@@ -2637,8 +2800,11 @@ def closed_loop_rollout_selected(
         selected_idx_j = jnp.asarray(selected_idx, dtype=jnp.int32)
         action_dim = None
 
-        if planner_type != 'latentdriver':
-            raise ValueError(f'Unsupported planner_type={planner_type!r}. Only latentdriver is supported.')
+        if planner_type not in {'latentdriver', 'unimm_style'}:
+            raise ValueError(
+                f"Unsupported planner_type={planner_type!r}. "
+                "Only latentdriver/unimm_style are supported."
+            )
 
         planner_actor = planner_bundle['planner_actor']
         sdc_fallback_actor = planner_bundle['sdc_fallback_actor']

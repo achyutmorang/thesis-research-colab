@@ -193,6 +193,8 @@ def _normalize_belief_source_mode(mode: Any) -> str:
         return "b2"
     if key in {"b3", "b3_only", "rollout_belief_delta", "belief_delta"}:
         return "b3"
+    if key in {"b4", "b4_only", "rollout_posterior_kl_mean", "posterior_kl"}:
+        return "b4"
     return "auto"
 
 
@@ -227,6 +229,7 @@ def compute_counterfactual_surprise_score(
     all_belief_candidates = [
         ("step_moment_kl_all_mean", _nonnegative_finite(trace_change_diag.get("step_moment_kl_all_mean", np.nan), default=np.nan)),
         ("step_moment_kl_mean", _nonnegative_finite(trace_change_diag.get("step_moment_kl_mean", np.nan), default=np.nan)),
+        ("rollout_posterior_kl_mean", _nonnegative_finite(trace_change_diag.get("rollout_posterior_kl_mean", np.nan), default=np.nan)),
     ]
     belief_delta = np.nan
     if np.isfinite(float(proposal_surprise_abs)) and np.isfinite(float(base_surprise_abs)):
@@ -240,10 +243,24 @@ def compute_counterfactual_surprise_score(
         belief_candidates = [belief_by_key["step_moment_kl_mean"]]
     elif belief_mode == "b3":
         belief_candidates = [belief_by_key["rollout_belief_delta"]]
+    elif belief_mode == "b4":
+        belief_candidates = [belief_by_key["rollout_posterior_kl_mean"]]
     else:
         belief_candidates = list(all_belief_candidates)
         if metric_key in {"latent_belief_kl", "belief_kl"}:
-            belief_candidates = [belief_candidates[-1], *belief_candidates[:-1]]
+            belief_candidates = [
+                belief_by_key["rollout_belief_delta"],
+                belief_by_key["step_moment_kl_all_mean"],
+                belief_by_key["step_moment_kl_mean"],
+                belief_by_key["rollout_posterior_kl_mean"],
+            ]
+        elif metric_key in {"unimm_rollout_kl", "rollout_belief_kl", "posterior_belief_kl", "unimm_belief_kl"}:
+            belief_candidates = [
+                belief_by_key["rollout_posterior_kl_mean"],
+                belief_by_key["rollout_belief_delta"],
+                belief_by_key["step_moment_kl_all_mean"],
+                belief_by_key["step_moment_kl_mean"],
+            ]
 
     belief_shift_raw = 0.0
     belief_source = 'none'
@@ -333,6 +350,8 @@ def compute_counterfactual_surprise_score(
     policy_term = float(np.log1p(policy_shift))
     if metric_key in {"latent_belief_kl", "belief_kl"}:
         belief_weight, policy_weight = 0.65, 0.35
+    elif metric_key in {"unimm_rollout_kl", "rollout_belief_kl", "posterior_belief_kl", "unimm_belief_kl"}:
+        belief_weight, policy_weight = 0.70, 0.30
     elif metric_key in {"action_kl"}:
         belief_weight, policy_weight = 0.35, 0.65
     else:

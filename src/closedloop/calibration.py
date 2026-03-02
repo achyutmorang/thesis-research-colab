@@ -11,13 +11,13 @@ from .config import SearchConfig, ClosedLoopConfig
 from .planner_backends import (
     _choose_target_non_ego,
     closed_loop_rollout_selected,
-    latent_belief_kl_from_dist_trace,
     dist_trace_change_stats,
     dist_trace_diagnostics,
     latentdriver_observation_contract,
     make_behavioral_delta_proposal,
     make_closed_loop_components,
     project_delta_vec,
+    rollout_belief_surprise_from_trace,
 )
 from .metrics import (
     compute_counterfactual_surprise_score,
@@ -59,7 +59,7 @@ def run_closedloop_preflight_checks(runner: Any, cfg: ClosedLoopConfig, eval_idx
     def add(name: str, passed: bool, detail: str):
         checks.append({'check': name, 'pass': bool(passed), 'detail': str(detail)})
 
-    if cfg.planner_kind == 'latentdriver':
+    if cfg.planner_kind in {'latentdriver', 'unimm_style'}:
         repo_ok = Path(cfg.latentdriver_repo_path).exists()
         ckpt_ok = Path(cfg.latentdriver_ckpt_path).exists()
         add('latentdriver_repo_exists', repo_ok, cfg.latentdriver_repo_path)
@@ -120,7 +120,7 @@ def run_closedloop_preflight_checks(runner: Any, cfg: ClosedLoopConfig, eval_idx
         )
 
         planner_type = str(planner_bundle.get('planner_type', ''))
-        if planner_type == 'latentdriver':
+        if planner_type in {'latentdriver', 'unimm_style'}:
             non_null = int(sum(d is not None for d in dist_trace))
             add('predictive_distribution_trace_nonempty', non_null > 0, f'non_null_steps={non_null}/{len(dist_trace)}')
             if non_null > 0:
@@ -148,7 +148,7 @@ def run_closedloop_preflight_checks(runner: Any, cfg: ClosedLoopConfig, eval_idx
                 bool(np.isfinite(finite_ratio) and finite_ratio > 0.0),
                 f'dist_finite_ratio={finite_ratio:.4f}',
             )
-            if planner_type == 'latentdriver':
+            if planner_type in {'latentdriver', 'unimm_style'}:
                 obs_info = planner_bundle['ld_adapter'].last_obs_info
                 feat_dim_ok = int(obs_info.get('feature_dim', -1)) == int(latentdriver_observation_contract()['feature_dim'])
                 add('latentdriver_obs_feature_dim_ok', feat_dim_ok, str(obs_info))
@@ -342,15 +342,20 @@ def calibrate_closed_loop_thresholds(
                 seed=cfg.global_seed + int(sid),
             )
             base_risk = compute_risk_metrics(base_xy, base_valid, **risk_kwargs_from_cfg(cfg))
-            if planner_bundle['planner_type'] == 'latentdriver':
+            if planner_bundle['planner_type'] in {'latentdriver', 'unimm_style'}:
                 base_dist_diag = dist_trace_diagnostics(base_dist_trace)
-                base_surprise_abs_raw, _ = latent_belief_kl_from_dist_trace(
+                base_surprise_abs_raw, base_belief_diag, base_belief_source = rollout_belief_surprise_from_trace(
                     trace=base_dist_trace,
-                    skip_fallback_steps=bool(cfg.predictive_kl_skip_fallback_steps),
+                    actions=base_actions,
+                    action_valid=base_action_valid,
+                    cfg=cfg,
+                    planner_kind=str(planner_bundle['planner_type']),
+                    metric_hint=str(getattr(cfg, 'planner_surprise_name', 'latent_belief_kl')),
                 )
+                base_dist_diag.update(base_belief_diag)
                 if np.isfinite(base_surprise_abs_raw):
                     base_surprise_abs = float(base_surprise_abs_raw)
-                    base_surprise_source = 'latent_belief_kl'
+                    base_surprise_source = str(base_belief_source)
                 else:
                     base_surprise_abs = 0.0
                     base_surprise_source = 'base_no_belief_pairs_zero'
@@ -381,16 +386,23 @@ def calibrate_closed_loop_thresholds(
                 seed_offset: int,
             ) -> Tuple[float, float, Dict[str, float], Dict[str, float], str]:
                 action_surprise = np.nan
-                if planner_bundle['planner_type'] == 'latentdriver':
-                    surprise_val, belief_diag = latent_belief_kl_from_dist_trace(
+                if planner_bundle['planner_type'] in {'latentdriver', 'unimm_style'}:
+                    surprise_val, belief_diag, belief_source = rollout_belief_surprise_from_trace(
                         trace=prop_dist_trace,
-                        skip_fallback_steps=bool(cfg.predictive_kl_skip_fallback_steps),
+                        actions=prop_actions,
+                        action_valid=prop_action_valid,
+                        cfg=cfg,
+                        planner_kind=str(planner_bundle['planner_type']),
+                        metric_hint=str(getattr(cfg, 'planner_surprise_name', 'latent_belief_kl')),
                     )
                     prop_dist_diag = dist_trace_diagnostics(prop_dist_trace)
                     prop_dist_diag.update(belief_diag)
                     trace_diag = dist_trace_change_stats(prop_dist_trace, base_dist_trace)
-                    source = 'latent_belief_kl'
-                    belief_count = float(belief_diag.get('belief_kl_step_count', 0.0))
+                    trace_diag['rollout_posterior_kl_mean'] = float(
+                        belief_diag.get('unimm_rollout_kl_mean', surprise_val)
+                    ) if np.isfinite(surprise_val) else np.nan
+                    source = str(belief_source)
+                    belief_count = float(belief_diag.get('belief_kl_step_count', 0.0)) + float(belief_diag.get('unimm_step_count', 0.0))
                     if belief_count <= 0.0:
                         action_surprise = planner_action_surprise_kl(
                             prop_actions,
@@ -457,6 +469,7 @@ def calibrate_closed_loop_thresholds(
                         'step_w2_p95': np.nan,
                         'step_w2_nonzero_ratio': np.nan,
                         'step_w2_all_mean': np.nan,
+                        'rollout_posterior_kl_mean': np.nan,
                         'step_w2_all_nonzero_ratio': np.nan,
                         'step_moment_kl_mean': np.nan,
                         'step_moment_kl_p50': np.nan,
@@ -549,6 +562,7 @@ def calibrate_closed_loop_thresholds(
                         'step_mean_l2_mean': float(s_trace_change_diag.get('step_mean_l2_mean', np.nan)),
                         'step_std_l2_mean': float(s_trace_change_diag.get('step_std_l2_mean', np.nan)),
                         'step_w2_mean': float(s_trace_change_diag.get('step_w2_mean', np.nan)),
+                        'rollout_posterior_kl_mean': float(s_trace_change_diag.get('rollout_posterior_kl_mean', np.nan)),
                         'step_moment_kl_mean': float(s_trace_change_diag.get('step_moment_kl_mean', np.nan)),
                         'step_logit_l1_mean': float(s_trace_change_diag.get('step_logit_l1_mean', np.nan)),
                     })
@@ -720,6 +734,7 @@ def calibrate_closed_loop_thresholds(
                     'step_w2_p95': float(trace_change_diag.get('step_w2_p95', np.nan)),
                     'step_w2_nonzero_ratio': float(trace_change_diag.get('step_w2_nonzero_ratio', np.nan)),
                     'step_w2_all_mean': float(trace_change_diag.get('step_w2_all_mean', np.nan)),
+                    'rollout_posterior_kl_mean': float(trace_change_diag.get('rollout_posterior_kl_mean', np.nan)),
                     'step_w2_all_nonzero_ratio': float(trace_change_diag.get('step_w2_all_nonzero_ratio', np.nan)),
                     'step_moment_kl_mean': float(trace_change_diag.get('step_moment_kl_mean', np.nan)),
                     'step_moment_kl_p50': float(trace_change_diag.get('step_moment_kl_p50', np.nan)),
@@ -801,6 +816,7 @@ def calibrate_closed_loop_thresholds(
                 'step_w2_p95': np.nan,
                 'step_w2_nonzero_ratio': np.nan,
                 'step_w2_all_mean': np.nan,
+                'rollout_posterior_kl_mean': np.nan,
                 'step_w2_all_nonzero_ratio': np.nan,
                 'step_moment_kl_mean': np.nan,
                 'step_moment_kl_p50': np.nan,
@@ -943,6 +959,7 @@ def build_calibration_diagnostics(calib_df: pd.DataFrame, thresholds: Dict[str, 
         'step_w2_mean': float(np.nanmean(usable['step_w2_mean'])) if ('step_w2_mean' in usable and len(usable) > 0) else np.nan,
         'step_w2_nonzero_ratio_mean': float(np.nanmean(usable['step_w2_nonzero_ratio'])) if ('step_w2_nonzero_ratio' in usable and len(usable) > 0) else np.nan,
         'step_w2_all_mean': float(np.nanmean(usable['step_w2_all_mean'])) if ('step_w2_all_mean' in usable and len(usable) > 0) else np.nan,
+        'rollout_posterior_kl_mean': float(np.nanmean(usable['rollout_posterior_kl_mean'])) if ('rollout_posterior_kl_mean' in usable and len(usable) > 0) else np.nan,
         'step_w2_all_nonzero_ratio_mean': float(np.nanmean(usable['step_w2_all_nonzero_ratio'])) if ('step_w2_all_nonzero_ratio' in usable and len(usable) > 0) else np.nan,
         'step_moment_kl_mean': float(np.nanmean(usable['step_moment_kl_mean'])) if ('step_moment_kl_mean' in usable and len(usable) > 0) else np.nan,
         'step_moment_kl_nonzero_ratio_mean': float(np.nanmean(usable['step_moment_kl_nonzero_ratio'])) if ('step_moment_kl_nonzero_ratio' in usable and len(usable) > 0) else np.nan,
@@ -1110,6 +1127,7 @@ def run_surprise_quality_gate(
         'step_std_l2_all_mean': _col_mean(usable_calib, 'step_std_l2_all_mean'),
         'step_w2_mean': _col_mean(usable_calib, 'step_w2_mean'),
         'step_w2_all_mean': _col_mean(usable_calib, 'step_w2_all_mean'),
+        'rollout_posterior_kl_mean': _col_mean(usable_calib, 'rollout_posterior_kl_mean'),
         'step_w2_p50': _col_q(usable_calib, 'step_w2_mean', 0.50),
         'step_w2_p95': _col_q(usable_calib, 'step_w2_mean', 0.95),
         'step_w2_nonzero_ratio_mean': _col_mean(usable_calib, 'step_w2_nonzero_ratio'),
@@ -1151,6 +1169,7 @@ def run_surprise_quality_gate(
         'trace_fallback_pair_ratio_mean': trace_fallback_pair_ratio_mean,
         'step_w2_mean': _col_mean(usable_calib, 'step_w2_mean'),
         'step_w2_all_mean': _col_mean(usable_calib, 'step_w2_all_mean'),
+        'rollout_posterior_kl_mean': _col_mean(usable_calib, 'rollout_posterior_kl_mean'),
         'step_logit_l1_mean': step_logit_l1_mean,
         'step_logit_l1_all_mean': _col_mean(usable_calib, 'step_logit_l1_all_mean'),
         'sensitivity_flat_scenario_fraction': sensitivity_flat_scenario_fraction,
